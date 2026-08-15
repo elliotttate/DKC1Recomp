@@ -41,6 +41,8 @@ def validate_record(record: dict, location: str) -> None:
 
 def load_trace(path: Path) -> list[dict]:
     frames: list[dict] = []
+    epoch = 0
+    previous_frame: int | None = None
     with path.open("r", encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, 1):
             if not line.strip():
@@ -57,10 +59,16 @@ def load_trace(path: Path) -> list[dict]:
             frame = record.get("frame")
             if not isinstance(frame, int):
                 raise ValueError(f"{path}:{line_number}: frame is not an int")
-            if frames and frame <= frames[-1]["frame"]:
-                raise ValueError(
-                    f"{path}:{line_number}: frames are not strictly ordered")
+            # DKC resets/rewinds the PPU frame counter during some scene
+            # transitions.  File order is the authoritative presentation
+            # order, so retain both it and a monotonically increasing epoch
+            # instead of rejecting the exact transition we need to inspect.
+            if previous_frame is not None and frame <= previous_frame:
+                epoch += 1
+            record["_sequence"] = len(frames)
+            record["_epoch"] = epoch
             frames.append(record)
+            previous_frame = frame
     if not frames:
         raise ValueError(f"{path}: trace is empty")
     return frames
@@ -71,13 +79,48 @@ def analyze(frames: list[dict], max_findings: int = 200) -> dict:
     raw_fallback_frames: list[dict] = []
     refresh_frames: list[dict] = []
     stable_input_margin_changes: list[dict] = []
+    identity_transitions: list[dict] = []
+    policy_violations: list[dict] = []
+    frame_counter_resets: list[dict] = []
     previous: dict | None = None
 
     for record in frames:
         decision = record["decision"]
+        if previous is not None and record.get("_epoch", 0) != \
+                previous.get("_epoch", 0):
+            frame_counter_resets.append({
+                "sequence": record.get("_sequence"),
+                "previous_frame": previous["frame"],
+                "frame": record["frame"],
+                "epoch": record.get("_epoch"),
+            })
         for key, value in decision.items():
             if value:
                 decisions[key] += 1
+        if decision.get("identity_reset") and \
+                len(identity_transitions) < max_findings:
+            identity = record.get("identity", {})
+            identity_transitions.append({
+                "frame": record["frame"],
+                "hash": identity.get("hash"),
+                "change_mask": identity.get("change_mask"),
+                "scene": record["scene"],
+            })
+        violations = []
+        if decision.get("centered_fallback") and \
+                decision.get("shadow_commit"):
+            violations.append("centered_frame_committed_shadow")
+        if decision.get("identity_reset") and decision.get("grace_accepted"):
+            violations.append("new_identity_used_old_grace")
+        if decision.get("shadow_commit") and not decision.get(
+                "bounds_ready", True):
+            violations.append("shadow_committed_before_camera_bounds")
+        if bool(decision.get("shadow_frame")) != \
+                bool(decision.get("shadow_commit")):
+            violations.append("shadow_frame_commit_disagree")
+        if violations and len(policy_violations) < max_findings:
+            policy_violations.append({"frame": record["frame"],
+                                      "violations": violations})
         raw = sum(layer["west_raw"] + layer["east_raw"]
                   for layer in record["shadow_delta"])
         refresh = sum(layer["prefill_refresh"]
@@ -119,13 +162,21 @@ def analyze(frames: list[dict], max_findings: int = 200) -> dict:
         "source_schema": SCHEMA,
         "frames": len(frames),
         "frame_range": [frames[0]["frame"], frames[-1]["frame"]],
+        "sequence_range": [frames[0].get("_sequence", 0),
+                           frames[-1].get("_sequence", len(frames) - 1)],
+        "frame_epochs": 1 + max(
+            (record.get("_epoch", 0) for record in frames), default=0),
+        "frame_counter_resets": frame_counter_resets,
         "decision_counts": dict(sorted(decisions.items())),
         "raw_fallback_frames": raw_fallback_frames,
         "prefill_refresh_frames": refresh_frames,
+        "identity_transitions": identity_transitions,
+        "policy_violations": policy_violations,
         "stable_input_margin_changes": stable_input_margin_changes,
         "truncated": any(len(items) >= max_findings for items in
                          (raw_fallback_frames, refresh_frames,
-                          stable_input_margin_changes)),
+                          stable_input_margin_changes, identity_transitions,
+                          policy_violations)),
     }
 
 

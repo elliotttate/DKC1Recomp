@@ -185,14 +185,40 @@ static uint16_t Dkc1ReadWram16(uint16_t address) {
 }
 
 static bool s_ws_shadow_active;
-static bool s_ws_source_valid;
-static uint64_t s_ws_source_signature;
 static bool s_ws_origin_valid[2];
 static uint32_t s_ws_world_x[2];
 static uint32_t s_ws_world_y[2];
 static Dkc1LevelLayout s_ws_layout;
 static int s_ws_layout_grace;  /* bounded transient calibration misses */
 static bool s_ws_trace_reset_pending;
+
+typedef struct Dkc1WsIdentity {
+  uint16_t mode;
+  uint16_t level;
+  uint16_t entrance;
+  uint64_t source_signature;
+  uint8_t bgmode;
+  uint8_t bgsc[4];
+  uint8_t main_mask;
+  uint8_t sub_mask;
+  uint8_t wide_layer_mask;
+  int8_t terrain_layer;
+} Dkc1WsIdentity;
+
+enum Dkc1WsIdentityChange {
+  kDkc1WsIdentityMode = 1u << 0,
+  kDkc1WsIdentityLevel = 1u << 1,
+  kDkc1WsIdentityEntrance = 1u << 2,
+  kDkc1WsIdentitySource = 1u << 3,
+  kDkc1WsIdentityBgMode = 1u << 4,
+  kDkc1WsIdentityBgSc = 1u << 5,
+  kDkc1WsIdentityScreenMasks = 1u << 6,
+  kDkc1WsIdentityWideMask = 1u << 7,
+  kDkc1WsIdentityTerrainLayer = 1u << 8,
+};
+
+static bool s_ws_identity_valid;
+static Dkc1WsIdentity s_ws_identity;
 
 static uint32_t Dkc1BlendDebugColor(uint32_t pixel, uint32_t color) {
   /* Keep the rendered image legible beneath a 50% false-color wash. */
@@ -252,20 +278,96 @@ static uint64_t Dkc1LevelSourceSignature(void) {
   return bank | (map << 8) | (metatiles << 24) | (vram << 40);
 }
 
-static void Dkc1ResetWidescreenShadow(void) {
-  const bool had_state = s_ws_shadow_active || s_ws_source_valid ||
+static Dkc1WsIdentity Dkc1BuildWidescreenIdentity(uint8_t wide_layer_mask,
+                                                  int terrain_layer) {
+  Dkc1WsIdentity identity;
+  memset(&identity, 0, sizeof identity);
+  identity.mode = Dkc1ReadWram16(0x0032);
+  identity.level = Dkc1ReadWram16(0x0030);
+  identity.entrance = Dkc1ReadWram16(0x003e);
+  identity.source_signature = Dkc1LevelSourceSignature();
+  identity.bgmode = g_ppu->bgmode;
+  memcpy(identity.bgsc, g_ppu->bgXsc, sizeof identity.bgsc);
+  identity.main_mask = g_ppu->screenEnabled[0];
+  identity.sub_mask = g_ppu->screenEnabled[1];
+  identity.wide_layer_mask = wide_layer_mask;
+  identity.terrain_layer = (int8_t)terrain_layer;
+  return identity;
+}
+
+static uint32_t Dkc1WidescreenIdentityDiff(const Dkc1WsIdentity *old,
+                                           const Dkc1WsIdentity *current) {
+  if (!s_ws_identity_valid)
+    return UINT32_MAX;
+  uint32_t changed = 0;
+  if (old->mode != current->mode) changed |= kDkc1WsIdentityMode;
+  if (old->level != current->level) changed |= kDkc1WsIdentityLevel;
+  if (old->entrance != current->entrance)
+    changed |= kDkc1WsIdentityEntrance;
+  if (old->source_signature != current->source_signature)
+    changed |= kDkc1WsIdentitySource;
+  if (old->bgmode != current->bgmode) changed |= kDkc1WsIdentityBgMode;
+  if (memcmp(old->bgsc, current->bgsc, sizeof old->bgsc) != 0)
+    changed |= kDkc1WsIdentityBgSc;
+  if (old->main_mask != current->main_mask ||
+      old->sub_mask != current->sub_mask)
+    changed |= kDkc1WsIdentityScreenMasks;
+  if (old->wide_layer_mask != current->wide_layer_mask)
+    changed |= kDkc1WsIdentityWideMask;
+  if (old->terrain_layer != current->terrain_layer)
+    changed |= kDkc1WsIdentityTerrainLayer;
+  return changed;
+}
+
+static uint64_t Dkc1WidescreenIdentityHash(const Dkc1WsIdentity *identity) {
+  uint64_t hash = UINT64_C(1469598103934665603);
+#define DKC1_IDENTITY_MIX(value)                                          \
+  do {                                                                   \
+    hash ^= (uint64_t)(value);                                           \
+    hash *= UINT64_C(1099511628211);                                     \
+  } while (0)
+  DKC1_IDENTITY_MIX(identity->mode);
+  DKC1_IDENTITY_MIX(identity->level);
+  DKC1_IDENTITY_MIX(identity->entrance);
+  DKC1_IDENTITY_MIX(identity->source_signature);
+  DKC1_IDENTITY_MIX(identity->bgmode);
+  for (int i = 0; i < 4; i++) DKC1_IDENTITY_MIX(identity->bgsc[i]);
+  DKC1_IDENTITY_MIX(identity->main_mask);
+  DKC1_IDENTITY_MIX(identity->sub_mask);
+  DKC1_IDENTITY_MIX(identity->wide_layer_mask);
+  DKC1_IDENTITY_MIX((uint8_t)identity->terrain_layer);
+#undef DKC1_IDENTITY_MIX
+  return hash;
+}
+
+static void Dkc1ClearWidescreenShadow(bool clear_identity) {
+  const bool had_state = s_ws_shadow_active ||
                          s_ws_layout != kDkc1LayoutUnknown;
   if (s_ws_shadow_active)
     WsShadowReset();
   s_ws_shadow_active = false;
   memset(s_ws_origin_valid, 0, sizeof s_ws_origin_valid);
-  s_ws_source_valid = false;
   s_ws_layout = kDkc1LayoutUnknown;
   s_ws_layout_grace = 0;
+  if (clear_identity) {
+    s_ws_identity_valid = false;
+    memset(&s_ws_identity, 0, sizeof s_ws_identity);
+  }
   Dkc1VideoSetPresentationBias(0);
   Dkc1VideoSetTerrainReady(false);
   if (had_state)
     s_ws_trace_reset_pending = true;
+}
+
+static void Dkc1ResetWidescreenShadow(void) {
+  Dkc1ClearWidescreenShadow(true);
+}
+
+/* A rejected frame must discard retained pixels/layout confidence but retain
+ * the observed hard identity. This prevents repeated provisional cold starts
+ * while still requiring a fresh calibration before any later commit. */
+static void Dkc1RejectWidescreenShadow(void) {
+  Dkc1ClearWidescreenShadow(false);
 }
 
 /* Clamp only the host presentation camera near level ends. A symmetric wide
@@ -332,61 +434,147 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
                                         Dkc1WsTraceFrame *trace) {
   const uint32_t camera_x = Dkc1ReadWram16(0x088b);
   const uint32_t camera_y = Dkc1ReadWram16(0x0895);
-  const uint64_t source_signature = Dkc1LevelSourceSignature();
   const uint16_t stream_vram = Dkc1ReadWram16(0x1b13);
   const uint8_t map_bank = g_ram[0x00d5];
   const uint16_t map_base = Dkc1ReadWram16(0x00d3);
   const uint16_t metatile_base = Dkc1ReadWram16(0x1b11);
   const int terrain_layer =
       Dkc1VideoTerrainLayer(layer_mask, g_ppu->bgXsc, stream_vram);
+  const Dkc1WsIdentity identity =
+      Dkc1BuildWidescreenIdentity(layer_mask, terrain_layer);
+  const bool identity_was_valid = s_ws_identity_valid;
+  const uint32_t identity_change =
+      Dkc1WidescreenIdentityDiff(&s_ws_identity, &identity);
+  if (trace) {
+    trace->identity_hash = Dkc1WidescreenIdentityHash(&identity);
+    trace->identity_change_mask = identity_change;
+  }
+  if (identity_change != 0) {
+    if (trace) {
+      trace->identity_reset = true;
+      trace->source_reset = !identity_was_valid ||
+          (identity_change & kDkc1WsIdentitySource) != 0;
+    }
+    /* Hard scene changes are authoritative. Discard retained pixels before
+     * looking at soft tile agreement, then remember this identity so repeated
+     * unsupported frames do not manufacture cold-start history. */
+    Dkc1ClearWidescreenShadow(false);
+    s_ws_identity = identity;
+    s_ws_identity_valid = true;
+  }
 
-  if (!s_ws_shadow_active) {
-    if (trace)
-      trace->cold_start = true;
-    WsShadowReset();
-    memset(s_ws_origin_valid, 0, sizeof s_ws_origin_valid);
-    s_ws_shadow_active = true;
-  }
-  if (!s_ws_source_valid || source_signature != s_ws_source_signature) {
-    if (trace)
-      trace->source_reset = true;
-    WsShadowReset();
-    memset(s_ws_origin_valid, 0, sizeof s_ws_origin_valid);
-    s_ws_source_signature = source_signature;
-    s_ws_source_valid = true;
-    s_ws_layout = kDkc1LayoutUnknown;
-    s_ws_layout_grace = 0;
-  }
+  /* Source pointers and a Mode-1 shape become visible several frames before
+   * DKC publishes usable logical camera bounds at level entry. During that
+   * interval the same bytes can strongly resemble the wrong map layout. A
+   * viewport cannot expose both margins until the camera range itself spans
+   * the requested extension, so fail closed without touching shadow history. */
+  const uint32_t lower_bound = Dkc1ReadWram16(0x1b23);
+  const uint32_t upper_bound = Dkc1ReadWram16(0x1b25);
+  const uint32_t minimum_span = (uint32_t)Dkc1VideoExtra() * 2u;
+  const bool bounds_ready = upper_bound >= lower_bound &&
+                            upper_bound - lower_bound >= minimum_span;
+  if (trace) trace->bounds_ready = bounds_ready;
+  if (!bounds_ready)
+    return false;
 
   const int keep_tiles = Dkc1VideoExtra() / 8 + 2;
+  bool candidate_valid[2] = {false, false};
+  uint32_t candidate_world_x[2] = {0, 0};
+  uint32_t candidate_world_y[2] = {0, 0};
   for (int layer = 0; layer < 2; layer++) {
     const uint8_t bit = (uint8_t)(1u << layer);
-    if (!(layer_mask & bit)) {
-      s_ws_origin_valid[layer] = false;
+    if (!(layer_mask & bit))
       continue;
-    }
     if (layer == terrain_layer) {
-      s_ws_world_x[layer] = Dkc1VideoUnwrapPpuScroll(
+      candidate_world_x[layer] = Dkc1VideoUnwrapPpuScroll(
           (uint16_t)(g_ppu->hScroll[layer] + presentation_bias), camera_x);
-      s_ws_world_y[layer] = Dkc1VideoUnwrapPpuScroll(
+      candidate_world_y[layer] = Dkc1VideoUnwrapPpuScroll(
           (uint16_t)g_ppu->vScroll[layer], camera_y);
     } else {
       const uint32_t anchor_x = s_ws_origin_valid[layer]
                                     ? s_ws_world_x[layer] : camera_x;
       const uint32_t anchor_y = s_ws_origin_valid[layer]
                                     ? s_ws_world_y[layer] : camera_y;
-      s_ws_world_x[layer] = Dkc1VideoUnwrapPpuScroll(
+      candidate_world_x[layer] = Dkc1VideoUnwrapPpuScroll(
           (uint16_t)(g_ppu->hScroll[layer] + presentation_bias), anchor_x);
-      s_ws_world_y[layer] = Dkc1VideoUnwrapPpuScroll(
+      candidate_world_y[layer] = Dkc1VideoUnwrapPpuScroll(
           (uint16_t)g_ppu->vScroll[layer], anchor_y);
     }
-    s_ws_origin_valid[layer] = true;
+    candidate_valid[layer] = true;
 
     if (trace) {
       trace->world_valid[layer] = true;
-      trace->world_x[layer] = s_ws_world_x[layer];
-      trace->world_y[layer] = s_ws_world_y[layer];
+      trace->world_x[layer] = candidate_world_x[layer];
+      trace->world_y[layer] = candidate_world_y[layer];
     }
+  }
+
+  if (terrain_layer < 0 || terrain_layer >= 2 ||
+      !candidate_valid[terrain_layer] || PPU_bigTiles(g_ppu, terrain_layer))
+    return false;
+
+  /* Phase 1 is read-only: score the native rolling tilemap before any call
+   * into WsShadow or mutation of retained world origins. */
+  const uint16_t ppu_map_base =
+      (uint16_t)PPU_bgTilemapAdr(g_ppu, terrain_layer);
+  const uint32_t wx = candidate_world_x[terrain_layer];
+  const uint32_t wy = candidate_world_y[terrain_layer];
+  Dkc1LevelLayout best = kDkc1LayoutUnknown;
+  int best_matches = 0, best_decodable = 0;
+  for (int candidate = kDkc1LayoutHorizontal;
+       candidate <= kDkc1LayoutVertical; candidate++) {
+    int decodable = 0;
+    int matches = Dkc1CalibrateLayout(
+        (Dkc1LevelLayout)candidate, ppu_map_base, map_bank, map_base,
+        metatile_base, wx, wy, &decodable);
+    if (trace) {
+      const int index = candidate - kDkc1LayoutHorizontal;
+      trace->calibration_matches[index] = matches;
+      trace->calibration_decodable[index] = decodable;
+    }
+    if (matches > best_matches) {
+      best_matches = matches;
+      best_decodable = decodable;
+      best = (Dkc1LevelLayout)candidate;
+    }
+  }
+  const bool calibrated =
+      best_decodable >= 64 && best_matches * 10 >= best_decodable * 7;
+  Dkc1LevelLayout accepted_layout = kDkc1LayoutUnknown;
+  int next_grace = 0;
+  if (calibrated) {
+    accepted_layout = best;
+    next_grace = 2;
+    if (trace) trace->calibration_accepted = true;
+  } else if (s_ws_layout != kDkc1LayoutUnknown && s_ws_layout_grace > 0) {
+    /* Soft misses are tolerated only inside an unchanged hard identity. The
+     * counter is a remaining-frame budget: two means two accepted misses. */
+    accepted_layout = s_ws_layout;
+    next_grace = s_ws_layout_grace - 1;
+    if (trace) trace->grace_accepted = true;
+  } else {
+    return false;
+  }
+
+  /* Phase 2 commits only an accepted frame. A rejected candidate cannot
+   * capture tiles, move origins, or seed data that a later scene observes. */
+  if (!s_ws_shadow_active) {
+    if (trace) trace->cold_start = true;
+    WsShadowReset();
+    memset(s_ws_origin_valid, 0, sizeof s_ws_origin_valid);
+    s_ws_shadow_active = true;
+  }
+  s_ws_layout = accepted_layout;
+  s_ws_layout_grace = next_grace;
+  for (int layer = 0; layer < 2; layer++) {
+    const uint8_t bit = (uint8_t)(1u << layer);
+    if (!(layer_mask & bit)) {
+      s_ws_origin_valid[layer] = false;
+      continue;
+    }
+    s_ws_world_x[layer] = candidate_world_x[layer];
+    s_ws_world_y[layer] = candidate_world_y[layer];
+    s_ws_origin_valid[layer] = candidate_valid[layer];
 
     WsShadowSetWorld(layer, s_ws_world_x[layer], s_ws_world_y[layer]);
     WsShadowSetScroll(layer,
@@ -414,57 +602,10 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
 
   WsShadowFrame(g_ppu);
   if (trace) {
+    trace->shadow_commit = true;
     trace->shadow_frame = true;
     trace->terrain_layer = terrain_layer;
   }
-
-  if (terrain_layer < 0 || PPU_bigTiles(g_ppu, terrain_layer))
-    return false;
-
-  /* Runtime layout calibration: decode the native window from ROM and
-   * require it to agree with the live rolling tilemap before trusting the
-   * decoder for margin prefill. Re-checked continuously so level
-   * transitions and unforeseen layouts fail safe (blank margins). */
-  const uint16_t ppu_map_base =
-      (uint16_t)PPU_bgTilemapAdr(g_ppu, terrain_layer);
-  const uint32_t wx = s_ws_world_x[terrain_layer];
-  const uint32_t wy = s_ws_world_y[terrain_layer];
-  Dkc1LevelLayout best = kDkc1LayoutUnknown;
-  int best_matches = 0, best_decodable = 0;
-  for (int candidate = kDkc1LayoutHorizontal;
-       candidate <= kDkc1LayoutVertical; candidate++) {
-    int decodable = 0;
-    int matches = Dkc1CalibrateLayout(
-        (Dkc1LevelLayout)candidate, ppu_map_base, map_bank, map_base,
-        metatile_base, wx, wy, &decodable);
-    if (trace) {
-      const int index = candidate - kDkc1LayoutHorizontal;
-      trace->calibration_matches[index] = matches;
-      trace->calibration_decodable[index] = decodable;
-    }
-    if (matches > best_matches) {
-      best_matches = matches;
-      best_decodable = decodable;
-      best = (Dkc1LevelLayout)candidate;
-    }
-  }
-  const bool calibrated =
-      best_decodable >= 64 && best_matches * 10 >= best_decodable * 7;
-  if (calibrated) {
-    s_ws_layout = best;
-    /* Tolerate at most two isolated dynamic-tile mismatches. Confidence must
-     * not accumulate with play time: the former saturating 1000-frame hold
-     * could expose stale level art for seconds after a scene transition. */
-    s_ws_layout_grace = 2;
-  } else if (s_ws_layout_grace > 0) {
-    s_ws_layout_grace--;
-    if (s_ws_layout_grace == 0)
-      s_ws_layout = kDkc1LayoutUnknown;
-  } else {
-    s_ws_layout = kDkc1LayoutUnknown;
-  }
-  if (s_ws_layout == kDkc1LayoutUnknown)
-    return false;
 
   /* Prefill the margin columns (plus one guard tile each side) from ROM. */
   uint16_t blank_entry = 0;
@@ -570,7 +711,7 @@ void Dkc1DrawPpuFrame(void) {
     Dkc1VideoSetTerrainReady(true);
   } else if (Dkc1VideoIsWidescreen()) {
     trace.centered_fallback = true;
-    Dkc1ResetWidescreenShadow();
+    Dkc1RejectWidescreenShadow();
     /* Pillarbox fixed screens (logos, map, title): clear the host row and
      * center the authentic 256 columns. */
     size_t row_bytes = (size_t)Dkc1VideoWidth() * kDkc1VideoBytesPerPixel;

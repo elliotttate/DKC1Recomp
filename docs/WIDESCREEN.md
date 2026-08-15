@@ -65,13 +65,19 @@ gameplay coordinates are not translated merely to make the picture wider.
 
 ## Fail-closed scene policy
 
-`Dkc1DrawPpuFrame` first verifies a supported PPU shape, reconstructs the
-candidate margins, and calibrates the native viewport. Only a successful
-calibration enables extra space, repeated bounded backdrop layers, generated
-visibility adapters, and object prefetch. A failed calibration clears the
-private shadow and centers the native frame over black. Calibration confidence
-has a fixed two-frame grace for isolated dynamic-tile mismatches; it never
-accumulates with play time, so a transition cannot retain stale level art for
+`Dkc1DrawPpuFrame` first builds a hard scene identity from DKC mode, level,
+entrance, source/map/metatile/VRAM signatures, PPU layout, active layers, and
+terrain selection. A changed identity rejects retained pixels immediately.
+The candidate world coordinates and calibration are then computed read-only.
+They cannot mutate the retained shadow. Camera bounds must span the requested
+wide extension before calibration is eligible. Only an accepted horizontal
+layout enters phase two and commits shadow origins, capture, and prefill.
+
+A failed decision clears retained pixels and centers the native frame over
+black. Within one unchanged hard identity, calibration has a true two-frame
+remaining miss budget for isolated dynamic-tile mismatches; it never
+accumulates with play time and cannot cross an identity change. This prevents
+transition frames from seeding a wrong layout or retaining stale level art for
 seconds.
 
 Jungle Hijinxs uses 64-column BG1/BG2 world layers and a bounded 32-column BG3
@@ -100,6 +106,10 @@ would instead repeat logos and transition art.
   a widescreen leak.
 - A 14,000-frame scripted wide run completes. The pre-existing unresolved
   `$BE8179` dispatch warning remains a separate recomp bring-up issue.
+- The visible 7,644-frame boot/map/Jungle route records two PPU-frame epochs,
+  one hard-identity transition, one horizontal cold start, zero grace accepts,
+  zero raw fallbacks, and zero trace-policy violations. No shadow commit occurs
+  before DKC publishes camera bounds wide enough for both margins.
 
 ## Level-edge presentation clamp and black-screen repair
 

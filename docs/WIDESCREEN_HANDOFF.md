@@ -161,9 +161,9 @@ The deterministic Jungle route reaches frame 7,600 with:
 - coherent BG1/BG2 terrain and a continued BG3 sky rather than the earlier
   solid-black sky margin.
 
-## Current unresolved issues
+## Resolved scene-atomic shadow issues (2026-08-15)
 
-### 1. Margin output is not yet presentation-deterministic across shadow policy changes
+### 1. Deterministic Jungle margin history
 
 Two frame-7,600 wide captures have identical WRAM, VRAM, CGRAM, and OAM but
 different final frame hashes:
@@ -183,10 +183,11 @@ This isolates the difference primarily to host shadow/presentation history,
 not SNES VRAM, OAM, or gameplay state. The visual appearance currently
 includes inconsistent dark/empty shapes near margin edges.
 
-The current source uses a fixed two-frame grace after a successful
-calibration. It replaced a saturating hold that could reach 1,000 frames and
-therefore risk carrying a stale layout for many seconds. Neither behavior has
-yet passed a transition-plus-gameplay acceptance matrix.
+The current source uses hard scene identity plus a two-phase shadow commit and
+a true two-frame remaining soft-miss budget. The visible boot/map/Jungle route
+now produces one accepted horizontal cold start and no earlier provisional
+layout. This resolves the known history-dependent cold-start path. It does not
+replace the still-needed every-level transition matrix.
 
 A 100-frame capture of frames 7,500-7,599 showed no full-frame pillarbox
 event. Both margins retained nonblack pixels in every frame. Therefore the
@@ -201,40 +202,41 @@ Local evidence:
 - sequence: `C:\Users\ellio\AppData\Local\Temp\dkc1-grace-audit\frame_007500.ppm`
   through `frame_007599.ppm`
 
-### 2. Calibration and shadow mutation are not cleanly separated
+### 2. Calibration and shadow mutation are separated
 
-`Dkc1PrepareWidescreenShadow()` currently initializes/mutates `WsShadow` and
-calls `WsShadowFrame(g_ppu)` before the current frame's layout calibration is
-known to be acceptable. If preparation later returns false,
-`Dkc1DrawPpuFrame()` resets the shadow and uses centered output. A later valid
-frame then starts from a cold shadow.
-
-This provisional-mutation/reset sequence is a plausible source of margin
-history differences. It has not yet been proven as the sole cause. A safer
-design is a two-phase decision:
+`Dkc1PrepareWidescreenShadow()` now uses a two-phase decision:
 
 1. derive scene identity and calibrate from live PPU/VRAM without mutating the
    retained shadow;
 2. only after acceptance, initialize/update/commit the shadow and prefill.
 
-At minimum, log every reset and cold start before changing this flow.
+The per-frame trace logs identity reset, bounds readiness, accepted
+calibration, grace, cold start, and shadow commit. The accepted 7,644-frame
+visible route has zero commits on centered or bounds-not-ready frames and zero
+policy violations.
 
-### 3. Scene identity and per-frame tile agreement are conflated
+### 3. Scene identity and per-frame tile agreement are separated
 
 An animated or recently streamed tile can reduce calibration agreement even
 though the level identity is unchanged. Conversely, retaining confidence
 because many earlier frames matched can expose stale art after a transition.
 
-The durable solution should distinguish:
+The runtime now distinguishes:
 
 - **hard identity invalidators:** game mode/entrance, source signature, map
   bank/base, metatile base, stream VRAM base, BGMODE, BGSC, terrain layer, and
   active wide-layer mask;
 - **soft per-frame evidence:** decoded/live sample match count.
 
-Hard identity changes should immediately reset and fail closed. Within one
-unchanged identity, tolerate only a small number of consecutive soft misses;
-do not accumulate confidence with total play time.
+Hard identity changes immediately reject retained layout/pixels. Within one
+unchanged identity, only two consecutive soft misses are tolerated. Camera
+bounds readiness is an additional precondition, because PPU source shape can
+become visible several frames before DKC publishes usable logical bounds.
+
+Evidence: `build/bounds-candidate-20260815-170328/ws-trace.jsonl` and its
+`ws-summary.json` (local, generated, not committed).
+
+## Remaining issues
 
 ### 4. Wider object activation changes simulation timing
 

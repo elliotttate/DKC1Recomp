@@ -1,0 +1,20 @@
+# Build reusable native snapshot anchors with the visible desktop host.
+# Paths are relative to the repository root. Create build/snapshots first.
+wait 0032 == 0001 timeout 600
+0 * 5100
+pulse 8 6 120 003e == 00eb timeout 6000
+pulse 8 6 120 003e == 00ec timeout 2000
+pulse 8 6 120 003e == 0016 timeout 2000
+state_save build/snapshots/jungle-map-before-entry.snapshot
+0 * 1500
+# Level entry resets the game/PPU frame counter. Capture immediately after
+# the camera is initialized enough to support the requested wide margins.
+pulse 8 8 150 0028 <= 0008 timeout 4000
+wait 1b25 >= 0100 timeout 600
+wait 088b <= 0100 timeout 600
+state_save build/snapshots/jungle-first-wide-bounds.snapshot
+checkpoint level_entry
+pulse 1 12 45 base 82 088b >= 0200 timeout 6000
+state_save build/snapshots/jungle-stable-gameplay.snapshot
+checkpoint camera_0200
+0 * 60

@@ -48,6 +48,70 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertNotIn("g_ram[", function)
         self.assertNotIn("Dkc1Write", function)
 
+    def test_shadow_calibration_is_read_only_until_commit(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        body = game.split(
+            "static bool Dkc1PrepareWidescreenShadow", 1)[1].split(
+                "void Dkc1DrawPpuFrame", 1)[0]
+        phase_one = body.index("/* Phase 1 is read-only")
+        calibration = body.index("Dkc1CalibrateLayout(", phase_one)
+        phase_two = body.index("/* Phase 2 commits only an accepted frame")
+        self.assertLess(calibration, phase_two)
+        provisional = body[phase_one:phase_two]
+        self.assertNotRegex(provisional, r"WsShadow[A-Za-z]+\(")
+        self.assertNotRegex(provisional, r"s_ws_world_[xy]\[.*\]\s*=")
+        committed = body[phase_two:]
+        self.assertIn("WsShadowSetWorld", committed)
+        self.assertIn("WsShadowFrame(g_ppu)", committed)
+        self.assertIn("trace->shadow_commit = true", committed)
+
+    def test_hard_identity_covers_scene_source_and_ppu_shape(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        identity = game.split("typedef struct Dkc1WsIdentity", 1)[1].split(
+            "} Dkc1WsIdentity;", 1)[0]
+        for field in ("mode", "level", "entrance", "source_signature",
+                      "bgmode", "bgsc[4]", "main_mask", "sub_mask",
+                      "wide_layer_mask", "terrain_layer"):
+            self.assertIn(field, identity)
+        self.assertIn("Dkc1WidescreenIdentityDiff", game)
+        self.assertIn("Dkc1RejectWidescreenShadow();", game)
+
+    def test_grace_budget_is_same_identity_only_and_counts_two_misses(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        body = game.split(
+            "static bool Dkc1PrepareWidescreenShadow", 1)[1].split(
+                "void Dkc1DrawPpuFrame", 1)[0]
+        identity_block = body.split("if (identity_change != 0)", 1)[1].split(
+            "const int keep_tiles", 1)[0]
+        self.assertIn("Dkc1ClearWidescreenShadow(false)", identity_block)
+        clear_body = game.split(
+            "static void Dkc1ClearWidescreenShadow", 1)[1].split(
+                "static void Dkc1ResetWidescreenShadow", 1)[0]
+        self.assertIn("s_ws_layout = kDkc1LayoutUnknown", clear_body)
+        self.assertIn("s_ws_layout_grace = 0", clear_body)
+        grace_check = body.index("s_ws_layout_grace > 0")
+        grace_decrement = body.index(
+            "next_grace = s_ws_layout_grace - 1;", grace_check)
+        self.assertLess(grace_check, grace_decrement)
+        self.assertIn("next_grace = 2;", body)
+
+    def test_level_entry_requires_published_camera_bounds_before_calibration(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        body = game.split(
+            "static bool Dkc1PrepareWidescreenShadow", 1)[1].split(
+                "void Dkc1DrawPpuFrame", 1)[0]
+        bounds_gate = body.index("if (!bounds_ready)")
+        calibration = body.index("Dkc1CalibrateLayout(")
+        commit = body.index("/* Phase 2 commits only an accepted frame")
+        self.assertLess(bounds_gate, calibration)
+        self.assertLess(bounds_gate, commit)
+        self.assertIn(
+            "upper_bound - lower_bound >= minimum_span", body)
+
 
 if __name__ == "__main__":
     unittest.main()

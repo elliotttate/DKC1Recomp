@@ -146,9 +146,11 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
 
   fprintf(s_trace_file,
       "{\"schema\":\"dkc1.ws.frame.v1\",\"frame\":%d,"
-      "\"scene\":{\"mode\":%u,\"entrance\":%u,\"fade\":%u},"
+      "\"scene\":{\"mode\":%u,\"level\":%u,\"entrance\":%u,"
+      "\"fade\":%u},"
       "\"source\":{\"bank\":%u,\"map\":%u,\"metatiles\":%u,"
       "\"stream_vram\":%u},"
+      "\"identity\":{\"hash\":\"%016llx\",\"change_mask\":%u},"
       "\"camera\":{\"x\":%u,\"y\":%u,\"lower\":%u,"
       "\"upper\":%u,\"presentation_bias\":%d},"
       "\"ppu\":{\"mode\":%u,\"bgmode\":%u,\"inidisp\":%u,"
@@ -159,15 +161,21 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"calibration\":{\"horizontal\":[%d,%d],"
       "\"vertical\":[%d,%d],\"selected\":%d,\"grace\":%d},"
       "\"decision\":{\"reset\":%u,\"cold_start\":%u,"
-      "\"source_reset\":%u,\"shadow_frame\":%u,\"prefill\":%u,"
+      "\"source_reset\":%u,\"identity_reset\":%u,"
+      "\"bounds_ready\":%u,"
+      "\"calibration_accepted\":%u,\"grace_accepted\":%u,"
+      "\"shadow_commit\":%u,\"shadow_frame\":%u,\"prefill\":%u,"
       "\"edge_extension\":%u,\"centered_fallback\":%u},"
       "\"world\":[{\"valid\":%u,\"x\":%u,\"y\":%u},"
       "{\"valid\":%u,\"x\":%u,\"y\":%u}],"
       "\"margin_tiles\":%d,\"shadow_delta\":[",
       frame->frame, (unsigned)ReadWram16(0x0032),
-      (unsigned)ReadWram16(0x003e), (unsigned)ReadWram16(0x1df1),
+      (unsigned)ReadWram16(0x0030), (unsigned)ReadWram16(0x003e),
+      (unsigned)ReadWram16(0x1df1),
       (unsigned)g_ram[0x00d5], (unsigned)ReadWram16(0x00d3),
       (unsigned)ReadWram16(0x1b11), (unsigned)ReadWram16(0x1b13),
+      (unsigned long long)frame->identity_hash,
+      (unsigned)frame->identity_change_mask,
       (unsigned)ReadWram16(0x088b), (unsigned)ReadWram16(0x0895),
       (unsigned)ReadWram16(0x1b23), (unsigned)ReadWram16(0x1b25),
       frame->presentation_bias, (unsigned)(g_ppu->bgmode & 7u),
@@ -186,7 +194,12 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       frame->calibration_matches[1], frame->calibration_decodable[1],
       frame->selected_layout, frame->layout_grace,
       frame->reset ? 1u : 0u, frame->cold_start ? 1u : 0u,
-      frame->source_reset ? 1u : 0u, frame->shadow_frame ? 1u : 0u,
+      frame->source_reset ? 1u : 0u, frame->identity_reset ? 1u : 0u,
+      frame->bounds_ready ? 1u : 0u,
+      frame->calibration_accepted ? 1u : 0u,
+      frame->grace_accepted ? 1u : 0u,
+      frame->shadow_commit ? 1u : 0u,
+      frame->shadow_frame ? 1u : 0u,
       frame->prefill ? 1u : 0u, frame->edge_extension ? 1u : 0u,
       frame->centered_fallback ? 1u : 0u,
       frame->world_valid[0] ? 1u : 0u, frame->world_x[0],
