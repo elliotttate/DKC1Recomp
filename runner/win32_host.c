@@ -95,15 +95,31 @@ static void PresentFrame(HDC dc) {
   }
   if (!s_panel_enabled) return;
 
-  RECT panel = {s_width * kScale, 0,
-                s_width * kScale + kPanelWidth, s_height * kScale};
+  /* Compose the panel off-screen: FillRect-then-DrawText straight onto the
+   * window DC lets the display sample between the background wipe and the
+   * glyph pass, which reads as constant text flicker. A finished buffer
+   * blitted once per frame is atomic. */
+  const int panel_height = s_height * kScale;
+  static HDC panel_dc;
+  static HBITMAP panel_bitmap;
+  static int panel_buffer_height;
+  if (!panel_dc || panel_buffer_height != panel_height) {
+    if (panel_bitmap) DeleteObject(panel_bitmap);
+    if (panel_dc) DeleteDC(panel_dc);
+    panel_dc = CreateCompatibleDC(dc);
+    panel_bitmap = CreateCompatibleBitmap(dc, kPanelWidth, panel_height);
+    SelectObject(panel_dc, panel_bitmap);
+    panel_buffer_height = panel_height;
+  }
+
+  RECT panel = {0, 0, kPanelWidth, panel_height};
   HBRUSH background = CreateSolidBrush(RGB(18, 21, 25));
-  FillRect(dc, &panel, background);
+  FillRect(panel_dc, &panel, background);
   DeleteObject(background);
-  SetBkMode(dc, TRANSPARENT);
-  SetTextColor(dc, RGB(222, 230, 238));
+  SetBkMode(panel_dc, TRANSPARENT);
+  SetTextColor(panel_dc, RGB(222, 230, 238));
   HFONT font = (HFONT)GetStockObject(ANSI_FIXED_FONT);
-  HFONT old_font = (HFONT)SelectObject(dc, font);
+  HFONT old_font = (HFONT)SelectObject(panel_dc, font);
 
   char script[256] = "manual keyboard input";
   if (s_script_loaded) Dkc1ScriptStatus(script, sizeof script);
@@ -162,9 +178,11 @@ static void PresentFrame(HDC dc) {
   text_rect.left += 12;
   text_rect.top += 12;
   text_rect.right -= 10;
-  DrawTextA(dc, text, -1, &text_rect,
+  DrawTextA(panel_dc, text, -1, &text_rect,
             DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
-  SelectObject(dc, old_font);
+  SelectObject(panel_dc, old_font);
+  BitBlt(dc, s_width * kScale, 0, kPanelWidth, panel_height,
+         panel_dc, 0, 0, SRCCOPY);
 }
 
 static HWAVEOUT s_waveout;
