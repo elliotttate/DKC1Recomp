@@ -53,7 +53,7 @@ ACTOR_FIRST, ACTOR_LAST = 0x02, 0x32
 ACTOR_ARRAYS = {
     "id": 0x0D45, "source": 0x15FD, "x": 0x0B19, "y": 0x0BC1,
     "xs": 0x0E89, "ys": 0x0EF1, "state": 0x1029, "anim": 0x10D1,
-    "pose": 0x0AE5,
+    "pose": 0x0AE5, "current_pose": 0x0D11, "graphics": 0x0C69,
 }
 BOOKKEEPING = (0x192B, 0x1A2B)
 
@@ -64,6 +64,10 @@ BOOKKEEPING = (0x192B, 0x1A2B)
 # reported alongside.
 EXPECTED_WIDESCREEN_RANGES = [
     (0x00EF, 0x00F3),   # scanner window (widened activation comparisons)
+]
+
+EXPECTED_PRESENTATION_RANGES = [
+    (0x0200, 0x0420),   # WRAM OAM shadow (low table + 9-bit high table)
 ]
 
 INCLUDE_GROUPS = {
@@ -80,9 +84,10 @@ def read16(memory: bytes, offset: int) -> int:
     return memory[offset] | (memory[offset + 1] << 8)
 
 
-def run_headless(exe: Path, rom: Path, frames: int, widescreen: bool,
-                 script: Path | None, extra_env: dict[str, str],
-                 cwd: Path) -> None:
+def run_host(exe: Path, rom: Path, frames: int, widescreen: bool,
+             script: Path | None, extra_env: dict[str, str], cwd: Path,
+             *, visible: bool = False, snapshot: Path | None = None,
+             autoclose_ms: int = 1500) -> None:
     env = os.environ.copy()
     env["DKC1_WIDESCREEN"] = "1" if widescreen else "0"
     env.pop("SNESRECOMP_INPUT_PLAY", None)
@@ -91,9 +96,43 @@ def run_headless(exe: Path, rom: Path, frames: int, widescreen: bool,
     env.pop("DKC1_WRAM_DUMP", None)
     env.pop("DKC1_WRAM_DUMP_PATH", None)
     env.pop("DKC1_FRAME_PPM", None)
+    env.pop("DKC1_ROUTE_RESULT", None)
+    env.pop("DKC1_ROUTE_FRAME_LIMIT", None)
+    env.pop("DKC1_ROUTE_AUTOCLOSE_MS", None)
+    env.pop("DKC1_SAVESTATE_INPUT", None)
     if script is not None:
         env["DKC1_SCRIPT"] = str(script)
+    if snapshot is not None:
+        env["DKC1_SAVESTATE_INPUT"] = str(snapshot)
     env.update(extra_env)
+    if visible:
+        result_path = (cwd / "visible-route-result.json").resolve()
+        result_path.unlink(missing_ok=True)
+        env["DKC1_ROUTE_RESULT"] = str(result_path)
+        env["DKC1_ROUTE_FRAME_LIMIT"] = str(frames)
+        env["DKC1_ROUTE_AUTOCLOSE_MS"] = str(max(250, autoclose_ms))
+        process = subprocess.Popen([str(exe), str(rom)], cwd=str(cwd), env=env)
+        timeout = max(60.0, frames / 30.0 + 45.0)
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            raise RuntimeError(
+                f"visible run timed out after {timeout:.1f}s") from error
+        if returncode != 0:
+            raise RuntimeError(f"visible run failed (rc={returncode})")
+        if not result_path.exists():
+            raise RuntimeError("visible run exited without a route result")
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        if result.get("status") != "complete":
+            raise RuntimeError(
+                f"visible route did not complete: {result.get('status')}")
+        return
+
     result = subprocess.run(
         [str(exe), str(rom), str(frames)], cwd=str(cwd), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -144,10 +183,26 @@ def in_ranges(offset: int, ranges) -> bool:
     return any(start <= offset < end for start, end in ranges)
 
 
+def contiguous_ranges(offsets: list[int]) -> list[dict]:
+    if not offsets:
+        return []
+    result = []
+    start = previous = offsets[0]
+    for offset in offsets[1:]:
+        if offset != previous + 1:
+            result.append({"first": f"0x{start:05X}",
+                           "last": f"0x{previous:05X}",
+                           "count": previous - start + 1})
+            start = offset
+        previous = offset
+    result.append({"first": f"0x{start:05X}",
+                   "last": f"0x{previous:05X}",
+                   "count": previous - start + 1})
+    return result
+
+
 def classify(stock: bytes, wide: bytes) -> dict:
     diffs = [i for i in range(WRAM_SIZE) if stock[i] != wide[i]]
-    unexpected = [o for o in diffs
-                  if not in_ranges(o, EXPECTED_WIDESCREEN_RANGES)]
     groups = {}
     for name, ranges in INCLUDE_GROUPS.items():
         hits = [o for o in diffs if in_ranges(o, ranges)]
@@ -164,6 +219,8 @@ def classify(stock: bytes, wide: bytes) -> dict:
         if a != b:
             fields[name] = {"stock": f"0x{a:04X}", "wide": f"0x{b:04X}"}
     actors = []
+    render_pose_refresh_only = []
+    conditional_presentation_offsets: set[int] = set()
     for index in range(ACTOR_FIRST, ACTOR_LAST + 2, 2):
         entry = {}
         for field, base in ACTOR_ARRAYS.items():
@@ -172,10 +229,31 @@ def classify(stock: bytes, wide: bytes) -> dict:
             if a != b:
                 entry[field] = {"stock": f"0x{a:04X}", "wide": f"0x{b:04X}"}
         if entry:
+            changed_fields = set(entry)
             entry["slot"] = index
             entry["stock_id"] = f"0x{read16(stock, 0x0D45 + index):04X}"
             entry["wide_id"] = f"0x{read16(wide, 0x0D45 + index):04X}"
             actors.append(entry)
+            # $0AE5 is the pose pointer most recently submitted by the
+            # object's render path. A widened view can refresh it before the
+            # stock cull does. If every gameplay/animation field and the
+            # desired $0D11 pose agree, classify only those two bytes as a
+            # presentation refresh—not actor phase advancement.
+            if changed_fields == {"pose"} and (
+                    read16(stock, ACTOR_ARRAYS["current_pose"] + index) ==
+                    read16(wide, ACTOR_ARRAYS["current_pose"] + index)):
+                pose_offset = ACTOR_ARRAYS["pose"] + index
+                conditional_presentation_offsets.update(
+                    (pose_offset, pose_offset + 1))
+                render_pose_refresh_only.append({
+                    "slot": index,
+                    "id": entry["stock_id"],
+                    "source": f"0x{read16(stock, 0x15FD + index):04X}",
+                    "stock_pose": entry["pose"]["stock"],
+                    "wide_pose": entry["pose"]["wide"],
+                    "current_pose":
+                        f"0x{read16(stock, 0x0D11 + index):04X}",
+                })
     bookmarks = []
     for offset in range(*BOOKKEEPING):
         if stock[offset] != wide[offset]:
@@ -183,28 +261,74 @@ def classify(stock: bytes, wide: bytes) -> dict:
                 "record": offset - BOOKKEEPING[0],
                 "stock": stock[offset], "wide": wide[offset],
             })
+    expected_activation = [
+        o for o in diffs if in_ranges(o, EXPECTED_WIDESCREEN_RANGES)]
+    presentation = [
+        o for o in diffs
+        if in_ranges(o, EXPECTED_PRESENTATION_RANGES) or
+        o in conditional_presentation_offsets]
+    expected = set(expected_activation) | set(presentation)
+    unexpected = [o for o in diffs if o not in expected]
+
+    critical_actor_fields = {
+        "id", "source", "x", "y", "xs", "ys", "state", "anim"
+    }
+    gameplay_actor_differences = [
+        actor for actor in actors
+        if critical_actor_fields.intersection(actor)
+    ]
+    gameplay_named_fields = {
+        name: value for name, value in fields.items()
+        if not name.startswith("scanner_")
+    }
+    gameplay_critical = bool(
+        gameplay_actor_differences or bookmarks or gameplay_named_fields)
+    if gameplay_critical:
+        divergence_class = "gameplay_state"
+    elif any(name.startswith("scanner_") for name in fields):
+        divergence_class = "activation_or_presentation"
+    elif diffs and not unexpected:
+        divergence_class = "presentation_only"
+    elif diffs:
+        divergence_class = "unclassified_transient_or_scratch"
+    else:
+        divergence_class = "identical"
     return {
         "raw_diff_bytes": len(diffs),
+        "expected_activation_diff_bytes": len(expected_activation),
+        "presentation_diff_bytes": len(presentation),
         "unexpected_diff_bytes": len(unexpected),
         "first_raw_offset": f"0x{diffs[0]:05X}" if diffs else None,
         "first_unexpected_offset":
             f"0x{unexpected[0]:05X}" if unexpected else None,
         "groups": groups,
+        "unexpected_ranges": contiguous_ranges(unexpected),
         "named_fields": fields,
         "actor_differences": actors[:16],
+        "render_pose_refresh_only_actors": render_pose_refresh_only[:16],
+        "gameplay_actor_differences": gameplay_actor_differences[:16],
         "bookmark_differences": bookmarks[:32],
+        "gameplay_named_fields": gameplay_named_fields,
+        "gameplay_critical": gameplay_critical,
+        "divergence_class": divergence_class,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--exe", type=Path,
-                        default=Path("build/dkc1_snesrecomp_headless.exe"))
+    parser.add_argument("--exe", type=Path)
     parser.add_argument("--rom", required=True, type=Path)
     parser.add_argument("--script", type=Path,
                         help="DKC1_SCRIPT route (recommended) — the same "
                              "route runs in both modes")
     parser.add_argument("--frames", type=int, required=True)
+    parser.add_argument("--snapshot-input", type=Path,
+                        help="native full-machine anchor loaded before every "
+                             "stock/wide pass")
+    parser.add_argument("--visible", action="store_true",
+                        help="run each pass in the visible desktop debugger")
+    parser.add_argument("--autoclose-ms", type=int, default=1500,
+                        help="visible paused-inspection time after each pass")
     parser.add_argument("--work", type=Path, default=Path("build/divergence"))
     parser.add_argument("--window", type=int, default=8,
                         help="raw-dump window radius around first divergence")
@@ -213,9 +337,13 @@ def main() -> int:
 
     work = args.work
     work.mkdir(parents=True, exist_ok=True)
-    exe = args.exe.resolve()
+    exe = (args.exe or Path("build/dkc1_desktop.exe" if args.visible else
+                            "build/dkc1_snesrecomp_headless.exe")).resolve()
     rom = args.rom.resolve()
     script = args.script.resolve() if args.script else None
+    snapshot = args.snapshot_input.resolve() if args.snapshot_input else None
+    if args.visible and "desktop" not in exe.name.lower():
+        raise RuntimeError("--visible requires a desktop host executable")
 
     # stage 0: resolve the predicate-driven route into an exact-frame input
     # schedule under STOCK, then replay that fixed schedule in both modes.
@@ -223,8 +351,12 @@ def main() -> int:
     # de-align the two runs.
     inputs_path = (work / "resolved_inputs.txt").resolve()
     if script is not None:
-        run_headless(exe, rom, args.frames, False, script,
-                     {"DKC1_INPUT_RECORD": str(inputs_path)}, work)
+        inputs_path.unlink(missing_ok=True)
+        run_host(exe, rom, args.frames, False, script,
+                 {"DKC1_INPUT_RECORD": str(inputs_path),
+                  "DKC1_SESSION_DIR": str((work / "stage0").resolve())},
+                 work, visible=args.visible, snapshot=snapshot,
+                 autoclose_ms=args.autoclose_ms)
         if not inputs_path.exists():
             raise RuntimeError("input recording did not appear")
     elif not inputs_path.exists():
@@ -239,9 +371,10 @@ def main() -> int:
     logs = {}
     for mode, wide in (("stock", False), ("wide", True)):
         log_path = (work / f"{mode}_hash.log").resolve()
-        run_headless(exe, rom, args.frames, wide, None,
-                     playback_env({"DKC1_WRAM_HASH_LOG": str(log_path)}),
-                     work)
+        run_host(exe, rom, args.frames, wide, None,
+                 playback_env({"DKC1_WRAM_HASH_LOG": str(log_path)}),
+                 work, visible=args.visible, snapshot=snapshot,
+                 autoclose_ms=args.autoclose_ms)
         logs[mode] = load_hash_log(log_path)
 
     length = min(len(logs["stock"]), len(logs["wide"]))
@@ -271,14 +404,15 @@ def main() -> int:
                       Path(str(prefix.with_suffix(".bin")) + ".jsonl")):
             if stale.exists():
                 stale.unlink()
-        run_headless(
+        run_host(
             exe, rom, hi, wide, None,
             playback_env({
                 "DKC1_WRAM_DUMP": f"{lo}-{hi}",
                 "DKC1_WRAM_DUMP_PATH": str(prefix.with_suffix(".bin")),
                 "DKC1_WRAM_HASH_LOG":
                     str((work / f"{mode}_hash2.log").resolve())}),
-            work)
+            work, visible=args.visible, snapshot=snapshot,
+            autoclose_ms=args.autoclose_ms)
         dumps[mode] = load_wram_frames(prefix)
         # confirmation: pass-2 fingerprints must reproduce pass 1
         confirm = load_hash_log(work / f"{mode}_hash2.log")
@@ -304,6 +438,17 @@ def main() -> int:
     if first - 1 in dumps["stock"] and first - 1 in dumps["wide"]:
         report["frame_before"] = classify(
             dumps["stock"][first - 1], dumps["wide"][first - 1])
+    for frame in range(lo, hi + 1):
+        if frame not in dumps["stock"] or frame not in dumps["wide"]:
+            continue
+        frame_classification = classify(
+            dumps["stock"][frame], dumps["wide"][frame])
+        if frame_classification["gameplay_critical"]:
+            report["first_gameplay_critical_frame_in_window"] = frame
+            report["first_gameplay_critical_in_window"] = frame_classification
+            break
+    else:
+        report["first_gameplay_critical_frame_in_window"] = None
 
     text = json.dumps(report, indent=1)
     print(text)

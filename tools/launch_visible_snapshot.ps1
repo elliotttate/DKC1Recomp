@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('map', 'bounds', 'gameplay')]
+    [ValidateSet('map', 'bounds', 'gameplay', 'early', 'mid', 'late', 'route-end')]
     [string]$Anchor = 'gameplay',
     [string]$RomPath = $env:DKC1_ROM,
     [switch]$Trace
@@ -12,6 +12,10 @@ $snapshotNames = @{
     map = 'jungle-map-before-entry.snapshot'
     bounds = 'jungle-first-wide-bounds.snapshot'
     gameplay = 'jungle-stable-gameplay.snapshot'
+    early = 'jungle-scroll-early.snapshot'
+    mid = 'jungle-scroll-mid.snapshot'
+    late = 'jungle-scroll-late.snapshot'
+    'route-end' = 'jungle-route-end.snapshot'
 }
 $snapshot = Join-Path $repo ('build\snapshots\' + $snapshotNames[$Anchor])
 
@@ -45,4 +49,5 @@ $process = Start-Process -FilePath $exe `
 Write-Host "Visible DKC1Recomp PID $($process.Id)"
 Write-Host "Anchor: $Anchor"
 Write-Host "Snapshot: $snapshot"
+Write-Host "SHA-256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $snapshot).Hash)"
 Write-Host 'F11 quick-save, F12 quick-load, F9 export rolling repro.'

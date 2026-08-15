@@ -7,6 +7,38 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WidescreenRuntimeContractTests(unittest.TestCase):
+    def test_visible_snapshot_library_has_named_route_anchors(self):
+        recipe = (ROOT / "recipes" /
+                  "capture_jungle_route_snapshots.dks").read_text(
+                      encoding="utf-8")
+        launcher = (ROOT / "tools" /
+                    "launch_visible_snapshot.ps1").read_text(
+                        encoding="utf-8")
+        capture = (ROOT / "tools" /
+                   "capture_visible_snapshot_library.ps1").read_text(
+                       encoding="utf-8")
+        validator = (ROOT / "tools" /
+                     "validate_visible_snapshot_library.ps1").read_text(
+                         encoding="utf-8")
+
+        names = ("jungle-scroll-early.snapshot",
+                 "jungle-scroll-mid.snapshot",
+                 "jungle-scroll-late.snapshot",
+                 "jungle-route-end.snapshot")
+        for name in names:
+            self.assertIn(f"state_save build/snapshots/{name}", recipe)
+            self.assertIn(name, launcher)
+            self.assertIn(name, capture)
+            self.assertIn(name, validator)
+        self.assertIn("jungle-stable-gameplay.snapshot", capture)
+        self.assertIn("DKC1_ROUTE_RESULT", capture)
+        self.assertIn("Get-FileHash -Algorithm SHA256", capture)
+        self.assertIn("snapshot_smoke.dks", validator)
+        self.assertIn("dkc1.snapshot-library-validation.v1", validator)
+        smoke = (ROOT / "recipes" / "snapshot_smoke.dks").read_text(
+            encoding="utf-8")
+        self.assertIn("checkpoint snapshot_loaded", smoke)
+
     def test_type5_retry_uses_native_16_bit_push_order(self):
         source = (ROOT / "runner" / "dkc1_video.c").read_text(
             encoding="utf-8")
@@ -111,6 +143,25 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertLess(bounds_gate, commit)
         self.assertIn(
             "upper_bound - lower_bound >= minimum_span", body)
+
+    def test_visible_host_emits_atomic_route_results_and_can_autoclose(self):
+        source = (ROOT / "runner" / "win32_host.c").read_text(
+            encoding="utf-8")
+        self.assertIn('getenv("DKC1_ROUTE_RESULT")', source)
+        self.assertIn("dkc1.visible-route-result.v1", source)
+        self.assertIn("MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH",
+                      source)
+        self.assertIn('getenv("DKC1_ROUTE_FRAME_LIMIT")', source)
+        self.assertIn('getenv("DKC1_ROUTE_AUTOCLOSE_MS")', source)
+        self.assertIn('WriteRouteResult("aborted")', source)
+
+    def test_visible_playback_has_an_explicit_terminal_boundary(self):
+        source = (ROOT / "runner" / "win32_host.c").read_text(
+            encoding="utf-8")
+        playback = source.split("} else if (s_input_playback.count)", 1)[1]
+        playback = playback.split("} else {", 1)[0]
+        self.assertIn("s_host_frame >= s_input_playback.count", playback)
+        self.assertIn('SetRouteTerminal(0, "complete"', playback)
 
 
 if __name__ == "__main__":

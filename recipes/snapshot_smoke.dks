@@ -1,3 +1,4 @@
 # Advance two neutral frames after a native snapshot load, then pause.
 # This exercises the loaded-state widescreen reset/recalibration boundary.
 0 * 2
+checkpoint snapshot_loaded

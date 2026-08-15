@@ -446,7 +446,39 @@ tools\launch_visible_snapshot.ps1 bounds -Trace
 tools\launch_visible_snapshot.ps1 map -Trace
 ```
 
+Additional route anchors can be generated from the stable-gameplay snapshot in
+a separate visible window, without replaying the intro or disturbing an
+existing interactive window:
+
+```powershell
+tools\capture_visible_snapshot_library.ps1
+tools\validate_visible_snapshot_library.ps1
+tools\launch_visible_snapshot.ps1 early
+tools\launch_visible_snapshot.ps1 mid
+tools\launch_visible_snapshot.ps1 late
+tools\launch_visible_snapshot.ps1 route-end
+```
+
+The generated snapshots and `jungle-route-manifest.json` live under the
+ignored `build/snapshots/` directory. The manifest records the immutable root,
+route result, byte sizes, and SHA-256 identities so a later regression cannot
+silently use the wrong anchor.
+
 `recipes/snapshot_smoke.dks` is the two-frame visible-host load check.
+
+The stable-gameplay anchor also removed boot timing from a new visible
+stock/wide comparison. Frame 1 was byte-identical. At frame 2 the widened
+scanner advanced from record `$0C` to `$0D`, and actor index `$06` (ID `$05`,
+Kritter, source record `$0C`) changed only its last-rendered pose cache `$0AE5`
+from `$1E18` to the already-identical desired pose `$1E1C`. ID, source, world
+position, velocity, state, animation and desired pose were identical. Stock
+caught up after the actor entered its native render window; both modes had
+reconverged on the same pose by frame 10. The first ten compared frames contain
+no actor-gameplay, bookmark, section, entrance, fade or logical-camera
+difference. `tools/first_divergence.py` now reports this conditional
+`render_pose_refresh_only` case and WRAM OAM-shadow deltas as presentation,
+while retaining all raw and unclassified scratch ranges. This avoids promoting
+an earlier draw-cache refresh into a false behavior-phase bug.
 
 ## Follow-through pass (2026-08-15, latest)
 

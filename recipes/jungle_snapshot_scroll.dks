@@ -1,0 +1,7 @@
+# Deterministic object-activation probe from jungle-stable-gameplay.snapshot.
+# 0x83 = Right + Y + B; the fixed schedule is resolved once under stock mode
+# and replayed byte-for-byte under stock and widescreen presentation.
+0 * 2
+83 * 900
+0 * 30
+checkpoint jungle_scroll_end

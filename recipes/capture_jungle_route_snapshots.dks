@@ -1,0 +1,19 @@
+# Build later reusable anchors without replaying the intro or map entry.
+# Start this recipe from jungle-stable-gameplay.snapshot.
+#
+# 0x83 = Right + Y + B. The fixed chunks are intentionally preserved so the
+# anchors can also seed stock/wide differential replays from identical state.
+0 * 2
+83 * 120
+state_save build/snapshots/jungle-scroll-early.snapshot
+checkpoint jungle_scroll_early
+83 * 180
+state_save build/snapshots/jungle-scroll-mid.snapshot
+checkpoint jungle_scroll_mid
+83 * 300
+state_save build/snapshots/jungle-scroll-late.snapshot
+checkpoint jungle_scroll_late
+83 * 300
+state_save build/snapshots/jungle-route-end.snapshot
+checkpoint jungle_route_end
+0 * 2

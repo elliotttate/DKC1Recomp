@@ -49,6 +49,10 @@ static int s_route_finished;
 static int s_export_requested;
 static int s_quicksave_requested;
 static int s_quickload_requested;
+static DWORD s_route_autoclose_ms;
+static long s_route_frame_limit;
+static ULONGLONG s_route_terminal_tick;
+static int s_route_result_written;
 static long s_host_frame;
 static uint32_t s_last_input;
 static char s_host_status[512] = "manual play";
@@ -62,6 +66,43 @@ static uint16_t ReadWram16(unsigned address) {
 static int EnvironmentEnabled(const char *name) {
   const char *value = getenv(name);
   return value && *value && *value != '0';
+}
+
+static void UpdateDebugTitle(void);
+
+static void WriteRouteResult(const char *status) {
+  if (s_route_result_written) return;
+  s_route_result_written = 1;
+  const char *path = getenv("DKC1_ROUTE_RESULT");
+  if (!path || !*path) return;
+  char temporary[1200];
+  snprintf(temporary, sizeof temporary, "%s.tmp-%lu", path,
+           (unsigned long)GetCurrentProcessId());
+  FILE *file = fopen(temporary, "wb");
+  if (!file) return;
+  fprintf(file,
+          "{\"schema\":\"dkc1.visible-route-result.v1\","
+          "\"status\":\"%s\",\"host_frame\":%ld,"
+          "\"snes_frame\":%d,\"widescreen\":%s}\n",
+          status, s_host_frame, snes_frame_counter,
+          Dkc1VideoIsWidescreen() ? "true" : "false");
+  fflush(file);
+  fclose(file);
+  if (!MoveFileExA(temporary, path,
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    DeleteFileA(temporary);
+}
+
+static void SetRouteTerminal(int failed, const char *status,
+                             const char *message) {
+  s_route_finished = !failed;
+  s_script_failed = failed;
+  s_paused = 1;
+  s_step_once = 0;
+  snprintf(s_host_status, sizeof s_host_status, "%s", message);
+  WriteRouteResult(status);
+  s_route_terminal_tick = GetTickCount64();
+  UpdateDebugTitle();
 }
 
 static const char *LayerModeName(uint8_t mask) {
@@ -341,6 +382,21 @@ int main(int argc, char **argv) {
     s_panel_enabled = !(panel_text && *panel_text == '0');
   }
   {
+    const char *autoclose = getenv("DKC1_ROUTE_AUTOCLOSE_MS");
+    if (autoclose && *autoclose) {
+      unsigned long parsed = strtoul(autoclose, NULL, 10);
+      if (parsed > 60000ul) parsed = 60000ul;
+      s_route_autoclose_ms = (DWORD)parsed;
+    }
+  }
+  {
+    const char *limit = getenv("DKC1_ROUTE_FRAME_LIMIT");
+    if (limit && *limit) {
+      long parsed = strtol(limit, NULL, 10);
+      if (parsed > 0) s_route_frame_limit = parsed;
+    }
+  }
+  {
     const char *snapshot = getenv("DKC1_SAVESTATE_INPUT");
     if (snapshot && *snapshot && !RtlLoadSnapshot(snapshot)) {
       char message[1024];
@@ -505,6 +561,12 @@ int main(int argc, char **argv) {
       UpdateDebugTitle();
     }
 
+    if (s_route_terminal_tick && s_route_autoclose_ms &&
+        GetTickCount64() - s_route_terminal_tick >= s_route_autoclose_ms) {
+      s_running = 0;
+      continue;
+    }
+
     if (s_paused && !s_step_once) {
       HDC dc = GetDC(s_window);
       PresentFrame(dc);
@@ -516,54 +578,52 @@ int main(int argc, char **argv) {
     Dkc1ScriptOps script_ops = {0};
     uint32_t input = 0;
     int run_frame = 1;
+    if (s_route_frame_limit > 0 && s_host_frame >= s_route_frame_limit) {
+      SetRouteTerminal(0, "complete",
+                       "frame limit reached; paused for inspection");
+      continue;
+    }
     if (s_script_loaded) {
       if (Dkc1ScriptFinished()) {
-        s_route_finished = 1;
-        s_paused = 1;
-        s_step_once = 0;
-        snprintf(s_host_status, sizeof s_host_status,
-                 "route complete; paused for inspection");
-        UpdateDebugTitle();
+        SetRouteTerminal(0, "complete",
+                         "route complete; paused for inspection");
         continue;
       }
       bool failed = false;
       input = Dkc1ScriptNextInput(g_ram, &script_ops, &failed);
       if (failed) {
-        s_script_failed = 1;
-        s_paused = 1;
-        s_step_once = 0;
-        snprintf(s_host_status, sizeof s_host_status, "%s",
-                 Dkc1ScriptError());
-        UpdateDebugTitle();
+        SetRouteTerminal(1, "script_failed", Dkc1ScriptError());
         continue;
       }
       if (script_ops.state_load && !RtlLoadSnapshot(script_ops.state_load)) {
-        s_script_failed = 1;
-        s_paused = 1;
-        snprintf(s_host_status, sizeof s_host_status,
+        char message[512];
+        snprintf(message, sizeof message,
                  "unable to load snapshot: %.430s", script_ops.state_load);
-        UpdateDebugTitle();
+        SetRouteTerminal(1, "state_load_failed", message);
         continue;
       }
       if (script_ops.checkpoint &&
           !Dkc1DebugCheckpoint(script_ops.checkpoint, (int)s_host_frame)) {
-        s_script_failed = 1;
-        s_paused = 1;
-        snprintf(s_host_status, sizeof s_host_status,
+        char message[512];
+        snprintf(message, sizeof message,
                  "unable to record checkpoint: %.400s", script_ops.checkpoint);
-        UpdateDebugTitle();
+        SetRouteTerminal(1, "checkpoint_failed", message);
         continue;
       }
       if (script_ops.state_save && !RtlSaveSnapshot(script_ops.state_save)) {
-        s_script_failed = 1;
-        s_paused = 1;
-        snprintf(s_host_status, sizeof s_host_status,
+        char message[512];
+        snprintf(message, sizeof message,
                  "unable to save snapshot: %.430s", script_ops.state_save);
-        UpdateDebugTitle();
+        SetRouteTerminal(1, "state_save_failed", message);
         continue;
       }
       run_frame = script_ops.run_frame ? 1 : 0;
     } else if (s_input_playback.count) {
+      if ((size_t)s_host_frame >= s_input_playback.count) {
+        SetRouteTerminal(0, "complete",
+                         "input playback complete; paused for inspection");
+        continue;
+      }
       input = Dkc1InputPlaybackFrame(&s_input_playback,
                                       (size_t)s_host_frame);
     } else {
@@ -639,6 +699,8 @@ int main(int argc, char **argv) {
   }
   Dkc1DebugDumpClose();
   Dkc1FlightRecorderClose();
+  if (s_script_loaded && !s_route_result_written)
+    WriteRouteResult("aborted");
   Dkc1ScriptFree();
   Dkc1InputPlaybackFree(&s_input_playback);
   free(rom);
