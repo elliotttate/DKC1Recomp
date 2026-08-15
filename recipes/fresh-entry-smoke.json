@@ -1,0 +1,8 @@
+{
+  "schema": "dkc1.route.v1",
+  "name": "fresh-entry-smoke",
+  "steps": [
+    {"type": "input", "input": "000000", "frames": 10},
+    {"type": "checkpoint", "name": "after-10-neutral"}
+  ]
+}

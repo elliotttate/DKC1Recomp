@@ -34,6 +34,34 @@ non-conclusion vocabulary, and 3x byte-identical repeat gates.
   left/native-center/right independently, requires an exact center by
   default, emits a red-pixel diff, and can gate a comparison on matching
   VRAM plus both PPU/WRAM OAM trace hashes.
+- **Tool 2 is implemented (schema v1).** The headless host supports checksum-indexed,
+  range-selective atomic WRAM captures. Set `DKC1_WRAM_DUMP=7500-7600`,
+  `DKC1_WRAM_DUMP_PATH=<raw.bin>`, and optionally
+  `DKC1_WRAM_DUMP_RANGES=0000-01ff,192b-1a2a`. The adjacent JSONL manifest
+  and frame index use `docs/schemas/dkc1-wram-dump-v1.schema.json`; verify
+  payload length, offsets, ranges, and every SHA-256 with
+  `tools/verify_wram_dump.py`. Native snapshot input/output is available via
+  `DKC1_SAVESTATE_INPUT`, `DKC1_SAVESTATE_OUTPUT`, and optional 1-based
+  `DKC1_SAVESTATE_SAVE_AT`; input and output paths must differ so a route
+  cannot overwrite its immutable anchor. `tools/run_route_recipe.py`
+  validates `dkc1.route.v1` JSON, compiles it to the native frame-boundary
+  runner, and supports fixed input, 1/2/4-byte `wait_wram` predicates,
+  masks, shifts, signed comparisons, held input, timeouts, and named raw
+  checkpoints. The route manifest hashes the recipe, verified ROM, runner,
+  and optional anchor. These snapshots use the recomp runtime's native
+  format; SuperZSNES `.szst` files cannot be loaded by the recomp.
+- **Tool 3 is implemented.** `tools/first_divergence.py` runs an identical
+  native/wide route twice, fingerprints every full-WRAM frame in order, then
+  captures and classifies raw windows around the first differing frame. A
+  real 7,600-frame Jungle route currently reports `no_divergence` rather than
+  hiding an expected camera/window delta.
+- **Tool 7 is implemented.** Set `DKC1_OAM_LOG=<prefix>` and inspect it with
+  `tools/oam_inspect.py`. Capture metadata gates evidence to active gameplay,
+  excludes forced blank and menu/map OAM, recognizes DKC's tile-`$FF` unused
+  marker, tolerates the normal DMA pipeline, and reports X-high loss only
+  when the same WRAM-shadow entry supplies direct contradictory evidence.
+  The 7,600-frame Jungle oracle was clean: zero X-high loss suspects, with
+  valid left/right margin entries still reported descriptively.
 
 Provenance colors are: green = captured/authentic history, cyan = ROM
 prefill, magenta = proven periodic fold, gray = verified transparent blank,
@@ -55,6 +83,34 @@ $env:DKC1_WS_TRACE = "$env:TEMP\dkc1-ws.jsonl"
 python tools\analyze_ws_trace.py $env:TEMP\dkc1-ws.jsonl `
   --json-out $env:TEMP\dkc1-ws-summary.json
 ```
+
+Atomic WRAM capture example:
+
+```powershell
+$env:DKC1_WRAM_DUMP = '7500-7600'
+$env:DKC1_WRAM_DUMP_PATH = "$env:TEMP\route.wram.bin"
+$env:DKC1_WRAM_DUMP_RANGES = '0000-01ff,192b-1a2a'
+.\build\dkc1_snesrecomp_headless.exe C:\private\dkc1.sfc 7600
+python tools\verify_wram_dump.py $env:TEMP\route.wram.bin
+```
+
+Recipe validation and execution:
+
+```powershell
+python tools\run_route_recipe.py recipes\fresh-entry-smoke.json `
+  --validate-only --script-out $env:TEMP\route.script
+
+python tools\run_route_recipe.py recipes\fresh-entry-smoke.json `
+  --rom C:\private\dkc1.sfc `
+  --runner .\build\dkc1_snesrecomp_headless.exe `
+  --session-dir $env:TEMP\dkc1-route-smoke
+```
+
+Checkpoint names are restricted to safe filenames and duplicates are
+rejected. A timed-out predicate exits nonzero and cannot produce later
+checkpoint evidence. Named checkpoints contain full 128 KiB WRAM plus
+SHA-256 for WRAM, VRAM, WRAM OAM shadow, and PPU OAM. The smoke route was
+accepted only after three independent runs produced byte-identical WRAM.
 
 Cross-cutting rules adopted from the emulator worklog:
 
@@ -94,19 +150,23 @@ identical*). **Reuses:** DKC2's `widescreen_frame` trace pattern.
 **Cost:** ~1 day. Build nothing else calibration-related until this exists.
 
 ### 2. Route harness: wait-predicates, snapshots, fresh-entry recipes
+**Status: implemented (schema v1); the route library is intentionally small.**
 Formalize `SNESRECOMP_INPUT_PLAY` into recipe JSON (port of
 `DKCLevelAutomation`): steps are `automation` / `checkpoint`, with
 `wait_wram` predicates (mask/shift/signed compares) instead of fixed frame
 counts — this kills the map-entry timing roulette permanently. Add:
-per-frame atomic WRAM dump ranges (`DKC1_WRAM_DUMP=7500-7600`, gz stream +
-SHA-256 JSONL index, reusing `framedump.c`); `DKC1_SAVESTATE_INPUT` /
+per-frame atomic WRAM dump ranges (`DKC1_WRAM_DUMP=7500-7600`, raw stream +
+SHA-256 JSONL index); `DKC1_SAVESTATE_INPUT` /
 `DKC1_SAVESTATE_SAVE_AT` via the runtime's `RtlSaveSnapshot`/`RtlLoadSnapshot`
 so routes can anchor mid-game; a named library of fresh-entry recipes
 (boot→file→map→each level) since fresh entry is the only valid evidence for
 initializer bugs. **Serves:** every other tool; open issues 5–6.
-**Cost:** 1–2 days.
+The engine, schema, native snapshots, checksum-indexed WRAM ranges, manifest,
+and smoke recipe are present. Adding authored routes for every level remains
+coverage work rather than a missing substrate. **Cost:** implemented.
 
 ### 3. Stock-vs-wide first-divergence locator
+**Status: implemented; initial 7,600-frame route is WRAM-identical.**
 Port of `DKCFirstDivergenceLocator` / `DKCDualRuntimeDifferential`, much
 simpler natively: run the same recipe under `DKC1_WIDESCREEN=0` and `=1`,
 stream per-frame WRAM, compare with order-sensitive window hashes (endpoint
@@ -163,6 +223,7 @@ the ROM-decoded expectation — three-way: ROM decode vs VRAM vs shadow.
 tiles may survive in either margin"). **Cost:** ~1 day.
 
 ### 7. OAM inspector with shadow-vs-PPU dual view and wrap detector
+**Status: implemented and live-route validated.**
 Per-frame dump/compare of WRAM OAM shadow ($0200/$0400) AND PPU OAM,
 labeled, with 9-bit X decode, size bits, and world back-projection via the
 camera; automatic flag for entries whose art X sits in [256, 256+extra] but

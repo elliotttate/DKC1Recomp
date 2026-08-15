@@ -62,6 +62,7 @@ enum {
 
 static bool s_initialized;
 static FILE *s_hash_log;
+static FILE *s_input_record;
 static FILE *s_oam_bin;
 static FILE *s_oam_index;
 static FILE *s_lifecycle;
@@ -113,6 +114,10 @@ static void Initialize(void) {
   if (setting && *setting)
     s_hash_log = fopen(setting, "wb");
 
+  setting = getenv("DKC1_INPUT_RECORD");
+  if (setting && *setting)
+    s_input_record = fopen(setting, "wb");
+
   setting = getenv("DKC1_OAM_LOG");
   if (setting && *setting) {
     s_oam_bin = OpenSuffixed(setting, ".bin", "wb");
@@ -140,18 +145,23 @@ static bool GameplayGate(void) {
   const uint16_t entrance = Wram16(kAddrEntranceId);
   const uint16_t lower = Wram16(kAddrCameraLowerBound);
   const uint16_t upper = Wram16(kAddrCameraUpperBound);
-  return entrance < kEntranceCount && lower != 0 && upper > lower;
+  /* A valid level may have an authored lower bound of exactly zero (Jungle
+   * Hijinxs does), so ordering is the discriminator; map/menu state has an
+   * empty 0..0 span. */
+  return entrance < kEntranceCount && upper > lower;
 }
 
 static void EmitActor(FILE *out, const char *event, int frame, int slot) {
   const uint32_t index = (uint32_t)(kActorFirst + slot * 2);
   fprintf(out,
-      "{\"event\":\"%s\",\"frame\":%d,\"slot\":%u,"
+      "{\"schema\":\"dkc1.lifecycle.v1\","
+      "\"event\":\"%s\",\"frame\":%d,"
+      "\"actor_index\":%u,\"pool_ordinal\":%d,"
       "\"id\":%u,\"source\":%d,\"x\":%u,\"y\":%u,"
       "\"xs\":%d,\"ys\":%d,\"state\":%u,\"anim\":%u,"
       "\"pose\":%u,\"gfx\":%u,"
       "\"camera\":[%u,%u]}\n",
-      event, frame, index,
+      event, frame, index, slot,
       Wram16(kAddrActorId + index),
       (int16_t)Wram16(kAddrActorSourceRecord + index),
       Wram16(kAddrActorX + index), Wram16(kAddrActorY + index),
@@ -169,7 +179,8 @@ static void LifecycleFrame(int frame) {
   if (!GameplayGate()) {
     if (s_lifecycle_primed) {
       fprintf(s_lifecycle,
-              "{\"event\":\"gameplay_exit\",\"frame\":%d}\n", frame);
+              "{\"schema\":\"dkc1.lifecycle.v1\","
+              "\"event\":\"gameplay_exit\",\"frame\":%d}\n", frame);
       s_lifecycle_primed = false;
     }
     return;
@@ -177,7 +188,8 @@ static void LifecycleFrame(int frame) {
 
   if (!s_lifecycle_primed) {
     fprintf(s_lifecycle,
-        "{\"event\":\"gameplay_enter\",\"frame\":%d,\"entrance\":%u,"
+        "{\"schema\":\"dkc1.lifecycle.v1\","
+        "\"event\":\"gameplay_enter\",\"frame\":%d,\"entrance\":%u,"
         "\"bounds\":[%u,%u]}\n",
         frame, Wram16(kAddrEntranceId), Wram16(kAddrCameraLowerBound),
         Wram16(kAddrCameraUpperBound));
@@ -199,16 +211,19 @@ static void LifecycleFrame(int frame) {
     ActorShadow *prev = &s_actors[slot];
     if (now.id != prev->id || now.source != prev->source) {
       if (prev->id == 0 && now.id != 0)
-        EmitActor(s_lifecycle, "slot_alloc", frame, slot);
+        EmitActor(s_lifecycle, "actor_alloc", frame, slot);
       else if (prev->id != 0 && now.id == 0)
         fprintf(s_lifecycle,
-            "{\"event\":\"slot_free\",\"frame\":%d,\"slot\":%u,"
+            "{\"schema\":\"dkc1.lifecycle.v1\","
+            "\"event\":\"actor_free\",\"frame\":%d,"
+            "\"actor_index\":%u,\"pool_ordinal\":%d,"
             "\"prev_id\":%u,\"prev_source\":%d}\n",
-            frame, (unsigned)index, prev->id, (int16_t)prev->source);
+            frame, (unsigned)index, slot, prev->id,
+            (int16_t)prev->source);
       else
-        EmitActor(s_lifecycle, "slot_retype", frame, slot);
+        EmitActor(s_lifecycle, "actor_retype", frame, slot);
     } else if (now.id != 0 && now.state != prev->state) {
-      EmitActor(s_lifecycle, "slot_state", frame, slot);
+      EmitActor(s_lifecycle, "actor_state", frame, slot);
     }
     *prev = now;
   }
@@ -217,7 +232,8 @@ static void LifecycleFrame(int frame) {
   for (int i = 0; i < kBookkeepingLength; i++) {
     if (book[i] != s_bookkeeping[i]) {
       fprintf(s_lifecycle,
-          "{\"event\":\"bookmark\",\"frame\":%d,\"record\":%d,"
+          "{\"schema\":\"dkc1.lifecycle.v1\","
+          "\"event\":\"bookmark\",\"frame\":%d,\"record\":%d,"
           "\"from\":%u,\"to\":%u}\n",
           frame, i, s_bookkeeping[i], book[i]);
       s_bookkeeping[i] = book[i];
@@ -232,7 +248,8 @@ static void LifecycleFrame(int frame) {
   };
   if (memcmp(scanner, s_scanner, sizeof scanner) != 0) {
     fprintf(s_lifecycle,
-        "{\"event\":\"scanner\",\"frame\":%d,\"window\":[%u,%u],"
+        "{\"schema\":\"dkc1.lifecycle.v1\","
+        "\"event\":\"scanner\",\"frame\":%d,\"window\":[%u,%u],"
         "\"cursors\":[%u,%u,%u]}\n",
         frame, scanner[0], scanner[1], scanner[2], scanner[3], scanner[4]);
     memcpy(s_scanner, scanner, sizeof scanner);
@@ -245,7 +262,8 @@ static void LifecycleFrame(int frame) {
   };
   if (memcmp(section, s_section, sizeof section) != 0) {
     fprintf(s_lifecycle,
-        "{\"event\":\"section\",\"frame\":%d,\"state\":%u,\"pointer\":%u,"
+        "{\"schema\":\"dkc1.lifecycle.v1\","
+        "\"event\":\"section\",\"frame\":%d,\"state\":%u,\"pointer\":%u,"
         "\"current\":%u,\"pending\":%u,\"limit\":%u}\n",
         frame, section[0], section[1], section[2], section[3], section[4]);
     memcpy(s_section, section, sizeof section);
@@ -254,13 +272,17 @@ static void LifecycleFrame(int frame) {
   if (frame - s_lifecycle_last_keyframe >= kLifecycleKeyframeInterval) {
     s_lifecycle_last_keyframe = frame;
     fprintf(s_lifecycle,
-        "{\"event\":\"keyframe\",\"frame\":%d,\"camera\":[%u,%u],"
-        "\"bounds\":[%u,%u],\"slots\":[",
+        "{\"schema\":\"dkc1.lifecycle.v1\","
+        "\"event\":\"keyframe\",\"frame\":%d,\"camera\":[%u,%u],"
+        "\"bounds\":[%u,%u],\"actors\":[",
         frame, Wram16(kAddrLayerX), Wram16(kAddrLayerY),
         Wram16(kAddrCameraLowerBound), Wram16(kAddrCameraUpperBound));
     for (int slot = 0; slot < kActorCount; slot++) {
       const uint32_t index = (uint32_t)(kActorFirst + slot * 2);
-      fprintf(s_lifecycle, "%s[%u,%d,%u,%u]", slot ? "," : "",
+      fprintf(s_lifecycle,
+              "%s{\"actor_index\":%u,\"pool_ordinal\":%d,"
+              "\"id\":%u,\"source\":%d,\"x\":%u,\"y\":%u}",
+              slot ? "," : "", (unsigned)index, slot,
               Wram16(kAddrActorId + index),
               (int16_t)Wram16(kAddrActorSourceRecord + index),
               Wram16(kAddrActorX + index), Wram16(kAddrActorY + index));
@@ -270,6 +292,12 @@ static void LifecycleFrame(int frame) {
 }
 
 /* ---- public entry points -------------------------------------------- */
+
+void Dkc1DebugRecordInput(uint32_t mask) {
+  Initialize();
+  if (s_input_record)
+    fprintf(s_input_record, "%X\n", mask);
+}
 
 void Dkc1DebugDumpFrame(int frame) {
   Initialize();
@@ -288,8 +316,13 @@ void Dkc1DebugDumpFrame(int frame) {
     HashHex(oam[0], kOamBytes, shadow_hash);
     HashHex(oam[1], kOamBytes, ppu_hash);
     fprintf(s_oam_index,
-        "{\"frame\":%d,\"shadow\":\"%s\",\"ppu\":\"%s\"}\n",
-        frame, shadow_hash, ppu_hash);
+        "{\"schema\":\"dkc1.oam.frame.v1\",\"frame\":%d,"
+        "\"inidisp\":%u,\"forced_blank\":%s,\"gameplay\":%s,"
+        "\"shadow\":\"%s\",\"ppu\":\"%s\"}\n",
+        frame, (unsigned)g_ppu->inidisp,
+        PPU_forcedBlank(g_ppu) ? "true" : "false",
+        GameplayGate() ? "true" : "false",
+        shadow_hash, ppu_hash);
   }
 
   LifecycleFrame(frame);
@@ -330,6 +363,7 @@ bool Dkc1DebugCheckpoint(const char *name, int frame) {
 
 void Dkc1DebugDumpClose(void) {
   if (s_hash_log) fclose(s_hash_log);
+  if (s_input_record) fclose(s_input_record);
   if (s_oam_bin) fclose(s_oam_bin);
   if (s_oam_index) fclose(s_oam_index);
   if (s_lifecycle) fclose(s_lifecycle);

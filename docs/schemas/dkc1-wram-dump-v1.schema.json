@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/elliotttate/DKC1Recomp/blob/main/docs/schemas/dkc1-wram-dump-v1.schema.json",
+  "title": "DKC1 checksum-indexed WRAM dump record",
+  "oneOf": [
+    {"$ref": "#/$defs/manifest"},
+    {"$ref": "#/$defs/frame"}
+  ],
+  "$defs": {
+    "address": {"type": "string", "pattern": "^[0-1][0-9a-f]{4}$"},
+    "base": {
+      "type": "object",
+      "required": ["schema", "type"],
+      "properties": {"schema": {"const": "dkc1.wram.dump.v1"}}
+    },
+    "manifest": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": ["first_frame", "last_frame", "payload_size", "ranges"],
+          "properties": {
+            "type": {"const": "manifest"},
+            "first_frame": {"type": "integer", "minimum": 1},
+            "last_frame": {"type": "integer", "minimum": 1},
+            "payload_size": {"type": "integer", "minimum": 1, "maximum": 131072},
+            "ranges": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  {"$ref": "#/$defs/address"},
+                  {"$ref": "#/$defs/address"}
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "frame": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": ["relative_frame", "emulator_frame", "offset", "length", "sha256"],
+          "properties": {
+            "type": {"const": "frame"},
+            "relative_frame": {"type": "integer", "minimum": 1},
+            "emulator_frame": {"type": "integer", "minimum": 0},
+            "offset": {"type": "integer", "minimum": 0},
+            "length": {"type": "integer", "minimum": 1, "maximum": 131072},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        }
+      ]
+    }
+  }
+}

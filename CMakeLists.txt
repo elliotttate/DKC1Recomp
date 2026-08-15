@@ -57,7 +57,10 @@ target_compile_definitions(dkc1_snesrecomp_headless PRIVATE
     SNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1
     SYSTEM_VOLUME_MIXER_AVAILABLE=0)
 if(MSVC)
-    target_compile_options(dkc1_snesrecomp_headless PRIVATE /MP /W0)
+    # Do not use /MP here. This generated-source workload has reproduced an
+    # MSVC race where cl.exe returns before every bank object is available to
+    # the immediately following link. A serial compile is slower but reliable.
+    target_compile_options(dkc1_snesrecomp_headless PRIVATE /W0)
     target_compile_definitions(dkc1_snesrecomp_headless PRIVATE
         _CRT_SECURE_NO_WARNINGS)
 endif()

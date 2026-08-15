@@ -8,7 +8,7 @@ cd build\hostobj
 set DEFS=/DSNESRECOMP_TRACE=0 /DSNESRECOMP_REVERSE_DEBUG=0 /DSNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1 /DSYSTEM_VOLUME_MIXER_AVAILABLE=0 /D_CRT_SECURE_NO_WARNINGS
 set INCS=/I%SR% /I%SR%\snes /I..\..\recomp /I..\..\runner
 
-cl /nologo /c /MP /W0 /O1 %DEFS% %INCS% ^
+cl /nologo /c /MP8 /W0 /O1 %DEFS% %INCS% ^
   %SR%\common_cpu_infra.c %SR%\common_rtl.c %SR%\widescreen.c ^
   %SR%\recomp_hw.c %SR%\framedump.c %SR%\host_paths.c ^
   %SR%\launcher.c %SR%\launcher_cache.c %SR%\launcher_picker.c ^
@@ -35,8 +35,25 @@ cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:..\main_headless.obj ..\..\runner\headle
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:..\main_win32.obj ..\..\runner\win32_host.c
 if errorlevel 1 exit /b 1
-cl /nologo /Fe:..\dkc1_snesrecomp_headless.exe *.obj ..\main_headless.obj ws2_32.lib user32.lib
-if errorlevel 1 exit /b 1
-cl /nologo /Fe:..\dkc1_desktop.exe *.obj ..\main_win32.obj ws2_32.lib user32.lib gdi32.lib winmm.lib
-if errorlevel 1 exit /b 1
+set LINK_RETRIES=0
+dir /b *.obj > objects.rsp
+:link_headless
+link /nologo /out:..\dkc1_snesrecomp_headless.exe @objects.rsp ..\main_headless.obj ws2_32.lib user32.lib
+if not errorlevel 1 goto link_desktop_begin
+set /a LINK_RETRIES+=1
+if %LINK_RETRIES% GEQ 5 exit /b 1
+timeout /t 2 /nobreak >nul
+goto link_headless
+
+:link_desktop_begin
+set LINK_RETRIES=0
+:link_desktop
+link /nologo /out:..\dkc1_desktop.exe @objects.rsp ..\main_win32.obj ws2_32.lib user32.lib gdi32.lib winmm.lib
+if not errorlevel 1 goto build_ok
+set /a LINK_RETRIES+=1
+if %LINK_RETRIES% GEQ 5 exit /b 1
+timeout /t 2 /nobreak >nul
+goto link_desktop
+
+:build_ok
 echo HOST_BUILD_OK

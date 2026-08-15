@@ -15,10 +15,19 @@
  *   DKC1_LIFECYCLE_TRACE=path transition-only actor/scanner/section JSONL
  *   DKC1_SESSION_DIR=dir      checkpoint evidence directory (default
  *                             "session"): NAME.wram.bin + checkpoints.jsonl
+ *   DKC1_INPUT_RECORD=path    resolved per-frame joypad masks, one hex mask
+ *                             per line — a valid input-playback file, so a
+ *                             predicate-driven script route can be replayed
+ *                             as an exact-frame schedule in both widescreen
+ *                             modes (differential runs must not let waits
+ *                             re-time themselves after a divergence)
  *
  * Call once per completed frame, after the game frame and PPU draw.
  */
 void Dkc1DebugDumpFrame(int frame);
+
+/* Record the frame's resolved input mask (before RtlRunFrame). */
+void Dkc1DebugRecordInput(uint32_t mask);
 
 /* Record a named checkpoint (script `checkpoint NAME`): full WRAM dump plus
  * a JSONL row with WRAM/VRAM/OAM-shadow/PPU-OAM sha256 hashes. */

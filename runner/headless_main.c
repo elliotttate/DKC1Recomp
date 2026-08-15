@@ -67,12 +67,14 @@ static void TracePc(CpuState *cpu, uint32_t pc24) {
     fprintf(stderr,
             "dkc1_trace_pc hit=%llu frame=%d pc=$%06x a=$%04x x=$%04x "
             "y=$%04x s=$%04x db=$%02x p=$%02x mode=$%04x entrance=$%04x "
-            "fade=$%04x camera=[$%04x,$%04x]\n",
+            "fade=$%04x camera=[$%04x,$%04x] ptr7a=$%06x\n",
             s_trace_pc_hits, snes_frame_counter, (unsigned)pc24, cpu->A,
             cpu->X, cpu->Y, cpu->S, cpu->DB, cpu->P,
             (unsigned)ReadWram16(0x0032), (unsigned)ReadWram16(0x003e),
             (unsigned)ReadWram16(0x1df1),
-            (unsigned)ReadWram16(0x088b), (unsigned)ReadWram16(0x0895));
+            (unsigned)ReadWram16(0x088b), (unsigned)ReadWram16(0x0895),
+            (unsigned)(g_ram[0x7a] | ((uint32_t)g_ram[0x7b] << 8) |
+                       ((uint32_t)g_ram[0x7c] << 16)));
     fflush(stderr);
   }
 }
@@ -251,6 +253,15 @@ int main(int argc, char **argv) {
     const char *script_path = getenv("DKC1_SCRIPT");
     if (script_path && *script_path) {
       char error[256];
+      if (input_playback.count) {
+        fprintf(stderr,
+                "script: DKC1_SCRIPT and SNESRECOMP_INPUT_PLAY are mutually "
+                "exclusive\n");
+        if (audio_pcm) fclose(audio_pcm);
+        Dkc1InputPlaybackFree(&input_playback);
+        free(rom);
+        return 20;
+      }
       if (!Dkc1ScriptLoad(script_path, error, sizeof error)) {
         fprintf(stderr, "script: %s: %s\n", script_path, error);
         if (audio_pcm) fclose(audio_pcm);
@@ -281,6 +292,8 @@ int main(int argc, char **argv) {
               wram_dump.payload_size, wram_dump.raw_path);
   }
 
+  long frames_executed = 0;
+  int savestate_saved = 0;
   for (long frame = 0; frame < frame_limit; frame++) {
     Dkc1ScriptOps script_ops = {0};
     uint32_t _in;
@@ -306,9 +319,39 @@ int main(int argc, char **argv) {
         free(rom);
         return 22;
       }
+      if (script_ops.checkpoint &&
+          !Dkc1DebugCheckpoint(script_ops.checkpoint, (int)frame)) {
+        fprintf(stderr, "script: unable to record checkpoint %s\n",
+                script_ops.checkpoint);
+        if (audio_pcm) fclose(audio_pcm);
+        (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
+        Dkc1DebugDumpClose();
+        Dkc1ScriptFree();
+        Dkc1InputPlaybackFree(&input_playback);
+        free(rom);
+        return 22;
+      }
+      if (script_ops.state_save && !RtlSaveSnapshot(script_ops.state_save)) {
+        fprintf(stderr, "script: unable to save snapshot %s\n",
+                script_ops.state_save);
+        if (audio_pcm) fclose(audio_pcm);
+        (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
+        Dkc1DebugDumpClose();
+        Dkc1ScriptFree();
+        Dkc1InputPlaybackFree(&input_playback);
+        free(rom);
+        return 22;
+      }
+      if (!script_ops.run_frame) {
+        if (Dkc1ScriptFinished()) break;
+        frame--;  /* a state-load boundary does not consume a route frame */
+        continue;
+      }
     } else {
       _in = Dkc1InputPlaybackFrame(&input_playback, (size_t)frame);
+      script_ops.run_frame = true;
     }
+    Dkc1DebugRecordInput(_in);
     RtlRunFrame(_in);
     if (g_fail) {
       fprintf(stderr,
@@ -351,15 +394,6 @@ int main(int argc, char **argv) {
         free(rom);
         return 19;
       }
-    }
-    if (script_ops.checkpoint &&
-        !Dkc1DebugCheckpoint(script_ops.checkpoint, (int)(frame + 1))) {
-      fprintf(stderr, "script: unable to record checkpoint %s\n",
-              script_ops.checkpoint);
-    }
-    if (script_ops.state_save && !RtlSaveSnapshot(script_ops.state_save)) {
-      fprintf(stderr, "script: unable to save snapshot %s\n",
-              script_ops.state_save);
     }
     Dkc1DebugDumpFrame((int)(frame + 1));
     if (frame_sequence_prefix && *frame_sequence_prefix &&
@@ -471,18 +505,33 @@ int main(int argc, char **argv) {
       audio_silent_frames++;
 
     if (savestate_output && *savestate_output &&
-        savestate_save_at == frame + 1 &&
-        !RtlSaveSnapshot(savestate_output)) {
-      fprintf(stderr, "unable to save native snapshot at relative frame %ld: %s\n",
-              frame + 1, savestate_output);
-      if (audio_pcm) fclose(audio_pcm);
-      (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
-      Dkc1InputPlaybackFree(&input_playback);
-      free(rom);
-      return 20;
+        savestate_save_at == frame + 1) {
+      if (!RtlSaveSnapshot(savestate_output)) {
+        fprintf(stderr,
+                "unable to save native snapshot at relative frame %ld: %s\n",
+                frame + 1, savestate_output);
+        if (audio_pcm) fclose(audio_pcm);
+        (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
+        Dkc1InputPlaybackFree(&input_playback);
+        free(rom);
+        return 20;
+      }
+      savestate_saved = 1;
     }
+    frames_executed = frame + 1;
   }
 
+  if (savestate_output && *savestate_output && savestate_save_at != 0 &&
+      !savestate_saved) {
+    fprintf(stderr,
+            "snapshot frame %ld was not reached (route completed at %ld)\n",
+            savestate_save_at, frames_executed);
+    if (audio_pcm) fclose(audio_pcm);
+    (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
+    Dkc1InputPlaybackFree(&input_playback);
+    free(rom);
+    return 20;
+  }
   if (savestate_output && *savestate_output && savestate_save_at == 0 &&
       !RtlSaveSnapshot(savestate_output)) {
     fprintf(stderr, "unable to save native snapshot at end of run: %s\n",
@@ -496,7 +545,7 @@ int main(int argc, char **argv) {
   if (savestate_output && *savestate_output)
     fprintf(stderr, "savestate: saved native snapshot %s relative_frame=%ld\n",
             savestate_output,
-            savestate_save_at ? savestate_save_at : frame_limit);
+            savestate_save_at ? savestate_save_at : frames_executed);
 
   if (audio_pcm && fclose(audio_pcm) != 0) {
     fprintf(stderr, "unable to close private audio output: %s\n",
@@ -652,7 +701,7 @@ int main(int argc, char **argv) {
   }
   Dkc1DebugDumpClose();
   Dkc1ScriptFree();
-  printf("\nresult=completed frames=%ld\n", frame_limit);
+  printf("\nresult=completed frames=%ld\n", frames_executed);
   free(rom);
   Dkc1InputPlaybackFree(&input_playback);
   return 0;

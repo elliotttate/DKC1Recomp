@@ -8,6 +8,7 @@
 enum Dkc1ScriptOpKind {
   kOpInput,      /* mask for count frames */
   kOpWait,       /* neutral/held mask until predicate or timeout */
+  kOpPulse,      /* mask ON/OFF cycles until predicate or timeout */
   kOpCheckpoint,
   kOpStateSave,
   kOpStateLoad,
@@ -18,10 +19,16 @@ enum { kDkc1ScriptMaxSteps = 4096, kDkc1ScriptDefaultTimeout = 3600 };
 typedef struct Dkc1ScriptStep {
   int kind;
   uint32_t input_mask;
-  long count;           /* kOpInput frames, or wait timeout budget */
-  uint16_t address;
-  uint16_t value;
-  uint16_t value_mask;
+  long count;           /* kOpInput frames, or wait/pulse timeout budget */
+  long pulse_on;        /* kOpPulse: frames pressed per cycle */
+  long pulse_off;       /* kOpPulse: frames released per cycle */
+  uint32_t pulse_base;  /* kOpPulse: mask held through the off phase */
+  uint32_t address;
+  uint32_t value;
+  uint32_t value_mask;
+  uint8_t width;
+  uint8_t shift;
+  bool signed_compare;
   char op[3];
   char *text;           /* checkpoint name / state path */
   long line;
@@ -54,6 +61,9 @@ const char *Dkc1ScriptError(void) {
 }
 
 static bool ParseUnsigned(const char *token, unsigned long *value, int base) {
+  if (!token || !*token || *token == '+' || *token == '-' ||
+      isspace((unsigned char)*token))
+    return false;
   char *end = NULL;
   unsigned long parsed = strtoul(token, &end, base);
   if (!end || end == token || *end != '\0')
@@ -62,46 +72,81 @@ static bool ParseUnsigned(const char *token, unsigned long *value, int base) {
   return true;
 }
 
+static uint32_t WidthMask(unsigned width) {
+  return width == 4 ? UINT32_MAX : (UINT32_C(1) << (width * 8)) - 1u;
+}
+
 static bool ParsePredicate(char **tokens, int token_count,
                            Dkc1ScriptStep *step, long line) {
-  /* ADDR OP VALUE [mask M] [timeout N] */
+  /* ADDR OP VALUE [width 1|2|4] [mask M] [shift N] [signed]
+   *               [timeout N] */
   unsigned long address, value;
   if (token_count < 3 || !ParseUnsigned(tokens[0], &address, 16) ||
-      address > 0x1FFFEul) {
+      address > 0x1FFFFul) {
     SetError("expected hex WRAM address", line);
     return false;
   }
   const char *op = tokens[1];
   if (strcmp(op, "==") && strcmp(op, "!=") && strcmp(op, ">=") &&
-      strcmp(op, "<=") && strcmp(op, "&") && strcmp(op, "!&")) {
-    SetError("operator must be == != >= <= & !&", line);
+      strcmp(op, "<=") && strcmp(op, ">") && strcmp(op, "<") &&
+      strcmp(op, "&") && strcmp(op, "!&")) {
+    SetError("operator must be == != > >= < <= & !&", line);
     return false;
   }
-  if (!ParseUnsigned(tokens[2], &value, 16) || value > 0xFFFFul) {
-    SetError("expected 16-bit hex comparison value", line);
+  if (!ParseUnsigned(tokens[2], &value, 16)) {
+    SetError("expected hexadecimal comparison value", line);
     return false;
   }
-  step->address = (uint16_t)address;
-  step->value = (uint16_t)value;
-  step->value_mask = 0xFFFF;
+  step->address = (uint32_t)address;
+  step->value = (uint32_t)value;
+  step->width = 2;
+  step->shift = 0;
+  step->signed_compare = false;
+  bool mask_set = false;
   snprintf(step->op, sizeof step->op, "%s", op);
   step->count = kDkc1ScriptDefaultTimeout;
-  for (int i = 3; i + 1 < token_count + 1 && i < token_count; i += 2) {
-    unsigned long extra;
+  for (int i = 3; i < token_count;) {
+    if (strcmp(tokens[i], "signed") == 0) {
+      step->signed_compare = true;
+      i++;
+      continue;
+    }
     if (i + 1 >= token_count) {
-      SetError("dangling option", line);
+      SetError("dangling predicate option", line);
       return false;
     }
+    unsigned long extra;
     if (strcmp(tokens[i], "mask") == 0 &&
-        ParseUnsigned(tokens[i + 1], &extra, 16) && extra <= 0xFFFFul) {
-      step->value_mask = (uint16_t)extra;
+        ParseUnsigned(tokens[i + 1], &extra, 16)) {
+      step->value_mask = (uint32_t)extra;
+      mask_set = true;
+    } else if (strcmp(tokens[i], "width") == 0 &&
+               ParseUnsigned(tokens[i + 1], &extra, 10) &&
+               (extra == 1 || extra == 2 || extra == 4)) {
+      step->width = (uint8_t)extra;
+    } else if (strcmp(tokens[i], "shift") == 0 &&
+               ParseUnsigned(tokens[i + 1], &extra, 10) && extra < 32) {
+      step->shift = (uint8_t)extra;
     } else if (strcmp(tokens[i], "timeout") == 0 &&
-               ParseUnsigned(tokens[i + 1], &extra, 10) && extra >= 1) {
+               ParseUnsigned(tokens[i + 1], &extra, 10) && extra >= 1 &&
+               extra <= 1000000ul) {
       step->count = (long)extra;
     } else {
-      SetError("options are: mask HEX, timeout N", line);
+      SetError("options: width 1|2|4, mask HEX, shift N, signed, timeout N",
+               line);
       return false;
     }
+    i += 2;
+  }
+  const uint32_t width_mask = WidthMask(step->width);
+  if (!mask_set) step->value_mask = width_mask;
+  if (step->address + step->width > 0x20000u ||
+      (step->value_mask & ~width_mask) != 0 ||
+      step->shift >= step->width * 8 ||
+      step->value > (step->value_mask >> step->shift) ||
+      (step->signed_compare && step->value_mask == 0)) {
+    SetError("predicate value/mask/shift exceeds its WRAM width", line);
+    return false;
   }
   return true;
 }
@@ -112,6 +157,17 @@ static bool AppendStep(const Dkc1ScriptStep *step, long line) {
     return false;
   }
   s_steps[s_step_count++] = *step;
+  return true;
+}
+
+static bool SafeCheckpointName(const char *text) {
+  if (!text || !*text || strlen(text) > 64 ||
+      !(isalnum((unsigned char)text[0]) || text[0] == '_'))
+    return false;
+  for (const char *p = text + 1; *p; p++)
+    if (!(isalnum((unsigned char)*p) || *p == '_' || *p == '-' ||
+          *p == '.'))
+      return false;
   return true;
 }
 
@@ -135,9 +191,9 @@ bool Dkc1ScriptLoad(const char *path, char *error, size_t error_size) {
     char *text = Trim(line_text);
     if (!*text) continue;
 
-    char *tokens[10];
+    char *tokens[20];
     int token_count = 0;
-    for (char *cursor = strtok(text, " \t"); cursor && token_count < 10;
+    for (char *cursor = strtok(text, " \t"); cursor && token_count < 20;
          cursor = strtok(NULL, " \t"))
       tokens[token_count++] = cursor;
     if (!token_count) continue;
@@ -146,7 +202,34 @@ bool Dkc1ScriptLoad(const char *path, char *error, size_t error_size) {
     memset(&step, 0, sizeof step);
     step.line = line;
 
-    if (strcmp(tokens[0], "wait") == 0) {
+    if (strcmp(tokens[0], "pulse") == 0) {
+      /* pulse MASK ON OFF ADDR OP VALUE [options] — press MASK for ON
+       * frames then release for OFF frames, repeating until the predicate
+       * passes. Menu traversal needs edge-triggered presses, not holds. */
+      unsigned long mask, on, off;
+      if (token_count < 7 || !ParseUnsigned(tokens[1], &mask, 16) ||
+          !ParseUnsigned(tokens[2], &on, 10) || on < 1 || on > 600 ||
+          !ParseUnsigned(tokens[3], &off, 10) || off < 1 || off > 600) {
+        SetError("pulse needs MASK ON OFF then a predicate", line);
+        ok = false;
+      } else {
+        step.kind = kOpPulse;
+        step.input_mask = (uint32_t)mask;
+        step.pulse_on = (long)on;
+        step.pulse_off = (long)off;
+        int predicate_at = 4;
+        unsigned long base = 0;
+        if (token_count > 6 && strcmp(tokens[4], "base") == 0 &&
+            ParseUnsigned(tokens[5], &base, 16)) {
+          step.pulse_base = (uint32_t)base;
+          step.input_mask |= step.pulse_base;
+          predicate_at = 6;
+        }
+        ok = ParsePredicate(tokens + predicate_at,
+                            token_count - predicate_at, &step, line) &&
+             AppendStep(&step, line);
+      }
+    } else if (strcmp(tokens[0], "wait") == 0) {
       step.kind = kOpWait;
       step.input_mask = 0;
       ok = ParsePredicate(tokens + 1, token_count - 1, &step, line) &&
@@ -167,6 +250,11 @@ bool Dkc1ScriptLoad(const char *path, char *error, size_t error_size) {
                strcmp(tokens[0], "state_load") == 0) {
       if (token_count != 2) {
         SetError("directive needs exactly one argument", line);
+        ok = false;
+      } else if (strcmp(tokens[0], "checkpoint") == 0 &&
+                 !SafeCheckpointName(tokens[1])) {
+        SetError("checkpoint name must be a safe 1..64 character filename",
+                 line);
         ok = false;
       } else {
         step.kind = strcmp(tokens[0], "checkpoint") == 0 ? kOpCheckpoint
@@ -224,15 +312,30 @@ bool Dkc1ScriptFinished(void) {
 }
 
 static bool PredicatePasses(const Dkc1ScriptStep *step, const uint8_t *wram) {
-  const uint16_t raw = (uint16_t)(wram[step->address] |
-                                  ((uint16_t)wram[step->address + 1] << 8));
-  const uint16_t value = (uint16_t)(raw & step->value_mask);
+  uint32_t raw = 0;
+  for (unsigned i = 0; i < step->width; i++)
+    raw |= (uint32_t)wram[step->address + i] << (i * 8);
+  const uint32_t value = (raw & step->value_mask) >> step->shift;
   if (strcmp(step->op, "==") == 0) return value == step->value;
   if (strcmp(step->op, "!=") == 0) return value != step->value;
-  if (strcmp(step->op, ">=") == 0) return value >= step->value;
-  if (strcmp(step->op, "<=") == 0) return value <= step->value;
   if (strcmp(step->op, "&") == 0) return (value & step->value) != 0;
-  return (value & step->value) == 0;  /* !& */
+  if (strcmp(step->op, "!&") == 0) return (value & step->value) == 0;
+
+  int64_t left = value;
+  int64_t right = step->value;
+  if (step->signed_compare) {
+    uint32_t normalized_mask = step->value_mask >> step->shift;
+    uint32_t sign_bit = 1;
+    while (sign_bit <= UINT32_MAX / 2 &&
+           (sign_bit << 1) <= normalized_mask)
+      sign_bit <<= 1;
+    if (value & sign_bit) left -= (int64_t)sign_bit << 1;
+    if (step->value & sign_bit) right -= (int64_t)sign_bit << 1;
+  }
+  if (strcmp(step->op, ">=") == 0) return left >= right;
+  if (strcmp(step->op, "<=") == 0) return left <= right;
+  if (strcmp(step->op, ">") == 0) return left > right;
+  return left < right;
 }
 
 uint32_t Dkc1ScriptNextInput(const uint8_t *wram, Dkc1ScriptOps *ops,
@@ -248,12 +351,18 @@ uint32_t Dkc1ScriptNextInput(const uint8_t *wram, Dkc1ScriptOps *ops,
     if (step->kind == kOpCheckpoint) {
       if (ops) ops->checkpoint = step->text;
       s_cursor++;
+      return 0;
     } else if (step->kind == kOpStateSave) {
       if (ops) ops->state_save = step->text;
       s_cursor++;
+      return 0;
     } else if (step->kind == kOpStateLoad) {
       if (ops) ops->state_load = step->text;
       s_cursor++;
+      /* Loading replaces WRAM. Return to the host immediately so the next
+       * predicate is evaluated against the restored state, never the state
+       * that preceded this boundary. */
+      return 0;
     } else {
       break;
     }
@@ -263,6 +372,7 @@ uint32_t Dkc1ScriptNextInput(const uint8_t *wram, Dkc1ScriptOps *ops,
 
   Dkc1ScriptStep *step = &s_steps[s_cursor];
   if (step->kind == kOpInput) {
+    if (ops) ops->run_frame = true;
     uint32_t mask = step->input_mask;
     if (++s_step_progress >= step->count) {
       s_cursor++;
@@ -279,16 +389,23 @@ uint32_t Dkc1ScriptNextInput(const uint8_t *wram, Dkc1ScriptOps *ops,
      * does not consume an extra neutral frame. */
     return Dkc1ScriptNextInput(wram, ops, failed);
   }
-  if (++s_step_progress >= step->count) {
+  if (s_step_progress >= step->count) {
     s_failed = true;
     char message[128];
     snprintf(message, sizeof message,
-             "wait timed out: [%04X]&%04X %s %04X after %ld frames",
-             step->address, step->value_mask, step->op, step->value,
-             step->count);
+             "wait timed out: [%05X]&%08X >> %u %s %08X after %ld frames",
+             step->address, step->value_mask, step->shift, step->op,
+             step->value, step->count);
     SetError(message, step->line);
     if (failed) *failed = true;
     return 0;
+  }
+  s_step_progress++;
+  if (ops) ops->run_frame = true;
+  if (step->kind == kOpPulse) {
+    const long cycle = step->pulse_on + step->pulse_off;
+    return (s_step_progress - 1) % cycle < step->pulse_on
+               ? step->input_mask : step->pulse_base;
   }
   return step->input_mask;
 }

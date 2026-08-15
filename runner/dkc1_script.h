@@ -2,6 +2,7 @@
 #define DKC1_SCRIPT_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Deterministic route scripts with WRAM wait-predicates.
@@ -24,9 +25,10 @@
  */
 
 typedef struct Dkc1ScriptOps {
-  const char *checkpoint;   /* non-NULL: record checkpoint after this frame */
-  const char *state_save;   /* non-NULL: save snapshot after this frame */
-  const char *state_load;   /* non-NULL: load snapshot instead of running */
+  const char *checkpoint;   /* non-NULL: record at the current boundary */
+  const char *state_save;   /* non-NULL: save at the current boundary */
+  const char *state_load;   /* non-NULL: load at the current boundary */
+  bool run_frame;           /* true when the returned input must be run */
 } Dkc1ScriptOps;
 
 bool Dkc1ScriptLoad(const char *path, char *error, size_t error_size);
