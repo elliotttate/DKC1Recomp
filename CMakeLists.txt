@@ -42,6 +42,9 @@ add_executable(dkc1_snesrecomp_headless
     runner/dkc1_ws_trace.c
     runner/headless_host.c
     runner/input_playback.c
+    runner/wram_dump.c
+    runner/dkc1_script.c
+    runner/dkc1_debug_dump.c
     runner/verified_rom.c
     runner/headless_main.c)
 target_include_directories(dkc1_snesrecomp_headless PRIVATE

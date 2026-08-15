@@ -1,6 +1,9 @@
 #include "dkc1_game.h"
 #include "dkc1_video.h"
 #include "input_playback.h"
+#include "wram_dump.h"
+#include "dkc1_script.h"
+#include "dkc1_debug_dump.h"
 #include "verified_rom.h"
 
 #include "common_cpu_infra.h"
@@ -120,6 +123,33 @@ int main(int argc, char **argv) {
     }
   }
 
+  const char *savestate_input = getenv("DKC1_SAVESTATE_INPUT");
+  const char *savestate_output = getenv("DKC1_SAVESTATE_OUTPUT");
+  long savestate_save_at = 0;
+  if (!ParseFrameNumber(getenv("DKC1_SAVESTATE_SAVE_AT"), 0,
+                        &savestate_save_at) ||
+      savestate_save_at > frame_limit ||
+      (savestate_save_at &&
+       (!savestate_output || !*savestate_output)) ||
+      (savestate_input && *savestate_input && savestate_output &&
+       *savestate_output && strcmp(savestate_input, savestate_output) == 0)) {
+    fprintf(stderr,
+            "invalid snapshot configuration: SAVE_AT must be within this "
+            "run and input/output paths must differ\n");
+    free(rom);
+    return 20;
+  }
+  if (savestate_input && *savestate_input) {
+    if (!RtlLoadSnapshot(savestate_input)) {
+      fprintf(stderr, "unable to load native snapshot: %s\n",
+              savestate_input);
+      free(rom);
+      return 20;
+    }
+    fprintf(stderr, "savestate: loaded native snapshot %s frame=%d\n",
+            savestate_input, snes_frame_counter);
+  }
+
   const char *trace_pc_text = getenv("DKC1_TRACE_PC");
   if (trace_pc_text && *trace_pc_text) {
     char *end = NULL;
@@ -217,8 +247,68 @@ int main(int argc, char **argv) {
     }
   }
 
+  {
+    const char *script_path = getenv("DKC1_SCRIPT");
+    if (script_path && *script_path) {
+      char error[256];
+      if (!Dkc1ScriptLoad(script_path, error, sizeof error)) {
+        fprintf(stderr, "script: %s: %s\n", script_path, error);
+        if (audio_pcm) fclose(audio_pcm);
+        Dkc1InputPlaybackFree(&input_playback);
+        free(rom);
+        return 20;
+      }
+      fprintf(stderr, "script: loaded %s\n", script_path);
+    }
+  }
+
+  Dkc1WramDump wram_dump;
+  {
+    char error[256];
+    int opened = Dkc1WramDumpOpenFromEnvironment(
+        &wram_dump, error, sizeof error);
+    if (opened < 0) {
+      fprintf(stderr, "wram_dump: %s\n", error);
+      if (audio_pcm) fclose(audio_pcm);
+      Dkc1InputPlaybackFree(&input_playback);
+      free(rom);
+      return 19;
+    }
+    if (opened)
+      fprintf(stderr,
+              "wram_dump: frames=%ld-%ld bytes_per_frame=%zu raw=%s\n",
+              wram_dump.first_frame, wram_dump.last_frame,
+              wram_dump.payload_size, wram_dump.raw_path);
+  }
+
   for (long frame = 0; frame < frame_limit; frame++) {
-    uint32_t _in = Dkc1InputPlaybackFrame(&input_playback, (size_t)frame);
+    Dkc1ScriptOps script_ops = {0};
+    uint32_t _in;
+    if (Dkc1ScriptActive()) {
+      bool script_failed = false;
+      _in = Dkc1ScriptNextInput(g_ram, &script_ops, &script_failed);
+      if (script_failed) {
+        fprintf(stderr, "script: %s\n", Dkc1ScriptError());
+        if (audio_pcm) fclose(audio_pcm);
+        (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
+        Dkc1DebugDumpClose();
+        Dkc1InputPlaybackFree(&input_playback);
+        free(rom);
+        return 21;
+      }
+      if (script_ops.state_load && !RtlLoadSnapshot(script_ops.state_load)) {
+        fprintf(stderr, "script: unable to load snapshot %s\n",
+                script_ops.state_load);
+        if (audio_pcm) fclose(audio_pcm);
+        (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
+        Dkc1DebugDumpClose();
+        Dkc1InputPlaybackFree(&input_playback);
+        free(rom);
+        return 22;
+      }
+    } else {
+      _in = Dkc1InputPlaybackFrame(&input_playback, (size_t)frame);
+    }
     RtlRunFrame(_in);
     if (g_fail) {
       fprintf(stderr,
@@ -226,6 +316,7 @@ int main(int argc, char **argv) {
               "frame %ld resume=$%06x\n",
               frame, (unsigned)Dkc1ResumePc());
       if (audio_pcm) fclose(audio_pcm);
+      (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
       Dkc1InputPlaybackFree(&input_playback);
       free(rom);
       return 6;
@@ -242,11 +333,35 @@ int main(int argc, char **argv) {
               g_snes->apu->outPorts[1], g_snes->apu->outPorts[0],
               g_snes->apu->spc->pc, g_snes->apu->romReadable ? 1 : 0);
       if (audio_pcm) fclose(audio_pcm);
+      (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
       Dkc1InputPlaybackFree(&input_playback);
       free(rom);
       return 5;
     }
     Dkc1DrawPpuFrame();
+    {
+      char error[192];
+      if (!Dkc1WramDumpFrame(&wram_dump, frame + 1,
+                             snes_frame_counter, g_ram,
+                             error, sizeof error)) {
+        fprintf(stderr, "wram_dump: %s\n", error);
+        if (audio_pcm) fclose(audio_pcm);
+        (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
+        Dkc1InputPlaybackFree(&input_playback);
+        free(rom);
+        return 19;
+      }
+    }
+    if (script_ops.checkpoint &&
+        !Dkc1DebugCheckpoint(script_ops.checkpoint, (int)(frame + 1))) {
+      fprintf(stderr, "script: unable to record checkpoint %s\n",
+              script_ops.checkpoint);
+    }
+    if (script_ops.state_save && !RtlSaveSnapshot(script_ops.state_save)) {
+      fprintf(stderr, "script: unable to save snapshot %s\n",
+              script_ops.state_save);
+    }
+    Dkc1DebugDumpFrame((int)(frame + 1));
     if (frame_sequence_prefix && *frame_sequence_prefix &&
         frame >= frame_sequence_start && frame <= frame_sequence_end &&
         (frame - frame_sequence_start) % frame_sequence_step == 0) {
@@ -259,6 +374,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "unable to write private frame sequence at %ld\n",
                 frame);
         if (audio_pcm) fclose(audio_pcm);
+        (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
         Dkc1InputPlaybackFree(&input_playback);
         free(rom);
         return 18;
@@ -314,6 +430,7 @@ int main(int argc, char **argv) {
       fprintf(stderr, "invalid audio frame request: %d\n",
               audio_frames_this_frame);
       if (audio_pcm) fclose(audio_pcm);
+      (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
       Dkc1InputPlaybackFree(&input_playback);
       free(rom);
       return 11;
@@ -343,6 +460,7 @@ int main(int argc, char **argv) {
       fprintf(stderr, "unable to write private audio output: %s\n",
               audio_pcm_path);
       fclose(audio_pcm);
+      (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
       Dkc1InputPlaybackFree(&input_playback);
       free(rom);
       return 12;
@@ -351,16 +469,53 @@ int main(int argc, char **argv) {
       audio_active_frames++;
     else
       audio_silent_frames++;
+
+    if (savestate_output && *savestate_output &&
+        savestate_save_at == frame + 1 &&
+        !RtlSaveSnapshot(savestate_output)) {
+      fprintf(stderr, "unable to save native snapshot at relative frame %ld: %s\n",
+              frame + 1, savestate_output);
+      if (audio_pcm) fclose(audio_pcm);
+      (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
+      Dkc1InputPlaybackFree(&input_playback);
+      free(rom);
+      return 20;
+    }
   }
+
+  if (savestate_output && *savestate_output && savestate_save_at == 0 &&
+      !RtlSaveSnapshot(savestate_output)) {
+    fprintf(stderr, "unable to save native snapshot at end of run: %s\n",
+            savestate_output);
+    if (audio_pcm) fclose(audio_pcm);
+    (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
+    Dkc1InputPlaybackFree(&input_playback);
+    free(rom);
+    return 20;
+  }
+  if (savestate_output && *savestate_output)
+    fprintf(stderr, "savestate: saved native snapshot %s relative_frame=%ld\n",
+            savestate_output,
+            savestate_save_at ? savestate_save_at : frame_limit);
 
   if (audio_pcm && fclose(audio_pcm) != 0) {
     fprintf(stderr, "unable to close private audio output: %s\n",
             audio_pcm_path);
+    (void)Dkc1WramDumpClose(&wram_dump, NULL, 0);
     free(rom);
     Dkc1InputPlaybackFree(&input_playback);
     return 13;
   }
   audio_pcm = NULL;
+  {
+    char error[192];
+    if (!Dkc1WramDumpClose(&wram_dump, error, sizeof error)) {
+      fprintf(stderr, "wram_dump: %s\n", error);
+      Dkc1InputPlaybackFree(&input_playback);
+      free(rom);
+      return 19;
+    }
+  }
 
   uint8_t frame_hash[32];
   uint8_t wram_hash[32];
@@ -495,6 +650,8 @@ int main(int argc, char **argv) {
     }
     printf("\nvram_output=%s", vram_output);
   }
+  Dkc1DebugDumpClose();
+  Dkc1ScriptFree();
   printf("\nresult=completed frames=%ld\n", frame_limit);
   free(rom);
   Dkc1InputPlaybackFree(&input_playback);

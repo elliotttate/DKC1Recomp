@@ -26,6 +26,8 @@ cl /nologo /c /MP /W0 /O1 %DEFS% %INCS% ^
   ..\..\runner\dkc1_game.c ..\..\runner\dkc1_video.c ^
   ..\..\runner\dkc1_ws_trace.c ^
   ..\..\runner\headless_host.c ..\..\runner\input_playback.c ^
+  ..\..\runner\wram_dump.c ^
+  ..\..\runner\dkc1_script.c ..\..\runner\dkc1_debug_dump.c ^
   ..\..\runner\verified_rom.c ^
   ..\..\generated\snesrecomp\*.c
 if errorlevel 1 exit /b 1
