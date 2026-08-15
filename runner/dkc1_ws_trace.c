@@ -62,16 +62,25 @@ static uint64_t HashFrameRegion(int x, int width) {
 static uint64_t HashShadowMargin(const Dkc1WsTraceFrame *frame,
                                  int layer, int side) {
   if (!frame->edge_extension || layer < 0 || layer >= 2 ||
-      !frame->world_valid[layer] || frame->margin_tiles <= 0)
+      !frame->world_valid[layer])
+    return 0;
+  /* margin_tiles is only recorded on frames whose prefill ran. Widened
+   * frames without prefill (calibration grace) are exactly the frames the
+   * margin-nondeterminism investigation needs hashed, so fall back to the
+   * geometric margin extent instead of skipping them. */
+  int margin_tiles = frame->margin_tiles;
+  if (margin_tiles <= 0)
+    margin_tiles = (Dkc1VideoExtra() + 7) / 8 + 1;
+  if (margin_tiles <= 0)
     return 0;
   uint64_t hash = UINT64_C(1469598103934665603);
   const uint32_t tx0 = frame->world_x[layer] >> 3;
   const uint32_t ty0 = frame->world_y[layer] >> 3;
   for (int row = -1; row < 30; row++) {
     const int64_t ty = (int64_t)ty0 + row;
-    for (int col = 0; col < frame->margin_tiles; col++) {
+    for (int col = 0; col < margin_tiles; col++) {
       const int64_t tx = side == 0
-          ? (int64_t)tx0 - frame->margin_tiles + col
+          ? (int64_t)tx0 - margin_tiles + col
           : (int64_t)tx0 + 32 + col;
       uint8_t state = 0;
       uint16_t entry = 0;

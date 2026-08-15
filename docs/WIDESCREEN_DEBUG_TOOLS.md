@@ -25,6 +25,8 @@ non-conclusion vocabulary, and 3x byte-identical repeat gates.
 - `tools/analyze_ws_trace.py` summarizes decision counts, unsafe raw-fallback
   frames, prefill refreshes, and the exact frames where margin hashes change
   while VRAM, PPU OAM, and WRAM OAM stay identical.
+  Shadow-margin hashes use the geometric margin extent on calibration-grace
+  frames, so a frame without a new prefill cannot disappear from the trace.
 - **Tools 5 and 6 now have their first implementation.** `F1` in
   `dkc1_desktop` toggles margin provenance; `F2` restores the composite and
   `F3`–`F6` isolate BG1/BG2/BG3/OBJ. The same overlay is available headlessly
