@@ -13,6 +13,7 @@
 #include "snes/ws_shadow.h"
 
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -150,6 +151,25 @@ const RtlGameInfo *Dkc1GameInfo(void) {
 
 void Dkc1BeginDrawing(uint8_t *pixels, size_t pitch) {
   PpuBeginDrawing(g_ppu, pixels, pitch, kPpuRenderFlags_NewRenderer);
+  const char *provenance = getenv("DKC1_WS_PROVENANCE");
+  WsShadowDebugSetProvenanceEnabled(
+      provenance && *provenance && *provenance != '0');
+}
+
+void Dkc1DebugSetLayerMask(uint8_t mask) {
+  g_snes_ppu_dbg_layer_mask = mask;
+}
+
+uint8_t Dkc1DebugLayerMask(void) {
+  return g_snes_ppu_dbg_layer_mask;
+}
+
+void Dkc1DebugSetProvenanceOverlay(int enabled) {
+  WsShadowDebugSetProvenanceEnabled(enabled != 0);
+}
+
+int Dkc1DebugProvenanceOverlay(void) {
+  return WsShadowDebugProvenanceEnabled() ? 1 : 0;
 }
 
 /* ---- presentation-camera widescreen ------------------------------------
@@ -173,6 +193,56 @@ static uint32_t s_ws_world_y[2];
 static Dkc1LevelLayout s_ws_layout;
 static int s_ws_layout_grace;  /* bounded transient calibration misses */
 static bool s_ws_trace_reset_pending;
+
+static uint32_t Dkc1BlendDebugColor(uint32_t pixel, uint32_t color) {
+  /* Keep the rendered image legible beneath a 50% false-color wash. */
+  uint32_t rb = ((pixel & 0x00ff00ffu) + (color & 0x00ff00ffu)) >> 1;
+  uint32_t g = ((pixel & 0x0000ff00u) + (color & 0x0000ff00u)) >> 1;
+  return (pixel & 0xff000000u) | (rb & 0x00ff00ffu) |
+         (g & 0x0000ff00u);
+}
+
+static void Dkc1ApplyProvenanceOverlay(uint8_t wide_layer_mask) {
+  if (!WsShadowDebugProvenanceEnabled() || !g_ppu->renderBuffer ||
+      !Dkc1VideoIsWidescreen() || !wide_layer_mask)
+    return;
+
+  int layer = Dkc1VideoTerrainLayer(
+      wide_layer_mask, g_ppu->bgXsc, Dkc1ReadWram16(0x1b13));
+  const uint8_t selected_bg = (uint8_t)(g_snes_ppu_dbg_layer_mask & 0x0fu);
+  if (selected_bg && !(selected_bg & (uint8_t)(selected_bg - 1u))) {
+    for (int candidate = 0; candidate < 4; candidate++)
+      if (selected_bg & (1u << candidate)) layer = candidate;
+  }
+  if (layer < 0 || layer >= 4)
+    return;
+
+  const int extra = Dkc1VideoExtra();
+  const int width = Dkc1VideoWidth();
+  const bool repeated = (g_ppu->wsLayerRepeat & (1u << layer)) != 0;
+  static const uint32_t colors[] = {
+      0x00000000u, /* none */
+      0x0000d040u, /* captured: green */
+      0x0000d8ffu, /* ROM prefill: cyan */
+      0x00e000d0u, /* periodic fold: magenta */
+      0x00707070u, /* verified blank: gray */
+      0x00ff2020u, /* raw circular-VRAM fallback: red */
+      0x00ffd020u, /* native edge repeat: yellow */
+  };
+  for (int y = 0; y < kDkc1VideoHeight; y++) {
+    uint32_t *row =
+        (uint32_t *)(g_ppu->renderBuffer + (size_t)y * g_ppu->renderPitch);
+    for (int out_x = 0; out_x < width; out_x++) {
+      const int screen_x = out_x - extra;
+      if (screen_x >= 0 && screen_x < kDkc1VideoNativeWidth)
+        continue;
+      uint8_t source = repeated ? 6u :
+          WsShadowDebugProvenanceAt(layer, screen_x, y);
+      if (source < sizeof colors / sizeof colors[0] && source != 0)
+        row[out_x] = Dkc1BlendDebugColor(row[out_x], colors[source]);
+    }
+  }
+}
 
 static uint64_t Dkc1LevelSourceSignature(void) {
   const uint64_t bank = g_ram[0x00d5];
@@ -516,6 +586,7 @@ void Dkc1DrawPpuFrame(void) {
   }
 
   dma_startDma(g_dma, g_snesrecomp_last_hdmaen, true);
+  WsShadowDebugBeginFrame();
   for (int channel = 0; channel < 8; channel++) {
     active[channel] = g_dma->channel[channel].hdmaActive;
     if (active[channel])
@@ -551,6 +622,7 @@ void Dkc1DrawPpuFrame(void) {
     WsShadowGetMarginStats(1, &trace.shadow_after[1]);
     Dkc1WsTraceEmit(&trace);
   }
+  Dkc1ApplyProvenanceOverlay(wide_layer_mask);
 }
 
 uint32_t Dkc1ResumePc(void) {

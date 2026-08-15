@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/elliotttate/DKC1Recomp/blob/main/docs/schemas/dkc1-ws-regions-v1.schema.json",
+  "title": "DKC1 widescreen region comparison",
+  "type": "object",
+  "required": ["schema", "reference", "candidate", "geometry", "input_gate", "regions", "center_exact"],
+  "properties": {
+    "schema": {"const": "dkc1.ws.regions.v1"},
+    "reference": {"type": "string"},
+    "candidate": {"type": "string"},
+    "geometry": {
+      "type": "object",
+      "required": ["candidate", "native_width", "extra_per_side", "reference_layout"]
+    },
+    "input_gate": {
+      "type": "object",
+      "required": ["provided", "match", "hashes"]
+    },
+    "regions": {
+      "type": "object",
+      "required": ["left", "center", "right"],
+      "properties": {
+        "left": {"$ref": "#/$defs/region"},
+        "center": {"$ref": "#/$defs/region"},
+        "right": {"$ref": "#/$defs/region"}
+      }
+    },
+    "center_exact": {"type": "boolean"}
+  },
+  "$defs": {
+    "region": {
+      "type": "object",
+      "required": ["width", "sha256"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "changed_pixels": {"type": "integer", "minimum": 0},
+        "max_channel_delta": {"type": "integer", "minimum": 0, "maximum": 255},
+        "bounds": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4}
+          ]
+        }
+      }
+    }
+  }
+}

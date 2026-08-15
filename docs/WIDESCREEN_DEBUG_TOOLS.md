@@ -25,6 +25,24 @@ non-conclusion vocabulary, and 3x byte-identical repeat gates.
 - `tools/analyze_ws_trace.py` summarizes decision counts, unsafe raw-fallback
   frames, prefill refreshes, and the exact frames where margin hashes change
   while VRAM, PPU OAM, and WRAM OAM stay identical.
+- **Tools 5 and 6 now have their first implementation.** `F1` in
+  `dkc1_desktop` toggles margin provenance; `F2` restores the composite and
+  `F3`–`F6` isolate BG1/BG2/BG3/OBJ. The same overlay is available headlessly
+  with `DKC1_WS_PROVENANCE=1`. `tools/compare_widescreen_regions.py` hashes
+  left/native-center/right independently, requires an exact center by
+  default, emits a red-pixel diff, and can gate a comparison on matching
+  VRAM plus both PPU/WRAM OAM trace hashes.
+
+Provenance colors are: green = captured/authentic history, cyan = ROM
+prefill, magenta = proven periodic fold, gray = verified transparent blank,
+red = unsafe circular-VRAM fallback, yellow = native edge repeat. The wash is
+applied only to side margins; the native center remains byte-identical. The
+region report schema is `docs/schemas/dkc1-ws-regions-v1.schema.json`.
+
+```powershell
+python tools\compare_widescreen_regions.py native.ppm wide.ppm `
+  --extra 43 --json-out regions.json --diff-out regions-diff.ppm
+```
 
 Example:
 

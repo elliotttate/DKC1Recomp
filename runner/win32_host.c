@@ -31,6 +31,29 @@ static BITMAPINFO s_bmi;
 static HWND s_window;
 static int s_running = 1;
 
+static const char *LayerModeName(uint8_t mask) {
+  switch (mask) {
+    case 0x01: return "BG1";
+    case 0x02: return "BG2";
+    case 0x04: return "BG3";
+    case 0x08: return "BG4";
+    case 0x10: return "OBJ";
+    default: return "composite";
+  }
+}
+
+static void UpdateDebugTitle(void) {
+  if (!s_window) return;
+  char title[320];
+  snprintf(title, sizeof title,
+           "DKC1Recomp | %s | provenance %s | "
+           "F1=overlay F2=all F3=BG1 F4=BG2 F5=BG3 F6=OBJ | "
+           "Z=B X=Y S=A A=X Q/W=L/R Enter=Start Esc=quit",
+           LayerModeName(Dkc1DebugLayerMask()),
+           Dkc1DebugProvenanceOverlay() ? "ON" : "off");
+  SetWindowTextA(s_window, title);
+}
+
 static HWAVEOUT s_waveout;
 static WAVEHDR s_wave_headers[kAudioBuffers];
 static int16_t s_wave_data[kAudioBuffers][kAudioFramesPerBuffer * 2];
@@ -45,9 +68,20 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       PostQuitMessage(0);
       return 0;
     case WM_KEYDOWN:
+      if (lp & (1u << 30)) return 0;  /* ignore key-repeat toggles */
       if (wp == VK_ESCAPE) {
         s_running = 0;
         PostQuitMessage(0);
+      } else if (wp == VK_F1) {
+        Dkc1DebugSetProvenanceOverlay(!Dkc1DebugProvenanceOverlay());
+        UpdateDebugTitle();
+      } else if (wp == VK_F2) {
+        Dkc1DebugSetLayerMask(0xff);
+        UpdateDebugTitle();
+      } else if (wp >= VK_F3 && wp <= VK_F6) {
+        static const uint8_t masks[] = {0x01, 0x02, 0x04, 0x10};
+        Dkc1DebugSetLayerMask(masks[wp - VK_F3]);
+        UpdateDebugTitle();
       }
       return 0;
     case WM_PAINT: {
@@ -168,6 +202,7 @@ int main(int argc, char **argv) {
       CW_USEDEFAULT, CW_USEDEFAULT,
       rect.right - rect.left, rect.bottom - rect.top,
       NULL, NULL, wc.hInstance, NULL);
+  UpdateDebugTitle();
 
   memset(&s_bmi, 0, sizeof s_bmi);
   s_bmi.bmiHeader.biSize = sizeof s_bmi.bmiHeader;
