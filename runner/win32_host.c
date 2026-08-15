@@ -9,8 +9,12 @@
  *       Q=L, W=R, Enter=Start, Right Shift=Select, Esc=quit.
  */
 #include "dkc1_game.h"
+#include "dkc1_debug_dump.h"
+#include "dkc1_script.h"
 #include "dkc1_video.h"
+#include "input_playback.h"
 #include "verified_rom.h"
+#include "wram_dump.h"
 
 #include "common_cpu_infra.h"
 #include "common_rtl.h"
@@ -19,9 +23,12 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 enum {
   kScale = 2,
+  kPanelWidth = 380,
   kAudioBuffers = 8,
   kAudioFramesPerBuffer = 536,
 };
@@ -30,6 +37,28 @@ static uint8_t s_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
 static BITMAPINFO s_bmi;
 static HWND s_window;
 static int s_running = 1;
+static int s_width;
+static int s_height;
+static int s_panel_enabled = 1;
+static int s_paused;
+static int s_step_once;
+static int s_script_loaded;
+static int s_script_failed;
+static int s_route_finished;
+static long s_host_frame;
+static uint32_t s_last_input;
+static char s_host_status[512] = "manual play";
+static Dkc1InputPlayback s_input_playback;
+static Dkc1WramDump s_wram_dump;
+
+static uint16_t ReadWram16(unsigned address) {
+  return (uint16_t)(g_ram[address] | ((uint16_t)g_ram[address + 1] << 8));
+}
+
+static int EnvironmentEnabled(const char *name) {
+  const char *value = getenv(name);
+  return value && *value && *value != '0';
+}
 
 static const char *LayerModeName(uint8_t mask) {
   switch (mask) {
@@ -46,12 +75,88 @@ static void UpdateDebugTitle(void) {
   if (!s_window) return;
   char title[320];
   snprintf(title, sizeof title,
-           "DKC1Recomp | %s | provenance %s | "
-           "F1=overlay F2=all F3=BG1 F4=BG2 F5=BG3 F6=OBJ | "
-           "Z=B X=Y S=A A=X Q/W=L/R Enter=Start Esc=quit",
+           "DKC1Recomp | frame %ld | %s | %s | provenance %s",
+           s_host_frame, s_paused ? "PAUSED" : "running",
            LayerModeName(Dkc1DebugLayerMask()),
            Dkc1DebugProvenanceOverlay() ? "ON" : "off");
   SetWindowTextA(s_window, title);
+}
+
+static void PresentFrame(HDC dc) {
+  if (!dc || !s_window || !s_width || !s_height) return;
+  if (s_bmi.bmiHeader.biSize) {
+    StretchDIBits(dc, 0, 0, s_width * kScale, s_height * kScale,
+                  0, 0, s_width, s_height, s_pixels, &s_bmi,
+                  DIB_RGB_COLORS, SRCCOPY);
+  }
+  if (!s_panel_enabled) return;
+
+  RECT panel = {s_width * kScale, 0,
+                s_width * kScale + kPanelWidth, s_height * kScale};
+  HBRUSH background = CreateSolidBrush(RGB(18, 21, 25));
+  FillRect(dc, &panel, background);
+  DeleteObject(background);
+  SetBkMode(dc, TRANSPARENT);
+  SetTextColor(dc, RGB(222, 230, 238));
+  HFONT font = (HFONT)GetStockObject(ANSI_FIXED_FONT);
+  HFONT old_font = (HFONT)SelectObject(dc, font);
+
+  char script[256] = "manual keyboard input";
+  if (s_script_loaded) Dkc1ScriptStatus(script, sizeof script);
+  else if (s_input_playback.count)
+    snprintf(script, sizeof script, "input playback: %zu frames",
+             s_input_playback.count);
+  char text[2048];
+  snprintf(text, sizeof text,
+           "VISIBLE WIDESCREEN DEBUGGER\r\n"
+           "\r\n"
+           "Host frame: %ld\r\n"
+           "State: %s%s%s\r\n"
+           "Input: $%03X\r\n"
+           "Route: %s\r\n"
+           "Status: %s\r\n"
+           "\r\n"
+           "Mode / level / entrance\r\n"
+           "$%04X / $%04X / $%04X\r\n"
+           "Layer scroll X/Y: $%04X / $%04X\r\n"
+           "Camera bounds: $%04X .. $%04X\r\n"
+           "Scanner: $%04X  range $%04X..$%04X\r\n"
+           "Section: $%04X\r\n"
+           "\r\n"
+           "Evidence taps\r\n"
+           "WS trace: %s\r\n"
+           "OAM: %s   lifecycle: %s\r\n"
+           "WRAM dump: %s   input record: %s\r\n"
+           "\r\n"
+           "F1 provenance   F2 composite\r\n"
+           "F3 BG1  F4 BG2  F5 BG3  F6 OBJ\r\n"
+           "F7 pause/resume   F8 single-step\r\n"
+           "Esc quit\r\n"
+           "\r\n"
+           "The side panel is host-only and is not\r\n"
+           "included in framebuffer evidence.",
+           s_host_frame,
+           s_paused ? "PAUSED" : "running",
+           s_route_finished ? " / ROUTE COMPLETE" : "",
+           s_script_failed ? " / FAILED" : "", s_last_input,
+           script, s_host_status,
+           ReadWram16(0x0032), ReadWram16(0x0030), ReadWram16(0x003e),
+           ReadWram16(0x088b), ReadWram16(0x0895),
+           ReadWram16(0x1b23), ReadWram16(0x1b25),
+           ReadWram16(0x1e03), ReadWram16(0x1e07), ReadWram16(0x1e09),
+           ReadWram16(0x05c1),
+           EnvironmentEnabled("DKC1_WS_TRACE") ? "ON" : "off",
+           EnvironmentEnabled("DKC1_OAM_LOG") ? "ON" : "off",
+           EnvironmentEnabled("DKC1_LIFECYCLE_TRACE") ? "ON" : "off",
+           EnvironmentEnabled("DKC1_WRAM_DUMP") ? "ON" : "off",
+           EnvironmentEnabled("DKC1_INPUT_RECORD") ? "ON" : "off");
+  RECT text_rect = panel;
+  text_rect.left += 12;
+  text_rect.top += 12;
+  text_rect.right -= 10;
+  DrawTextA(dc, text, -1, &text_rect,
+            DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
+  SelectObject(dc, old_font);
 }
 
 static HWAVEOUT s_waveout;
@@ -82,11 +187,23 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         static const uint8_t masks[] = {0x01, 0x02, 0x04, 0x10};
         Dkc1DebugSetLayerMask(masks[wp - VK_F3]);
         UpdateDebugTitle();
+      } else if (wp == VK_F7) {
+        s_paused = !s_paused;
+        s_step_once = 0;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "%s by user", s_paused ? "paused" : "resumed");
+        UpdateDebugTitle();
+      } else if (wp == VK_F8 && s_paused) {
+        s_step_once = 1;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "single frame requested");
       }
+      InvalidateRect(hwnd, NULL, FALSE);
       return 0;
     case WM_PAINT: {
       PAINTSTRUCT ps;
-      BeginPaint(hwnd, &ps);
+      HDC dc = BeginPaint(hwnd, &ps);
+      PresentFrame(dc);
       EndPaint(hwnd, &ps);
       return 0;
     }
@@ -181,9 +298,81 @@ int main(int argc, char **argv) {
     return 4;
   }
 
-  const int width = Dkc1VideoWidth();
-  const int height = kDkc1VideoHeight;
-  Dkc1BeginDrawing(s_pixels, (size_t)width * 4);
+  {
+    const char *panel_text = getenv("DKC1_DESKTOP_DEBUG_PANEL");
+    s_panel_enabled = !(panel_text && *panel_text == '0');
+  }
+  {
+    const char *snapshot = getenv("DKC1_SAVESTATE_INPUT");
+    if (snapshot && *snapshot && !RtlLoadSnapshot(snapshot)) {
+      char message[1024];
+      snprintf(message, sizeof message, "Unable to load native snapshot:\n%s",
+               snapshot);
+      MessageBoxA(NULL, message, "DKC1Recomp", MB_ICONERROR);
+      free(rom);
+      return 20;
+    }
+  }
+  {
+    const char *playback_path = getenv("SNESRECOMP_INPUT_PLAY");
+    if (playback_path && *playback_path) {
+      char error[256];
+      if (!Dkc1InputPlaybackLoad(playback_path, &s_input_playback,
+                                 error, sizeof error)) {
+        char message[768];
+        snprintf(message, sizeof message, "Input playback failed:\n%s\n%s",
+                 playback_path, error);
+        MessageBoxA(NULL, message, "DKC1Recomp", MB_ICONERROR);
+        free(rom);
+        return 20;
+      }
+      snprintf(s_host_status, sizeof s_host_status,
+               "loaded input playback: %s", playback_path);
+    }
+  }
+  {
+    const char *script_path = getenv("DKC1_SCRIPT");
+    if (script_path && *script_path) {
+      char error[256];
+      if (s_input_playback.count) {
+        MessageBoxA(NULL,
+                    "DKC1_SCRIPT and SNESRECOMP_INPUT_PLAY are mutually exclusive",
+                    "DKC1Recomp", MB_ICONERROR);
+        Dkc1InputPlaybackFree(&s_input_playback);
+        free(rom);
+        return 20;
+      }
+      if (!Dkc1ScriptLoad(script_path, error, sizeof error)) {
+        char message[768];
+        snprintf(message, sizeof message, "Route script failed:\n%s\n%s",
+                 script_path, error);
+        MessageBoxA(NULL, message, "DKC1Recomp", MB_ICONERROR);
+        free(rom);
+        return 20;
+      }
+      s_script_loaded = 1;
+      snprintf(s_host_status, sizeof s_host_status,
+               "loaded route: %s", script_path);
+    }
+  }
+  {
+    char error[256];
+    int opened = Dkc1WramDumpOpenFromEnvironment(&s_wram_dump,
+                                                  error, sizeof error);
+    if (opened < 0) {
+      char message[512];
+      snprintf(message, sizeof message, "WRAM dump setup failed:\n%s", error);
+      MessageBoxA(NULL, message, "DKC1Recomp", MB_ICONERROR);
+      Dkc1ScriptFree();
+      Dkc1InputPlaybackFree(&s_input_playback);
+      free(rom);
+      return 20;
+    }
+  }
+
+  s_width = Dkc1VideoWidth();
+  s_height = kDkc1VideoHeight;
+  Dkc1BeginDrawing(s_pixels, (size_t)s_width * 4);
 
   WNDCLASSA wc;
   memset(&wc, 0, sizeof wc);
@@ -193,7 +382,9 @@ int main(int argc, char **argv) {
   wc.lpszClassName = "DKC1RecompWindow";
   RegisterClassA(&wc);
 
-  RECT rect = { 0, 0, width * kScale, height * kScale };
+  RECT rect = { 0, 0,
+                s_width * kScale + (s_panel_enabled ? kPanelWidth : 0),
+                s_height * kScale };
   AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME, FALSE);
   s_window = CreateWindowA(
       wc.lpszClassName,
@@ -206,8 +397,8 @@ int main(int argc, char **argv) {
 
   memset(&s_bmi, 0, sizeof s_bmi);
   s_bmi.bmiHeader.biSize = sizeof s_bmi.bmiHeader;
-  s_bmi.bmiHeader.biWidth = width;
-  s_bmi.bmiHeader.biHeight = -height;  /* top-down */
+  s_bmi.bmiHeader.biWidth = s_width;
+  s_bmi.bmiHeader.biHeight = -s_height;  /* top-down */
   s_bmi.bmiHeader.biPlanes = 1;
   s_bmi.bmiHeader.biBitCount = 32;
   s_bmi.bmiHeader.biCompression = BI_RGB;
@@ -228,7 +419,79 @@ int main(int argc, char **argv) {
     }
     if (!s_running) break;
 
-    RtlRunFrame(PollInput());
+    if (s_paused && !s_step_once) {
+      HDC dc = GetDC(s_window);
+      PresentFrame(dc);
+      ReleaseDC(s_window, dc);
+      Sleep(16);
+      continue;
+    }
+
+    Dkc1ScriptOps script_ops = {0};
+    uint32_t input = 0;
+    int run_frame = 1;
+    if (s_script_loaded) {
+      if (Dkc1ScriptFinished()) {
+        s_route_finished = 1;
+        s_paused = 1;
+        s_step_once = 0;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "route complete; paused for inspection");
+        UpdateDebugTitle();
+        continue;
+      }
+      bool failed = false;
+      input = Dkc1ScriptNextInput(g_ram, &script_ops, &failed);
+      if (failed) {
+        s_script_failed = 1;
+        s_paused = 1;
+        s_step_once = 0;
+        snprintf(s_host_status, sizeof s_host_status, "%s",
+                 Dkc1ScriptError());
+        UpdateDebugTitle();
+        continue;
+      }
+      if (script_ops.state_load && !RtlLoadSnapshot(script_ops.state_load)) {
+        s_script_failed = 1;
+        s_paused = 1;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "unable to load snapshot: %.430s", script_ops.state_load);
+        UpdateDebugTitle();
+        continue;
+      }
+      if (script_ops.checkpoint &&
+          !Dkc1DebugCheckpoint(script_ops.checkpoint, (int)s_host_frame)) {
+        s_script_failed = 1;
+        s_paused = 1;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "unable to record checkpoint: %.400s", script_ops.checkpoint);
+        UpdateDebugTitle();
+        continue;
+      }
+      if (script_ops.state_save && !RtlSaveSnapshot(script_ops.state_save)) {
+        s_script_failed = 1;
+        s_paused = 1;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "unable to save snapshot: %.430s", script_ops.state_save);
+        UpdateDebugTitle();
+        continue;
+      }
+      run_frame = script_ops.run_frame ? 1 : 0;
+    } else if (s_input_playback.count) {
+      input = Dkc1InputPlaybackFrame(&s_input_playback,
+                                      (size_t)s_host_frame);
+    } else {
+      input = PollInput();
+    }
+
+    if (!run_frame) {
+      UpdateDebugTitle();
+      continue;
+    }
+
+    s_last_input = input;
+    Dkc1DebugRecordInput(input);
+    RtlRunFrame(input);
     if (g_fail) {
       MessageBoxA(s_window, "runtime failure (off-rails execution)",
                   "DKC1Recomp", MB_ICONERROR);
@@ -242,13 +505,25 @@ int main(int argc, char **argv) {
       break;
     }
     Dkc1DrawPpuFrame();
+    s_host_frame++;
+    {
+      char error[256];
+      if (!Dkc1WramDumpFrame(&s_wram_dump, s_host_frame,
+                             snes_frame_counter, g_ram,
+                             error, sizeof error)) {
+        s_paused = 1;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "WRAM dump failed: %.430s", error);
+      }
+    }
+    Dkc1DebugDumpFrame((int)s_host_frame);
     AudioPump();
 
     HDC dc = GetDC(s_window);
-    StretchDIBits(dc, 0, 0, width * kScale, height * kScale,
-                  0, 0, width, height, s_pixels, &s_bmi,
-                  DIB_RGB_COLORS, SRCCOPY);
+    PresentFrame(dc);
     ReleaseDC(s_window, dc);
+    if ((s_host_frame % 15) == 0) UpdateDebugTitle();
+    s_step_once = 0;
 
     next_tick += ticks_per_frame;
     for (;;) {
@@ -270,6 +545,14 @@ int main(int argc, char **argv) {
     waveOutReset(s_waveout);
     waveOutClose(s_waveout);
   }
+  {
+    char error[256];
+    if (!Dkc1WramDumpClose(&s_wram_dump, error, sizeof error))
+      fprintf(stderr, "wram_dump: %s\n", error);
+  }
+  Dkc1DebugDumpClose();
+  Dkc1ScriptFree();
+  Dkc1InputPlaybackFree(&s_input_playback);
   free(rom);
   return 0;
 }

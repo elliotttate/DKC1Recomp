@@ -60,6 +60,42 @@ const char *Dkc1ScriptError(void) {
   return s_error;
 }
 
+void Dkc1ScriptStatus(char *buffer, size_t buffer_size) {
+  if (!buffer || buffer_size == 0) return;
+  if (s_failed) {
+    snprintf(buffer, buffer_size, "FAILED: %s", s_error);
+    return;
+  }
+  if (!s_active || s_cursor >= s_step_count) {
+    snprintf(buffer, buffer_size, "complete (%zu steps)", s_step_count);
+    return;
+  }
+  const Dkc1ScriptStep *step = &s_steps[s_cursor];
+  const char *kind = "unknown";
+  switch (step->kind) {
+    case kOpInput: kind = "input"; break;
+    case kOpWait: kind = "wait"; break;
+    case kOpPulse: kind = "pulse"; break;
+    case kOpCheckpoint: kind = "checkpoint"; break;
+    case kOpStateSave: kind = "state save"; break;
+    case kOpStateLoad: kind = "state load"; break;
+  }
+  if (step->kind == kOpWait || step->kind == kOpPulse) {
+    snprintf(buffer, buffer_size,
+             "step %zu/%zu %s [%05X] %s %X (%ld/%ld)",
+             s_cursor + 1, s_step_count, kind, step->address, step->op,
+             step->value, s_step_progress, step->count);
+  } else if (step->kind == kOpInput) {
+    snprintf(buffer, buffer_size, "step %zu/%zu %s %03X (%ld/%ld)",
+             s_cursor + 1, s_step_count, kind, step->input_mask,
+             s_step_progress, step->count);
+  } else {
+    snprintf(buffer, buffer_size, "step %zu/%zu %s %s",
+             s_cursor + 1, s_step_count, kind,
+             step->text ? step->text : "");
+  }
+}
+
 static bool ParseUnsigned(const char *token, unsigned long *value, int base) {
   if (!token || !*token || *token == '+' || *token == '-' ||
       isspace((unsigned char)*token))

@@ -13,6 +13,9 @@
  *   DKC1_OAM_LOG=prefix       per-frame records (frame, WRAM shadow $0200-
  *                             $041F, PPU OAM+high) -> prefix.bin + .jsonl
  *   DKC1_LIFECYCLE_TRACE=path transition-only actor/scanner/section JSONL
+ *   DKC1_LIFECYCLE_SAMPLE_EVERY_FRAME=1 adds exact active-actor samples;
+ *                             required before the prefetch phase auditor may
+ *                             call a stock-allocation-frame match harmless
  *   DKC1_SESSION_DIR=dir      checkpoint evidence directory (default
  *                             "session"): NAME.wram.bin + checkpoints.jsonl
  *   DKC1_INPUT_RECORD=path    resolved per-frame joypad masks, one hex mask

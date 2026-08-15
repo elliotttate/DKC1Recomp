@@ -39,6 +39,9 @@ uint32_t Dkc1ScriptNextInput(const uint8_t *wram, Dkc1ScriptOps *ops,
                              bool *failed);
 bool Dkc1ScriptFinished(void);
 const char *Dkc1ScriptError(void);
+/* Human-readable current operation for interactive hosts. The result is
+ * diagnostic only and never affects script execution. */
+void Dkc1ScriptStatus(char *buffer, size_t buffer_size);
 void Dkc1ScriptFree(void);
 
 #endif

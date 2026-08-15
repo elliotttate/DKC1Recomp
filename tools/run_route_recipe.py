@@ -124,7 +124,7 @@ def _sha256(path: Path) -> str:
 
 def run_recipe(recipe_path: Path, rom: Path, runner: Path,
                session_dir: Path, snapshot_input: Path | None,
-               widescreen: bool) -> tuple[int, dict]:
+               widescreen: bool, visible: bool = False) -> tuple[int, dict]:
     recipe_bytes = recipe_path.read_bytes()
     recipe = json.loads(recipe_bytes)
     script, maximum_frames, normalized = compile_recipe(recipe)
@@ -142,14 +142,27 @@ def run_recipe(recipe_path: Path, rom: Path, runner: Path,
     env["DKC1_WIDESCREEN"] = "1" if widescreen else "0"
     if snapshot_input:
         env["DKC1_SAVESTATE_INPUT"] = str(snapshot_input)
+    if visible:
+        env["DKC1_DESKTOP_DEBUG_PANEL"] = "1"
     with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-        completed = subprocess.run(
-            [str(runner), str(rom), str(maximum_frames)], env=env,
-            stdout=stdout, stderr=stderr, check=False)
+        if visible:
+            process = subprocess.Popen(
+                [str(runner), str(rom)], env=env,
+                stdout=stdout, stderr=stderr)
+            exit_code = None
+            process_id = process.pid
+        else:
+            completed = subprocess.run(
+                [str(runner), str(rom), str(maximum_frames)], env=env,
+                stdout=stdout, stderr=stderr, check=False)
+            exit_code = completed.returncode
+            process_id = None
 
     manifest = {
         **normalized,
-        "exit_code": completed.returncode,
+        "exit_code": exit_code,
+        "visible": visible,
+        "process_id": process_id,
         "widescreen": widescreen,
         "inputs": {
             "recipe": {"name": recipe_path.name,
@@ -165,19 +178,22 @@ def run_recipe(recipe_path: Path, rom: Path, runner: Path,
     }
     (session_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return completed.returncode, manifest
+    return 0 if visible else int(exit_code), manifest
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recipe", type=Path)
     parser.add_argument("--rom", type=Path)
-    parser.add_argument("--runner", type=Path,
-                        default=Path("build/dkc1_snesrecomp_headless.exe"))
+    parser.add_argument("--runner", type=Path)
     parser.add_argument("--session-dir", type=Path)
     parser.add_argument("--snapshot-input", type=Path)
     parser.add_argument("--native", action="store_true",
                         help="run the native-width presentation")
+    parser.add_argument("--visible", action="store_true",
+                        help=("launch dkc1_desktop with its live debug panel; "
+                              "return immediately and leave it paused when "
+                              "the route completes"))
     parser.add_argument("--script-out", type=Path)
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
@@ -191,9 +207,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not args.rom or not args.session_dir:
             raise ValueError("--rom and --session-dir are required to run")
+        runner = args.runner or Path(
+            "build/dkc1_desktop.exe" if args.visible else
+            "build/dkc1_snesrecomp_headless.exe")
         code, manifest = run_recipe(
-            args.recipe, args.rom, args.runner, args.session_dir,
-            args.snapshot_input, not args.native)
+            args.recipe, args.rom, runner, args.session_dir,
+            args.snapshot_input, not args.native, args.visible)
         print(json.dumps(manifest, indent=2))
         return code
     except (OSError, ValueError, json.JSONDecodeError) as error:

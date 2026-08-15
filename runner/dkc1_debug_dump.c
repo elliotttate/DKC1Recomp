@@ -68,6 +68,7 @@ static FILE *s_oam_index;
 static FILE *s_lifecycle;
 static const char *s_session_dir = "session";
 static FILE *s_checkpoint_index;
+static bool s_lifecycle_sample_every_frame;
 
 typedef struct ActorShadow {
   uint16_t id, source, state, animation;
@@ -127,6 +128,10 @@ static void Initialize(void) {
   setting = getenv("DKC1_LIFECYCLE_TRACE");
   if (setting && *setting)
     s_lifecycle = fopen(setting, "wb");
+
+  setting = getenv("DKC1_LIFECYCLE_SAMPLE_EVERY_FRAME");
+  s_lifecycle_sample_every_frame =
+      setting && *setting && strcmp(setting, "0") != 0;
 
   setting = getenv("DKC1_SESSION_DIR");
   if (setting && *setting)
@@ -226,6 +231,17 @@ static void LifecycleFrame(int frame) {
       EmitActor(s_lifecycle, "actor_state", frame, slot);
     }
     *prev = now;
+  }
+
+  /* Exact phase auditing is intentionally opt-in: transition-only traces
+   * are compact and sufficient for lifecycle/timeline work, but cannot
+   * prove an actor's position at an arbitrary stock-allocation frame. */
+  if (s_lifecycle_sample_every_frame) {
+    for (int slot = 0; slot < kActorCount; slot++) {
+      const uint32_t index = (uint32_t)(kActorFirst + slot * 2);
+      if (Wram16(kAddrActorId + index) != 0)
+        EmitActor(s_lifecycle, "actor_sample", frame, slot);
+    }
   }
 
   const uint8_t *book = g_ram + kBookkeepingBase;

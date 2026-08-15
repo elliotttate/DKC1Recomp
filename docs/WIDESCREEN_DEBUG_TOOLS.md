@@ -18,6 +18,17 @@ non-conclusion vocabulary, and 3x byte-identical repeat gates.
 
 ## Implementation status
 
+- **The visible desktop host is now the primary interactive debugger.** It
+  accepts the same `DKC1_SCRIPT`, native snapshot, input playback, checkpoint,
+  WRAM dump, OAM, lifecycle, input-recording, and widescreen-trace environment
+  variables as the batch host. A separate right-side panel shows route/input,
+  mode/level/entrance, camera bounds, scanner range, section state, and which
+  evidence taps are armed without covering or modifying the captured game
+  framebuffer. `F7` pauses/resumes and `F8` advances exactly one frame while
+  paused. A completed or failed route pauses in the visible window for
+  inspection rather than disappearing. The headless executable remains the
+  right choice for stock-vs-wide replay, minimization, and level sweeps.
+
 - **Tool 1 is implemented.** Set `DKC1_WS_TRACE=1` for
   `dkc1_ws_trace.jsonl`, or set it to an explicit output path. The trace is
   default-off and performs no file I/O or frame hashing while disabled.
@@ -104,6 +115,13 @@ python tools\run_route_recipe.py recipes\fresh-entry-smoke.json `
   --rom C:\private\dkc1.sfc `
   --runner .\build\dkc1_snesrecomp_headless.exe `
   --session-dir $env:TEMP\dkc1-route-smoke
+
+# Interactive: launch the same route in the visible debugger and return.
+# It pauses on the final frame so the result can be inspected.
+python tools\run_route_recipe.py recipes\fresh-entry-smoke.json `
+  --rom C:\private\dkc1.sfc `
+  --visible `
+  --session-dir $env:TEMP\dkc1-route-visible
 ```
 
 Checkpoint names are restricted to safe filenames and duplicates are
