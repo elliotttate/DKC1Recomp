@@ -1,0 +1,9 @@
+build/
+generated/
+*.sfc
+*.smc
+*.srm
+*.i64
+rom.cfg
+__pycache__/
+*.pyc
