@@ -1,12 +1,17 @@
 #include "dkc1_video.h"
 
+#include "cpu_state.h"
+
 bool g_ws_active;
 int g_ws_extra;
 static bool s_terrain_ready;
+static int s_presentation_bias;
 
 void Dkc1VideoSetWidescreen(bool enabled) {
-  if (g_ws_active != enabled)
+  if (g_ws_active != enabled) {
     s_terrain_ready = false;
+    s_presentation_bias = 0;
+  }
   g_ws_active = enabled;
   g_ws_extra = enabled ? kDkc1VideoWidescreenExtra : 0;
 }
@@ -33,6 +38,122 @@ int Dkc1VideoExtra(void) {
 
 size_t Dkc1VideoPixelCount(void) {
   return (size_t)Dkc1VideoWidth() * kDkc1VideoHeight;
+}
+
+uint16_t Dkc1VideoExpandCullLeft(uint16_t native_margin) {
+  int margin = native_margin;
+  if (Dkc1VideoTerrainReady())
+    margin += g_ws_extra - s_presentation_bias;
+  return (uint16_t)(margin < 0 ? 0 : margin);
+}
+
+uint16_t Dkc1VideoExpandCullSpan(uint16_t native_span) {
+  return (uint16_t)(native_span +
+                    (Dkc1VideoTerrainReady() ? 2 * g_ws_extra : 0));
+}
+
+uint16_t Dkc1VideoPromoteOamXHigh(uint16_t screen_x) {
+  /* Several DKC1 direct OAM writers derive X-high from the sign bit because
+   * stock play only presents negative off-left coordinates.  Positive
+   * coordinates in the host's right margin need bit 8 mirrored into bit 15
+   * before that original XBA/shift packing sequence runs. */
+  if (Dkc1VideoTerrainReady() && (screen_x & 0x0100u))
+    return (uint16_t)(screen_x | 0x8000u);
+  return screen_x;
+}
+
+uint16_t Dkc1VideoBiasCullX(uint16_t screen_x) {
+  /* Convert [-extra, 255+extra] to [0, 255+2*extra] for private renderers
+   * whose stock code performs a sign test followed by a positive-span test.
+   * This value is for comparisons only; the original screen X remains in
+   * the game's scratch/OAM path. */
+  return (uint16_t)(screen_x +
+                    (Dkc1VideoTerrainReady()
+                         ? g_ws_extra - s_presentation_bias : 0));
+}
+
+void Dkc1VideoSetPresentationBias(int bias) {
+  if (bias < -g_ws_extra) bias = -g_ws_extra;
+  if (bias > g_ws_extra) bias = g_ws_extra;
+  s_presentation_bias = g_ws_active ? bias : 0;
+}
+
+int Dkc1VideoPresentationBias(void) {
+  return g_ws_active ? s_presentation_bias : 0;
+}
+
+uint16_t Dkc1VideoPromoteOamSizeMask(uint16_t size_mask,
+                                    uint16_t screen_x) {
+  if (Dkc1VideoTerrainReady() && (screen_x & 0x0100u))
+    return (uint16_t)(size_mask | (size_mask >> 1));
+  return size_mask;
+}
+
+bool Dkc1VideoPrepareType5ChildRetry(struct CpuState *cpu) {
+  if (!cpu || !Dkc1VideoTerrainReady())
+    return false;
+
+  const uint16_t parent_index =
+      cpu_read16(cpu, 0x00, (uint16_t)(cpu->D + 0x00a4));
+  const uint16_t bookmark = cpu_read16(
+      cpu, cpu->DB, (uint16_t)(0x192bu + parent_index));
+  if ((bookmark & 0x00ffu) == 0)
+    return false;
+
+  const uint16_t parent_record = cpu->Y;
+  /* The parent record's +6 word is an absolute source-table cursor to the
+   * record immediately before its children, not a parent-relative offset. */
+  const uint16_t first_child = (uint16_t)(
+      cpu_read16(cpu, cpu->DB, (uint16_t)(parent_record + 0x0006u)) +
+      0x0008u);
+  const uint16_t layer_x = cpu_read16(cpu, cpu->DB, 0x088bu);
+  const uint16_t right =
+      (uint16_t)(layer_x + Dkc1VideoExpandCullLeft(0x0120u));
+  if (right < cpu_read16(
+                  cpu, cpu->DB, (uint16_t)(first_child + 0x0002u)))
+    return false;
+
+  uint16_t last_child = first_child;
+  for (unsigned child = 0; child < 0x100u; child++) {
+    if (cpu_read16(
+            cpu, cpu->DB, (uint16_t)(last_child + 0x0008u)) == 0)
+      break;
+    last_child = (uint16_t)(last_child + 0x0008u);
+    if (child == 0xffu)
+      return false;  /* malformed source chain: fail closed */
+  }
+
+  const uint16_t left =
+      (uint16_t)(layer_x - Dkc1VideoExpandCullLeft(0x0020u));
+  const uint16_t last_x = cpu_read16(
+      cpu, cpu->DB, (uint16_t)(last_child + 0x0002u));
+  if ((left & 0x8000u) == 0 || left < 0xfc00u) {
+    if (left >= last_x)
+      return false;
+  } else if (left < last_x) {
+    return false;
+  }
+
+  cpu_write16(cpu, 0x00, (uint16_t)(cpu->D + 0x0076u), parent_record);
+  cpu_write16(cpu, 0x00, (uint16_t)(cpu->D + 0x0078u), first_child);
+
+  /* Match the child loop's stock caller contract: parent map index on the
+   * emulated stack, $A4 advanced to the first child bookmark, and Y pointing
+   * at the first eight-byte source record. */
+  /* Match a native 16-bit PHA/PHY exactly.  In native mode the 65816 first
+   * decrements S, writes the little-endian word at that address, then
+   * decrements S once more.  Writing at the old S and subtracting two makes
+   * the later PLA consume one stale byte and shifts the caller's RTS frame;
+   * that eventually returned through arbitrary ROM data and blacked the
+   * recompile output. */
+  cpu->S = (uint16_t)(cpu->S - 1u);
+  cpu_write16(cpu, 0x00, cpu->S, parent_index);
+  cpu->S = (uint16_t)(cpu->S - 1u);
+  const uint16_t child_index = (uint16_t)(
+      parent_index + ((uint16_t)(first_child - parent_record) >> 3));
+  cpu_write16(cpu, 0x00, (uint16_t)(cpu->D + 0x00a4u), child_index);
+  cpu->Y = first_child;
+  return true;
 }
 
 static const uint8_t *s_rom;

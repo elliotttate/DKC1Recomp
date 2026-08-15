@@ -152,10 +152,11 @@ void Dkc1BeginDrawing(uint8_t *pixels, size_t pitch) {
 }
 
 /* ---- presentation-camera widescreen ------------------------------------
- * The recompiled game logic is untouched: the stock logical camera keeps
- * driving collision, exits, spawning, and clamps. The host renders extra
- * margin columns keyed to world space (WsShadow) and prefills terrain
- * margins by decoding the level map straight from ROM. */
+ * The stock logical camera keeps driving collision, exits, movement clamps,
+ * and tile streaming. Generated visibility adapters may activate objects
+ * that are genuinely visible in the host margins. The host renders those
+ * margin columns in world space (WsShadow) and prefills terrain by decoding
+ * the level map straight from ROM. */
 
 static uint16_t Dkc1ReadWram16(uint16_t address) {
   return (uint16_t)g_ram[address] |
@@ -169,7 +170,7 @@ static bool s_ws_origin_valid[2];
 static uint32_t s_ws_world_x[2];
 static uint32_t s_ws_world_y[2];
 static Dkc1LevelLayout s_ws_layout;
-static int s_ws_layout_hold;  /* frames the locked layout has been trusted */
+static int s_ws_layout_grace;  /* bounded transient calibration misses */
 
 static uint64_t Dkc1LevelSourceSignature(void) {
   const uint64_t bank = g_ram[0x00d5];
@@ -186,8 +187,29 @@ static void Dkc1ResetWidescreenShadow(void) {
   memset(s_ws_origin_valid, 0, sizeof s_ws_origin_valid);
   s_ws_source_valid = false;
   s_ws_layout = kDkc1LayoutUnknown;
-  s_ws_layout_hold = 0;
+  s_ws_layout_grace = 0;
+  Dkc1VideoSetPresentationBias(0);
   Dkc1VideoSetTerrainReady(false);
+}
+
+/* Clamp only the host presentation camera near level ends. A symmetric wide
+ * viewport centered on camera X=lower asks for negative world columns, which
+ * is why the left side stayed black until the player first scrolled. Moving
+ * the presentation center inward exposes real level art immediately while
+ * leaving collision, exits, camera bounds, and simulation untouched. */
+static int Dkc1WidescreenPresentationBias(void) {
+  const uint32_t camera = Dkc1ReadWram16(0x088b);
+  const uint32_t lower = Dkc1ReadWram16(0x1b23);
+  const uint32_t upper = Dkc1ReadWram16(0x1b25);
+  const uint32_t extra = (uint32_t)Dkc1VideoExtra();
+  if (upper < lower || upper - lower < extra * 2u)
+    return 0;
+  uint32_t target = camera;
+  if (target < lower + extra)
+    target = lower + extra;
+  if (target > upper - extra)
+    target = upper - extra;
+  return (int32_t)target - (int32_t)camera;
 }
 
 /* Word address of a tile in a 64x32 SNES tilemap (world-keyed rolling map:
@@ -229,7 +251,8 @@ static int Dkc1CalibrateLayout(Dkc1LevelLayout layout, uint16_t ppu_map_base,
   return matches;
 }
 
-static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask) {
+static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
+                                        int presentation_bias) {
   const uint32_t camera_x = Dkc1ReadWram16(0x088b);
   const uint32_t camera_y = Dkc1ReadWram16(0x0895);
   const uint64_t source_signature = Dkc1LevelSourceSignature();
@@ -251,7 +274,7 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask) {
     s_ws_source_signature = source_signature;
     s_ws_source_valid = true;
     s_ws_layout = kDkc1LayoutUnknown;
-    s_ws_layout_hold = 0;
+    s_ws_layout_grace = 0;
   }
 
   const int keep_tiles = Dkc1VideoExtra() / 8 + 2;
@@ -263,7 +286,7 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask) {
     }
     if (layer == terrain_layer) {
       s_ws_world_x[layer] = Dkc1VideoUnwrapPpuScroll(
-          (uint16_t)g_ppu->hScroll[layer], camera_x);
+          (uint16_t)(g_ppu->hScroll[layer] + presentation_bias), camera_x);
       s_ws_world_y[layer] = Dkc1VideoUnwrapPpuScroll(
           (uint16_t)g_ppu->vScroll[layer], camera_y);
     } else {
@@ -272,17 +295,23 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask) {
       const uint32_t anchor_y = s_ws_origin_valid[layer]
                                     ? s_ws_world_y[layer] : camera_y;
       s_ws_world_x[layer] = Dkc1VideoUnwrapPpuScroll(
-          (uint16_t)g_ppu->hScroll[layer], anchor_x);
+          (uint16_t)(g_ppu->hScroll[layer] + presentation_bias), anchor_x);
       s_ws_world_y[layer] = Dkc1VideoUnwrapPpuScroll(
           (uint16_t)g_ppu->vScroll[layer], anchor_y);
     }
     s_ws_origin_valid[layer] = true;
 
     WsShadowSetWorld(layer, s_ws_world_x[layer], s_ws_world_y[layer]);
-    WsShadowSetScroll(layer, g_ppu->hScroll[layer], g_ppu->vScroll[layer]);
+    WsShadowSetScroll(layer,
+                      (uint16_t)(g_ppu->hScroll[layer] + presentation_bias),
+                      g_ppu->vScroll[layer]);
     WsShadowSetWestKeep(layer, keep_tiles);
     WsShadowSetEastKeep(layer, keep_tiles);
-    WsShadowSetRetainHistory(layer, true);
+    /* Keep the default absolute-world Y key. RetainHistory intentionally
+     * switches the shared shadow to viewport-relative Y keys; DKC1's ROM
+     * decoder fills absolute world tile rows, so enabling it made every
+     * margin lookup miss and exposed the transparent fallback as a hard
+     * vertical cutoff. DKC2's exact-prefill path likewise leaves this off. */
     WsShadowSetRespectGameWrites(layer, layer == terrain_layer ? 1 : 0);
     uint16_t blank_entry = 0;
     if (!PPU_bigTiles(g_ppu, layer))
@@ -327,11 +356,16 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask) {
       best_decodable >= 64 && best_matches * 10 >= best_decodable * 7;
   if (calibrated) {
     s_ws_layout = best;
-    if (s_ws_layout_hold < 1000) s_ws_layout_hold++;
-  } else if (s_ws_layout_hold > 0) {
-    s_ws_layout_hold--;           /* brief mismatches (transitions) decay */
-    if (s_ws_layout_hold == 0)
+    /* Tolerate at most two isolated dynamic-tile mismatches. Confidence must
+     * not accumulate with play time: the former saturating 1000-frame hold
+     * could expose stale level art for seconds after a scene transition. */
+    s_ws_layout_grace = 2;
+  } else if (s_ws_layout_grace > 0) {
+    s_ws_layout_grace--;
+    if (s_ws_layout_grace == 0)
       s_ws_layout = kDkc1LayoutUnknown;
+  } else {
+    s_ws_layout = kDkc1LayoutUnknown;
   }
   if (s_ws_layout == kDkc1LayoutUnknown)
     return false;
@@ -341,7 +375,11 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask) {
   Dkc1VideoFindTransparent4bppTile(
       g_ppu->vram, 0x8000u,
       (uint16_t)PPU_bgTileAdr(g_ppu, terrain_layer), &blank_entry);
-  const int margin_tiles = Dkc1VideoExtra() / 8 + 1;
+  /* Round the partial 43-pixel side margin up, then keep one complete guard
+   * tile for fine scroll.  The old floor division seeded only six columns;
+   * a nonzero scroll phase could sample the unseeded seventh column as the
+   * thin black strip at the far-left edge. */
+  const int margin_tiles = (Dkc1VideoExtra() + 7) / 8 + 1;
   const int visible_rows = (kDkc1VideoHeight >> 3) + 2;
   for (int side = 0; side < 2; side++) {
     for (int i = 0; i < margin_tiles; i++) {
@@ -378,16 +416,39 @@ void Dkc1DrawPpuFrame(void) {
                                       g_ppu->screenEnabled[0],
                                       g_ppu->screenEnabled[1])
           : 0;
-  if (wide_layer_mask != 0) {
+  /* A Mode-1/64-column register shape is necessary but not sufficient:
+   * logos and fixed screens can temporarily retain the same PPU shape. Build
+   * and calibrate the world-keyed shadow first, then widen only a proven
+   * level layout. This prevents stale gameplay/logo data in the margins. */
+  const int presentation_bias =
+      wide_layer_mask != 0 ? Dkc1WidescreenPresentationBias() : 0;
+  const bool extend_world =
+      wide_layer_mask != 0 &&
+      Dkc1PrepareWidescreenShadow(wide_layer_mask, presentation_bias);
+  if (extend_world) {
+    Dkc1VideoSetPresentationBias(presentation_bias);
     PpuSetExtraSpace(g_ppu, (uint8_t)Dkc1VideoExtra());
+    PpuSetWidescreenPresentationXBias(g_ppu, presentation_bias);
     PpuSetWidescreenLayerMask(g_ppu, wide_layer_mask);
-    /* Repeat the native edge scanline for enabled-but-not-widened BG1/BG2
-     * (32-column backdrops); BG3 stays clamped until audited. */
+    /* Repeat the native edge scanline for enabled, bounded background
+     * planes. Jungle Hijinxs uses a 32-column BG3 sky behind independently
+     * widened 64-column BG1/BG2; clamping BG3 exposed black from the host
+     * margin up to the first fine-scroll tile boundary. This repeat is only
+     * armed after the terrain decoder validates a gameplay scene. */
     uint8_t enabled = (uint8_t)((g_ppu->screenEnabled[0] |
-                                 g_ppu->screenEnabled[1]) & 0x03u);
+                                 g_ppu->screenEnabled[1]) & 0x07u);
+    const int terrain_layer = Dkc1VideoTerrainLayer(
+        wide_layer_mask, g_ppu->bgXsc, Dkc1ReadWram16(0x1b13));
+    const uint8_t terrain_bit =
+        terrain_layer >= 0 ? (uint8_t)(1u << terrain_layer) : 0;
+    /* Only the stream-selected terrain plane has an exact ROM/world decoder.
+     * DKC1's other 64-column plane is parallax staging data, not a second
+     * copy of the level map. Rendering it through the world shadow produced
+     * 100% margin misses and transparent cutoffs. Match DKC2's proven policy:
+     * repeat every enabled non-terrain BG from its authentic native scanline. */
     PpuSetWidescreenLayerRepeat(
-        g_ppu, (uint8_t)(enabled & (uint8_t)~wide_layer_mask));
-    Dkc1VideoSetTerrainReady(Dkc1PrepareWidescreenShadow(wide_layer_mask));
+        g_ppu, (uint8_t)(enabled & (uint8_t)~terrain_bit));
+    Dkc1VideoSetTerrainReady(true);
   } else if (Dkc1VideoIsWidescreen()) {
     Dkc1ResetWidescreenShadow();
     /* Pillarbox fixed screens (logos, map, title): clear the host row and
@@ -397,9 +458,11 @@ void Dkc1DrawPpuFrame(void) {
       memset(g_ppu->renderBuffer + (size_t)y * g_ppu->renderPitch,
              0, row_bytes);
     PpuSetExtraSpaceCentered(g_ppu, (uint8_t)Dkc1VideoExtra());
+    PpuSetWidescreenPresentationXBias(g_ppu, 0);
   } else {
     Dkc1ResetWidescreenShadow();
     PpuSetExtraSpace(g_ppu, 0);
+    PpuSetWidescreenPresentationXBias(g_ppu, 0);
   }
 
   dma_startDma(g_dma, g_snesrecomp_last_hdmaen, true);
@@ -410,7 +473,17 @@ void Dkc1DrawPpuFrame(void) {
   }
 
   for (int line = 0; line <= 224; line++) {
+    if (extend_world && presentation_bias != 0) {
+      for (int layer = 0; layer < 4; layer++)
+        g_ppu->hScroll[layer] =
+            (uint16_t)(g_ppu->hScroll[layer] + presentation_bias);
+    }
     ppu_runLine(g_ppu, line);
+    if (extend_world && presentation_bias != 0) {
+      for (int layer = 0; layer < 4; layer++)
+        g_ppu->hScroll[layer] =
+            (uint16_t)(g_ppu->hScroll[layer] - presentation_bias);
+    }
     for (int channel = 0; channel < 8; channel++) {
       if (active[channel]) SimpleHdma_DoLine(&channels[channel]);
     }

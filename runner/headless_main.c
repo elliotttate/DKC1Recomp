@@ -8,6 +8,7 @@
 #include "cpu_state.h"
 #include "sha256.h"
 #include "snes/ppu.h"
+#include "snes/ws_shadow.h"
 #include "snes/apu.h"
 #include "snes/interp_bridge.h"
 #include "snes/snes.h"
@@ -386,16 +387,52 @@ int main(int argc, char **argv) {
   /* DKC1 builds its OAM image at WRAM $0200-$041F (DKC1_Global_OAMBuffer +
    * upper table), transferred during VBlank. */
   sha256_compute(g_ram + 0x200, sizeof oam_bytes, oam_source_hash);
+  WsShadowMarginStat shadow[2];
+  WsShadowGetMarginStats(0, &shadow[0]);
+  WsShadowGetMarginStats(1, &shadow[1]);
   printf("video_state inidisp=$%02x bgmode=$%02x main=$%02x sub=$%02x "
+         "bgsc=[$%02x,$%02x,$%02x,$%02x] "
+         "scroll=[%u,%u;%u,%u;%u,%u;%u,%u] terrain_ready=%d "
          "nmi=%d frame_counter=%d vram_words=%u cgram_words=%u "
          "mode=$%04x entrance=$%04x fade=$%04x camera=[$%04x,$%04x] "
+         "bounds=[$%04x,$%04x] presentation_bias=%d "
          "frame_ctr=$%04x bananas=$%04x\n",
          g_ppu->inidisp, g_ppu->bgmode, g_ppu->screenEnabled[0],
-         g_ppu->screenEnabled[1], g_snes->nmiEnabled ? 1 : 0,
+         g_ppu->screenEnabled[1], g_ppu->bgXsc[0], g_ppu->bgXsc[1],
+         g_ppu->bgXsc[2], g_ppu->bgXsc[3],
+         g_ppu->hScroll[0], g_ppu->vScroll[0],
+         g_ppu->hScroll[1], g_ppu->vScroll[1],
+         g_ppu->hScroll[2], g_ppu->vScroll[2],
+         g_ppu->hScroll[3], g_ppu->vScroll[3],
+         Dkc1VideoTerrainReady() ? 1 : 0,
+         g_snes->nmiEnabled ? 1 : 0,
          snes_frame_counter, vram_words, cgram_words,
          ReadWram16(0x0032), ReadWram16(0x003e), ReadWram16(0x1df1),
-         ReadWram16(0x088b), ReadWram16(0x0895), ReadWram16(0x0028),
+         ReadWram16(0x088b), ReadWram16(0x0895),
+         ReadWram16(0x1b23), ReadWram16(0x1b25),
+         Dkc1VideoPresentationBias(), ReadWram16(0x0028),
          ReadWram16(0x057b));
+  printf("shadow_stats "
+         "bg1=[west_hit=%llu west_miss=%llu east_hit=%llu east_miss=%llu "
+         "west_blank=%llu east_blank=%llu west_raw=%llu east_raw=%llu] "
+         "bg2=[west_hit=%llu west_miss=%llu east_hit=%llu east_miss=%llu "
+         "west_blank=%llu east_blank=%llu west_raw=%llu east_raw=%llu]\n",
+         (unsigned long long)shadow[0].westHit,
+         (unsigned long long)shadow[0].westMiss,
+         (unsigned long long)shadow[0].eastHit,
+         (unsigned long long)shadow[0].eastMiss,
+         (unsigned long long)shadow[0].westBlank,
+         (unsigned long long)shadow[0].eastBlank,
+         (unsigned long long)shadow[0].westRawFallback,
+         (unsigned long long)shadow[0].eastRawFallback,
+         (unsigned long long)shadow[1].westHit,
+         (unsigned long long)shadow[1].westMiss,
+         (unsigned long long)shadow[1].eastHit,
+         (unsigned long long)shadow[1].eastMiss,
+         (unsigned long long)shadow[1].westBlank,
+         (unsigned long long)shadow[1].eastBlank,
+         (unsigned long long)shadow[1].westRawFallback,
+         (unsigned long long)shadow[1].eastRawFallback);
   printf("frame_sha256=");
   PrintHash(stdout, frame_hash);
   printf("\nwram_sha256=");

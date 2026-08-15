@@ -7,3 +7,10 @@ generated/
 rom.cfg
 __pycache__/
 *.pyc
+tier2_dkc1_*.json
+tier2_dkc1_*.jsonl
+*.ppm
+*.pcm
+*.szst*
+captures/
+artifacts/

@@ -1,13 +1,16 @@
 # DKC1Recomp
 
 Static recompilation of *Donkey Kong Country* (SNES, USA v1.0) into a native
-desktop application, using the [`snesrecomp`](https://github.com/Nicktendonick/snesrecomp)
+desktop application, using the project's pinned
+[`snesrecomp` fork](https://github.com/elliotttate/snesrecomp)
 framework — following the working [`DKC2Recomp`](https://github.com/Nicktendonick/DKC2Recomp)
 project (same Rare engine family) as the template.
 
-**Status: bring-up.** Analysis configuration is generated and validated; the
-recompiler emits AOT variants from it. There is no playable host application
-yet — see `docs/BRINGUP.md` for the roadmap and current state.
+**Status: playable bring-up.** The project has 100% statically generated game
+code, a headless validation host, a playable Win32 host, continuous audio, and
+an opt-in 342x224 widescreen presentation path. See `docs/BRINGUP.md` for the
+chronological bring-up record and `docs/WIDESCREEN.md` for the widescreen
+architecture, ported SuperZSNES findings, validation, and limitations.
 
 ## Why this game is a strong recomp candidate
 
@@ -40,6 +43,22 @@ Headerless *Donkey Kong Country* USA v1.0:
 The ROM must remain outside Git. No ROM bytes, extracted assets, or generated
 game code are committed.
 
+## Debugging and validation
+
+The widescreen port is developed from byte-exact, deterministic evidence—not
+screenshots alone. [`docs/WIDESCREEN_DEBUG_TOOLS.md`](docs/WIDESCREEN_DEBUG_TOOLS.md)
+defines the native debug-tool roadmap, ordered from per-frame decision traces
+and replayable snapshots through object-lifecycle analysis and whole-game
+level sweeps. [`docs/WIDESCREEN_HANDOFF.md`](docs/WIDESCREEN_HANDOFF.md)
+records the current evidence, hashes, open issues, and release gates.
+
+## Licensing and third-party code
+
+Project-authored host and tooling code is MIT licensed. The pinned
+`snesrecomp` framework has its own PolyForm Noncommercial license and
+third-party notices. DKC structural metadata retains its documented GPL-3
+disassembly provenance. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
 ## Generate the recompiled sources
 
 ```powershell
@@ -53,6 +72,25 @@ from the disassembly pipeline with:
 ```powershell
 python tools\ingest_dkc1_disasm.py --work "<disassembly>\Tools\IDA\work" --out recomp
 ```
+
+Generation automatically runs the fail-closed widescreen override pass. It
+adapts only source-visible culling, object activation, and direct-OAM packing;
+logical camera, collision, exits, boss arenas, and tile streaming remain the
+cartridge program.
+
+## Build and run
+
+With a Visual Studio developer environment available:
+
+```powershell
+.\build_host.bat
+.\build\dkc1_desktop.exe "C:\private\dkc1.sfc"
+```
+
+The desktop host enables widescreen by default. Set `DKC1_WIDESCREEN=0` for
+the exact 256x224 presentation path. The headless validator accepts a frame
+count and supports deterministic input playback and private frame/state
+captures; its environment variables are documented in `docs/BRINGUP.md`.
 
 ## Content boundary
 

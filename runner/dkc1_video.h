@@ -30,9 +30,38 @@ int Dkc1VideoWidth(void);
 int Dkc1VideoExtra(void);
 size_t Dkc1VideoPixelCount(void);
 
-/* Presentation-camera widescreen support. The recompiled game code stays
- * byte-for-byte stock (logical camera, spawn scanner, actor pool, clamps);
- * everything below is host-side rendering policy only. */
+/*
+ * Generated-code presentation adapters.  These deliberately key from the
+ * terrain-ready latch instead of the widescreen setting alone: fixed screens
+ * and unrecognized level layouts retain the cartridge's exact cull windows.
+ * The logical camera and collision/exit bounds are never changed.
+ */
+uint16_t Dkc1VideoExpandCullLeft(uint16_t native_margin);
+uint16_t Dkc1VideoExpandCullSpan(uint16_t native_span);
+uint16_t Dkc1VideoPromoteOamXHigh(uint16_t screen_x);
+void Dkc1VideoSetPresentationBias(int bias);
+int Dkc1VideoPresentationBias(void);
+
+/* Private vertical-rope renderer adapters.  BiasCullX is used only for the
+ * existing visibility comparisons; the original coordinate remains in the
+ * game's $76 scratch word and is still written to OAM.  PromoteOamSizeMask
+ * adds the adjacent X-high bit to the stock large-sprite mask when needed. */
+uint16_t Dkc1VideoBiasCullX(uint16_t screen_x);
+uint16_t Dkc1VideoPromoteOamSizeMask(uint16_t size_mask,
+                                    uint16_t screen_x);
+
+struct CpuState;
+/* Type-$05 groups mark their parent active even when the fixed actor pool
+ * prevented one or more children from allocating. Wider prefetch makes that
+ * stock one-shot failure reachable. When an active group is still inside the
+ * widened window, prepare the existing cartridge child loop to retry only
+ * its zero-bookmark children. */
+bool Dkc1VideoPrepareType5ChildRetry(struct CpuState *cpu);
+
+/* Presentation-camera widescreen support. Logical camera coordinates,
+ * collision, movement clamps, exits, boss bounds, and tile streaming stay
+ * stock. Generated presentation adapters widen visibility and placed-object
+ * activation only after the host has proven a supported gameplay layout. */
 
 /* Keep a reference to the verified ROM for level-map margin decoding. */
 void Dkc1VideoSetRom(const uint8_t *rom, size_t size);

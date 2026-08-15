@@ -68,18 +68,22 @@ the disassembly's own `RAM_Map_DKC1.asm`.
 
 ## 2026-08-15 -- presentation-camera widescreen
 
-Same architecture as DKC2Recomp, and deliberately aligned with the v2 design
-notes from the SNES-side widescreen effort: the recompiled game logic stays
-byte-for-byte stock (logical camera, spawn scanner, actor pool, clamps,
-exits); widescreen is host-only presentation.
+Same presentation architecture as DKC2Recomp, informed by the tested
+SuperZSNES ROM patch but deliberately avoiding its camera-bound strategy.
+Logical camera coordinates, collision, movement clamps, exits, boss arenas,
+and tile streaming stay stock. Generated adapters widen only visibility and
+placed-object activation after the host proves a supported gameplay layout.
 
 - `Dkc1VideoDecodeLevelTile` decodes DKC1's level maps straight from ROM
   (metatile formats from `$81:8705` horizontal / `$81:8DFA` vertical; flips
   in cell bits 14/15). Unlike DKC2 (WRAM maps), the source is static ROM, so
   prefill cannot race a decompressor.
 - Per-frame runtime calibration decodes the native viewport and requires
-  >=70% agreement with the live rolling tilemap before margins are prefilled;
-  otherwise margins fall back to WsShadow capture/history + blank tiles.
+  >=70% agreement with the live rolling tilemap before margins are prefilled.
+  A Mode-1/64-column register shape alone is not accepted. Unknown layouts,
+  logos, title screens, and transitions are centered with black sides. The
+  calibration latch has only a two-frame grace; it does not accumulate a
+  multi-second stale-layout hold during long gameplay sessions.
 - Terrain layer = the wide layer whose tilemap base matches the streamer
   base at `$7E1B13`; world keys unwrap PPU scroll against camera
   `$088B/$0895`. Non-terrain wide layer folds periodically (parallax).
@@ -87,15 +91,26 @@ exits); widescreen is host-only presentation.
   `PpuSetExtraSpaceCentered`.
 - `DKC1_WIDESCREEN=1` opts in the headless harness; the desktop host
   defaults ON (`DKC1_WIDESCREEN=0` reverts to 4:3).
-- **Validated in real gameplay**: scripted-input run entered Jungle Hijinxs
-  and ran right — margins carry correct level terrain, and sprites the game
-  emits with 9-bit OAM X (the DK barrel) already render inside the margins.
+- The post-generation override pass ports the proven SuperZSNES visibility
+  fixes: 18 left activation sites, 14 span sites, two right-prefetch sites,
+  common sprite culls, banana-private culls/OAM X-high, vertical-rope
+  culls/OAM X-high, and retry of missing type-$05 group children.
+- BG1/BG2 world layers widen independently; bounded BG3 may edge-repeat only
+  after gameplay calibration. This fixes Jungle Hijinxs' black sky margin.
+- **Validated in real gameplay:** deterministic scripted input enters Jungle
+  Hijinxs and runs right. At frame 7,600 the wide frame is calibrated and
+  coherent; a stock-width run retains its pre-adapter frame, WRAM, VRAM, OAM,
+  and audio hashes. A 14,000-frame wide run completes.
 
 Known issues / next:
-- Thin black strip at the far-left margin edge in-level (westmost columns
-  not filling; likely fine-scroll/west-extent off-by-one in the prefill or
-  the calibration world key) — investigate with WsShadowGetMarginStats.
-- Sprites still pop at the native cull edge (game-side display cull);
-  DKC2-style generated-code cull-widening overrides are the next layer —
-  safe here because activation/simulation timing stays stock.
-- Map screen widens nicely; audit vertical levels and non-jungle tilesets.
+- Wider placed-object activation can advance actor simulation relative to a
+  stock-width run. The type-$05 retry fixes the proven one-shot child loss,
+  but every level and object family still needs deterministic route coverage.
+- Fixed/unknown screens intentionally pillarbox until given a scene-specific,
+  oracle-tested extension. The Nintendo frame-600 partial Rare graphic also
+  appears in the 256x224 run and is not a widescreen regression.
+- Audit vertical levels, underwater stages, bosses, object-pool pressure, and
+  save-state restoration with the deterministic tooling used by the ROM hack.
+- The unresolved `$BE8179` runtime dispatch warning predates these adapters;
+  the current host skips that handler's effects and needs a separately proven
+  dispatch contract.
