@@ -388,3 +388,38 @@ First real evidence produced:
 Still open, deliberately left for the session owning dkc1_game.c:
 two-phase calibrate/commit restructure (issue 2) and hard identity
 invalidators (issue 3) — the trace now provides the evidence they need.
+
+## Validation pass (2026-08-15, later)
+
+- **Regression gate works end to end**: contracts/jungle-entry.json PASSES —
+  all expects hold, 3 repeats byte-identical at both checkpoints.
+- **Native baseline must be re-pinned**: the handoff's frame-7,600 native
+  hash table was captured while $BE8179 callbacks were still being skipped.
+  With the dispatch authorized, native runs are deterministic (two identical
+  runs) at NEW values: frame dc629702..., WRAM 8a108fd6..., audio fnv1a
+  5a54239ccb9cfcfe; CGRAM unchanged (2f6ce319...). This is a correctness fix
+  changing the oracle, not adapter leakage — but the wide-vs-native
+  inertness statement needs re-proving against the new baseline.
+- **Transition margins are clean**: level->(Kong swap)->continue route under
+  DKC1_WS_TRACE shows every centered frame's margins hashing to one constant
+  (black); zero raw fallbacks. A true gameplay->map/title capture still
+  needs a route that exhausts both Kongs (single-hit routes just swap to
+  Diddy).
+- **Two leads for the dkc1_game.c owner**: (1) WIDE<->CENTERED flapping at
+  level entry (frames ~7304-7331) — the calibration flip-flop issue 2
+  predicts; (2) the wide terrain world key unwraps to camX=$FFF0 (-16) on
+  the first widened entry frame — check Dkc1VideoUnwrapPpuScroll around the
+  zero boundary.
+- wide_persists_stock_culls (4 records, +14..20 frames each) still needs
+  the queued WRAM pass before any of them may be called benign.
+
+## Save states (status)
+
+Native full-machine snapshots exist at three layers: script directives
+`state_save`/`state_load` (both hosts), env anchors DKC1_SAVESTATE_INPUT /
+DKC1_SAVESTATE_OUTPUT / DKC1_SAVESTATE_SAVE_AT, and the F9 repro bundle's
+embedded anchor. Loading resets the widescreen shadow by design
+(loaded-state vs fresh-entry evidence discipline). Missing: interactive
+quick save/load hotkeys in the desktop window — F11/F12 are free; one
+small key-handler + main-loop addition once win32_host.c settles.
+SuperZSNES .szst states remain forensic inputs only; they cannot load here.
