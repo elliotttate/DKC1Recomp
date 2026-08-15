@@ -65,3 +65,37 @@ the disassembly's own `RAM_Map_DKC1.asm`.
   (DK + boombox on the treetops, Cranky's gramophone) renders correctly with
   continuous audio (3,276/3,600 audio-active frames). Mode transitions and
   camera movement look sane.
+
+## 2026-08-15 -- presentation-camera widescreen
+
+Same architecture as DKC2Recomp, and deliberately aligned with the v2 design
+notes from the SNES-side widescreen effort: the recompiled game logic stays
+byte-for-byte stock (logical camera, spawn scanner, actor pool, clamps,
+exits); widescreen is host-only presentation.
+
+- `Dkc1VideoDecodeLevelTile` decodes DKC1's level maps straight from ROM
+  (metatile formats from `$81:8705` horizontal / `$81:8DFA` vertical; flips
+  in cell bits 14/15). Unlike DKC2 (WRAM maps), the source is static ROM, so
+  prefill cannot race a decompressor.
+- Per-frame runtime calibration decodes the native viewport and requires
+  >=70% agreement with the live rolling tilemap before margins are prefilled;
+  otherwise margins fall back to WsShadow capture/history + blank tiles.
+- Terrain layer = the wide layer whose tilemap base matches the streamer
+  base at `$7E1B13`; world keys unwrap PPU scroll against camera
+  `$088B/$0895`. Non-terrain wide layer folds periodically (parallax).
+  Fixed screens (logos, title, map transitions) pillarbox via
+  `PpuSetExtraSpaceCentered`.
+- `DKC1_WIDESCREEN=1` opts in the headless harness; the desktop host
+  defaults ON (`DKC1_WIDESCREEN=0` reverts to 4:3).
+- **Validated in real gameplay**: scripted-input run entered Jungle Hijinxs
+  and ran right — margins carry correct level terrain, and sprites the game
+  emits with 9-bit OAM X (the DK barrel) already render inside the margins.
+
+Known issues / next:
+- Thin black strip at the far-left margin edge in-level (westmost columns
+  not filling; likely fine-scroll/west-extent off-by-one in the prefill or
+  the calibration world key) — investigate with WsShadowGetMarginStats.
+- Sprites still pop at the native cull edge (game-side display cull);
+  DKC2-style generated-code cull-widening overrides are the next layer —
+  safe here because activation/simulation timing stays stock.
+- Map screen widens nicely; audit vertical levels and non-jungle tilesets.

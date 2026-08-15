@@ -93,7 +93,10 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  Dkc1VideoSetWidescreen(false);
+  const char *widescreen_text = getenv("DKC1_WIDESCREEN");
+  Dkc1VideoSetWidescreen(
+      widescreen_text && *widescreen_text && *widescreen_text != '0');
+  Dkc1VideoSetRom(rom, rom_size);
   RtlRegisterGame(Dkc1GameInfo());
   if (!SnesInit(rom, (int)rom_size)) {
     fprintf(stderr, "snesrecomp rejected the verified ROM\n");
