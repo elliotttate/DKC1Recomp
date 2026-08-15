@@ -11,6 +11,19 @@
   disassembly's own `dw` tables.
 - `v2_sync_funcs_h.py` accepted all cfgs (1,276 declarations).
 
+### First generation result (native analyzer, 19.6s)
+
+```
+analysis: 1285 roots -> 1398 exact variants, 3433 edges
+analysis: 922 AOT-eligible, 476 LLE-only
+```
+
+LLE-only reason classes (from `program_manifest.json`; address-specific
+suffixes folded): 606 `unproven_call`, 462 `truncated_call_continuation`,
+456 `unproven_callee_exit`, 18 `brk`, 15 `structural_poison`. Most of the
+unproven-call volume is cascade from a smaller set of roots — raising AOT
+coverage means fixing bounds/dispatch at the leaves (the DKC2 pattern).
+
 ### Known open items
 
 - **6 unresolved dispatch sites** read pointer tables in WRAM
