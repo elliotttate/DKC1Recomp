@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/elliotttate/DKC1Recomp/blob/main/docs/schemas/dkc1-ws-frame-v1.schema.json",
+  "title": "DKC1Recomp per-frame widescreen decision trace",
+  "type": "object",
+  "required": [
+    "schema", "frame", "scene", "source", "camera", "ppu",
+    "calibration", "decision", "world", "margin_tiles", "shadow_delta",
+    "hash"
+  ],
+  "properties": {
+    "schema": {"const": "dkc1.ws.frame.v1"},
+    "frame": {"type": "integer", "minimum": 0},
+    "scene": {
+      "type": "object",
+      "required": ["mode", "entrance", "fade"]
+    },
+    "source": {
+      "type": "object",
+      "required": ["bank", "map", "metatiles", "stream_vram"]
+    },
+    "camera": {
+      "type": "object",
+      "required": ["x", "y", "lower", "upper", "presentation_bias"]
+    },
+    "ppu": {
+      "type": "object",
+      "required": [
+        "mode", "bgmode", "inidisp", "main", "sub", "bgsc", "h", "v",
+        "wide_mask", "repeat_mask", "terrain_layer"
+      ]
+    },
+    "calibration": {
+      "type": "object",
+      "required": ["horizontal", "vertical", "selected", "grace"]
+    },
+    "decision": {
+      "type": "object",
+      "required": [
+        "reset", "cold_start", "source_reset", "shadow_frame", "prefill",
+        "edge_extension", "centered_fallback"
+      ]
+    },
+    "world": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "margin_tiles": {"type": "integer", "minimum": 0},
+    "shadow_delta": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "hash": {
+      "type": "object",
+      "required": [
+        "left", "center", "right", "bg1_left", "bg1_right", "bg2_left",
+        "bg2_right", "vram", "ppu_oam", "wram_oam"
+      ],
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{16}$"}
+    }
+  },
+  "additionalProperties": false
+}

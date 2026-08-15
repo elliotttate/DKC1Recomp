@@ -1,5 +1,6 @@
 #include "dkc1_game.h"
 #include "dkc1_video.h"
+#include "dkc1_ws_trace.h"
 
 #include "common_cpu_infra.h"
 #include "common_rtl.h"
@@ -171,6 +172,7 @@ static uint32_t s_ws_world_x[2];
 static uint32_t s_ws_world_y[2];
 static Dkc1LevelLayout s_ws_layout;
 static int s_ws_layout_grace;  /* bounded transient calibration misses */
+static bool s_ws_trace_reset_pending;
 
 static uint64_t Dkc1LevelSourceSignature(void) {
   const uint64_t bank = g_ram[0x00d5];
@@ -181,6 +183,8 @@ static uint64_t Dkc1LevelSourceSignature(void) {
 }
 
 static void Dkc1ResetWidescreenShadow(void) {
+  const bool had_state = s_ws_shadow_active || s_ws_source_valid ||
+                         s_ws_layout != kDkc1LayoutUnknown;
   if (s_ws_shadow_active)
     WsShadowReset();
   s_ws_shadow_active = false;
@@ -190,6 +194,8 @@ static void Dkc1ResetWidescreenShadow(void) {
   s_ws_layout_grace = 0;
   Dkc1VideoSetPresentationBias(0);
   Dkc1VideoSetTerrainReady(false);
+  if (had_state)
+    s_ws_trace_reset_pending = true;
 }
 
 /* Clamp only the host presentation camera near level ends. A symmetric wide
@@ -252,7 +258,8 @@ static int Dkc1CalibrateLayout(Dkc1LevelLayout layout, uint16_t ppu_map_base,
 }
 
 static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
-                                        int presentation_bias) {
+                                        int presentation_bias,
+                                        Dkc1WsTraceFrame *trace) {
   const uint32_t camera_x = Dkc1ReadWram16(0x088b);
   const uint32_t camera_y = Dkc1ReadWram16(0x0895);
   const uint64_t source_signature = Dkc1LevelSourceSignature();
@@ -264,11 +271,15 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       Dkc1VideoTerrainLayer(layer_mask, g_ppu->bgXsc, stream_vram);
 
   if (!s_ws_shadow_active) {
+    if (trace)
+      trace->cold_start = true;
     WsShadowReset();
     memset(s_ws_origin_valid, 0, sizeof s_ws_origin_valid);
     s_ws_shadow_active = true;
   }
   if (!s_ws_source_valid || source_signature != s_ws_source_signature) {
+    if (trace)
+      trace->source_reset = true;
     WsShadowReset();
     memset(s_ws_origin_valid, 0, sizeof s_ws_origin_valid);
     s_ws_source_signature = source_signature;
@@ -301,6 +312,12 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     }
     s_ws_origin_valid[layer] = true;
 
+    if (trace) {
+      trace->world_valid[layer] = true;
+      trace->world_x[layer] = s_ws_world_x[layer];
+      trace->world_y[layer] = s_ws_world_y[layer];
+    }
+
     WsShadowSetWorld(layer, s_ws_world_x[layer], s_ws_world_y[layer]);
     WsShadowSetScroll(layer,
                       (uint16_t)(g_ppu->hScroll[layer] + presentation_bias),
@@ -326,6 +343,10 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
   }
 
   WsShadowFrame(g_ppu);
+  if (trace) {
+    trace->shadow_frame = true;
+    trace->terrain_layer = terrain_layer;
+  }
 
   if (terrain_layer < 0 || PPU_bigTiles(g_ppu, terrain_layer))
     return false;
@@ -346,6 +367,11 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     int matches = Dkc1CalibrateLayout(
         (Dkc1LevelLayout)candidate, ppu_map_base, map_bank, map_base,
         metatile_base, wx, wy, &decodable);
+    if (trace) {
+      const int index = candidate - kDkc1LayoutHorizontal;
+      trace->calibration_matches[index] = matches;
+      trace->calibration_decodable[index] = decodable;
+    }
     if (matches > best_matches) {
       best_matches = matches;
       best_decodable = decodable;
@@ -380,6 +406,10 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
    * a nonzero scroll phase could sample the unseeded seventh column as the
    * thin black strip at the far-left edge. */
   const int margin_tiles = (Dkc1VideoExtra() + 7) / 8 + 1;
+  if (trace) {
+    trace->prefill = true;
+    trace->margin_tiles = margin_tiles;
+  }
   const int visible_rows = (kDkc1VideoHeight >> 3) + 2;
   for (int side = 0; side < 2; side++) {
     for (int i = 0; i < margin_tiles; i++) {
@@ -408,6 +438,15 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
 void Dkc1DrawPpuFrame(void) {
   SimpleHdma channels[8];
   bool active[8] = {false};
+  Dkc1WsTraceFrame trace;
+  memset(&trace, 0, sizeof trace);
+  trace.frame = snes_frame_counter;
+  trace.terrain_layer = -1;
+  const bool trace_enabled = Dkc1WsTraceEnabled();
+  if (trace_enabled) {
+    WsShadowGetMarginStats(0, &trace.shadow_before[0]);
+    WsShadowGetMarginStats(1, &trace.shadow_before[1]);
+  }
 
   /* Widescreen is host-only presentation policy, reapplied every frame. */
   uint8_t wide_layer_mask =
@@ -422,9 +461,16 @@ void Dkc1DrawPpuFrame(void) {
    * level layout. This prevents stale gameplay/logo data in the margins. */
   const int presentation_bias =
       wide_layer_mask != 0 ? Dkc1WidescreenPresentationBias() : 0;
+  trace.wide_layer_mask = wide_layer_mask;
+  trace.presentation_bias = presentation_bias;
   const bool extend_world =
       wide_layer_mask != 0 &&
-      Dkc1PrepareWidescreenShadow(wide_layer_mask, presentation_bias);
+      Dkc1PrepareWidescreenShadow(wide_layer_mask, presentation_bias,
+                                  trace_enabled ? &trace : NULL);
+  if (trace_enabled) {
+    trace.selected_layout = s_ws_layout;
+    trace.layout_grace = s_ws_layout_grace;
+  }
   if (extend_world) {
     Dkc1VideoSetPresentationBias(presentation_bias);
     PpuSetExtraSpace(g_ppu, (uint8_t)Dkc1VideoExtra());
@@ -446,10 +492,14 @@ void Dkc1DrawPpuFrame(void) {
      * copy of the level map. Rendering it through the world shadow produced
      * 100% margin misses and transparent cutoffs. Match DKC2's proven policy:
      * repeat every enabled non-terrain BG from its authentic native scanline. */
-    PpuSetWidescreenLayerRepeat(
-        g_ppu, (uint8_t)(enabled & (uint8_t)~terrain_bit));
+    const uint8_t repeat_mask =
+        (uint8_t)(enabled & (uint8_t)~terrain_bit);
+    PpuSetWidescreenLayerRepeat(g_ppu, repeat_mask);
+    trace.repeat_layer_mask = repeat_mask;
+    trace.edge_extension = true;
     Dkc1VideoSetTerrainReady(true);
   } else if (Dkc1VideoIsWidescreen()) {
+    trace.centered_fallback = true;
     Dkc1ResetWidescreenShadow();
     /* Pillarbox fixed screens (logos, map, title): clear the host row and
      * center the authentic 256 columns. */
@@ -493,6 +543,14 @@ void Dkc1DrawPpuFrame(void) {
    * internal OAM port from OAMADD before the next frame's OAM DMA. */
   (void)ppu_checkOverscan(g_ppu);
   ppu_handleVblank(g_ppu);
+
+  if (trace_enabled) {
+    trace.reset = s_ws_trace_reset_pending;
+    s_ws_trace_reset_pending = false;
+    WsShadowGetMarginStats(0, &trace.shadow_after[0]);
+    WsShadowGetMarginStats(1, &trace.shadow_after[1]);
+    Dkc1WsTraceEmit(&trace);
+  }
 }
 
 uint32_t Dkc1ResumePc(void) {

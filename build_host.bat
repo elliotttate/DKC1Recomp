@@ -24,6 +24,7 @@ cl /nologo /c /MP /W0 /O1 %DEFS% %INCS% ^
   %SR%\snes\superfx.c %SR%\snes\interp816.c %SR%\snes\tier2_capture.c ^
   %SR%\snes\interp_bridge.c %SR%\snes\cx4.c ^
   ..\..\runner\dkc1_game.c ..\..\runner\dkc1_video.c ^
+  ..\..\runner\dkc1_ws_trace.c ^
   ..\..\runner\headless_host.c ..\..\runner\input_playback.c ^
   ..\..\runner\verified_rom.c ^
   ..\..\generated\snesrecomp\*.c

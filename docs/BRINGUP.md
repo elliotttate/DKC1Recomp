@@ -114,3 +114,13 @@ Known issues / next:
 - The unresolved `$BE8179` runtime dispatch warning predates these adapters;
   the current host skips that handler's effects and needs a separately proven
   dispatch contract.
+
+### Native widescreen decision trace
+
+`DKC1_WS_TRACE` enables a default-off JSONL record at the exact presentation
+boundary. Each frame records scene/source identity, PPU registers, both layout
+scores, the selected calibration/grace state, shadow reset/prefill/fallback
+decisions, world keys, margin-stat deltas, region hashes, and raw VRAM plus
+both OAM-copy hashes. This is the causal substrate for the planned provenance
+overlay, first-divergence locator, and lifecycle tools. See
+`docs/WIDESCREEN_DEBUG_TOOLS.md` for usage and schema details.

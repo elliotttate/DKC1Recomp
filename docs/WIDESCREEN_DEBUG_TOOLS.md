@@ -16,6 +16,26 @@ gates, bridge servers) is simply unnecessary here — what transfers is the
 *method*: atomic evidence, first-divergence search, lifecycle semantics,
 non-conclusion vocabulary, and 3x byte-identical repeat gates.
 
+## Implementation status
+
+- **Tool 1 is implemented.** Set `DKC1_WS_TRACE=1` for
+  `dkc1_ws_trace.jsonl`, or set it to an explicit output path. The trace is
+  default-off and performs no file I/O or frame hashing while disabled.
+  Schema: `docs/schemas/dkc1-ws-frame-v1.schema.json`.
+- `tools/analyze_ws_trace.py` summarizes decision counts, unsafe raw-fallback
+  frames, prefill refreshes, and the exact frames where margin hashes change
+  while VRAM, PPU OAM, and WRAM OAM stay identical.
+
+Example:
+
+```powershell
+$env:DKC1_WIDESCREEN = '1'
+$env:DKC1_WS_TRACE = "$env:TEMP\dkc1-ws.jsonl"
+.\build\dkc1_snesrecomp_headless.exe C:\private\dkc1.sfc 7600
+python tools\analyze_ws_trace.py $env:TEMP\dkc1-ws.jsonl `
+  --json-out $env:TEMP\dkc1-ws-summary.json
+```
+
 Cross-cutting rules adopted from the emulator worklog:
 
 - every tool is default-off and provably inert when off;
@@ -37,6 +57,7 @@ Cross-cutting rules adopted from the emulator worklog:
 ## Tier 0 — substrate (build first; everything else consumes these)
 
 ### 1. Per-frame widescreen decision trace (`DKC1_WS_TRACE`)
+**Status: implemented (schema v1).**
 The record the handoff already specifies, as default-off JSONL from the
 headless host, one object per frame: host+SNES frame; mode/entrance/fade;
 source-signature fields (map bank/base, metatile base, stream VRAM base);
@@ -177,8 +198,54 @@ targets seen at runtime, aggregated into proposed `indirect_dispatch`
 cfg contracts. Closes open issue 7 with evidence instead of guesswork, and
 generalizes to any future dispatch gap. **Cost:** ~half a day.
 
+## Additional tools worth adding
+
+These four are recomp-specific opportunities that were much harder to build
+reliably through the emulator boundary:
+
+### 13. CPU control-flow and stack integrity sentinel
+
+Validate every RTS/RTL/RTI destination against the imported instruction map,
+record the last 256 calls/returns, and stop on the *first* invalid stack frame.
+This turns an eventual black screen into the exact producer instruction. It
+would have caught the type-$05 retry's incorrect 16-bit push at the first bad
+PLA rather than after execution returned into `$BD:FE01`. The downside is hot
+CPU instrumentation, so it must be diagnostic-only and should use a compact
+address bitmap rather than symbol lookup per instruction.
+
+### 14. Tile/OAM boundary metamorphic fuzzer
+
+Replay a deterministic frame while sweeping only host presentation width,
+camera bias, and fine-scroll phase across `-1/0/+1`, 7/8, 15/16, 255/256,
+and the two viewport endpoints. Gameplay WRAM must remain identical; center
+pixels must remain the native oracle; only newly exposed margins may change.
+This systematically finds the off-by-one guard-column and 9-bit OAM mistakes
+that ordinary play reaches rarely. It cannot validate authored object timing,
+so it supplements rather than replaces route tests.
+
+### 15. Render/interaction correspondence oracle
+
+For every visible object matched by source record and world position, compare
+its rendered OAM bounds with conservative collision/pickup bounds and report
+screen-space disagreement. This directly targets the historic “banana looks
+right but pickup remains at the stock location” class. Collision formats vary
+by actor family, so the tool must report `unsupported` instead of guessing
+when a semantic adapter is absent.
+
+### 16. Transition-state contamination bisector
+
+At every source-signature, PPU-mode, or terrain-ready transition, retain the
+last good and first bad trace records plus raw VRAM/OAM/shadow snapshots. Then
+binary-search which reset/prefill/write first made a margin cell differ from
+fresh-entry output. This is the quickest path for title/bonus/map transitions
+that preserve stale side art. It depends on tools 1, 2, and 6 and should not be
+built as a separate capture format—the bundle must reference their hashes.
+
 ## Suggested order against the current open issues
 
 1 → 5 → 6 (attack the margin nondeterminism at frame 7,600 with evidence)
 → 3 → 4 (classify the wide-vs-native WRAM divergence and early activation)
 → 2 → 8 (make the object-fix routes provable) → 12 → 9 → 10 → 11.
+
+Add tool 13 beside 12, tool 14 after the region-aware differ, tool 15 after
+the lifecycle/OAM pair, and tool 16 once route snapshots and raw planes exist.
