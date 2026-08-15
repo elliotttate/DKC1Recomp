@@ -47,6 +47,8 @@ static int s_script_loaded;
 static int s_script_failed;
 static int s_route_finished;
 static int s_export_requested;
+static int s_quicksave_requested;
+static int s_quickload_requested;
 static long s_host_frame;
 static uint32_t s_last_input;
 static char s_host_status[512] = "manual play";
@@ -135,6 +137,7 @@ static void PresentFrame(HDC dc) {
            "F3 BG1  F4 BG2  F5 BG3  F6 OBJ\r\n"
            "F7 pause/resume   F8 single-step\r\n"
            "F9 export rolling repro bundle\r\n"
+           "F11 quick save   F12 quick load\r\n"
            "Esc quit\r\n"
            "\r\n"
            "The side panel is host-only and is not\r\n"
@@ -206,6 +209,14 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         s_export_requested = 1;
         snprintf(s_host_status, sizeof s_host_status,
                  "repro bundle export requested");
+      } else if (wp == VK_F11) {
+        s_quicksave_requested = 1;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "quick save requested");
+      } else if (wp == VK_F12) {
+        s_quickload_requested = 1;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "quick load requested");
       }
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
@@ -453,6 +464,26 @@ int main(int argc, char **argv) {
       else
         snprintf(s_host_status, sizeof s_host_status,
                  "repro export failed: %.460s", error);
+      UpdateDebugTitle();
+    }
+
+    /* Quick save/load: native full-machine snapshots, handled at the frame
+     * boundary like script state ops. Loading resets the widescreen shadow
+     * (loaded-state evidence discipline); margins rebuild within a frame. */
+    if (s_quicksave_requested) {
+      s_quicksave_requested = 0;
+      snprintf(s_host_status, sizeof s_host_status,
+               RtlSaveSnapshot("quicksave.state")
+                   ? "quick save -> quicksave.state"
+                   : "quick save FAILED");
+      UpdateDebugTitle();
+    }
+    if (s_quickload_requested) {
+      s_quickload_requested = 0;
+      snprintf(s_host_status, sizeof s_host_status,
+               RtlLoadSnapshot("quicksave.state")
+                   ? "quick load <- quicksave.state"
+                   : "quick load FAILED (no quicksave.state?)");
       UpdateDebugTitle();
     }
 
