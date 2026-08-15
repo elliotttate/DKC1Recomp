@@ -434,3 +434,36 @@ embedded anchor. Loading resets the widescreen shadow by design
 quick save/load hotkeys in the desktop window — F11/F12 are free; one
 small key-handler + main-loop addition once win32_host.c settles.
 SuperZSNES .szst states remain forensic inputs only; they cannot load here.
+
+## Follow-through pass (2026-08-15, latest)
+
+- **Persists records classified from raw WRAM** (tools/analyze_persists.py):
+  all three authored wide_persists_stock_culls records grade
+  release_delayed_by_wider_window -- constant state/anim across every
+  extension frame, drifting off-screen left at walk speed, freed at the
+  widened despawn threshold (the 14-20 extra frames equal the extra ~56px
+  at ~3px/frame). The fourth was a source-0 (non-authored backlink)
+  alignment artifact; the auditor now refuses to align source <= 0.
+- **Adapter inertness re-proven against the new baseline**: a generated
+  tree built WITHOUT apply_dkc1_widescreen_overrides.py
+  (build_host_noadapt.bat -> dkc1_headless_noadapt.exe) produces
+  byte-identical native frame/WRAM/VRAM/OAM hashes and audio FNV to the
+  adapters-applied build at frame 7,600. The re-pinned baseline is backed
+  by a real no-adapter oracle, not just determinism.
+- **$BE8179 contract extended to 15 targets** ($BE993E/$BE9945/$BE994C
+  observed via a temporary force_lle pass on a contact-heavy route);
+  2,602 AOT variants, zero unresolved-abandon.
+- **F11/F12 quick save/load** added to the desktop host (native snapshots
+  to quicksave.state beside the exe; loading intentionally resets the
+  widescreen shadow so presentation state recalibrates).
+- **NEW LEAD -- contact damage does not land in the current build, in BOTH
+  native and wide modes.** Deterministic repro: recipes/route_death.dks
+  walks DK into the first Jungle Hijinxs Gnawty and stands in its patrol
+  path; DK/Diddy overlap it for thousands of frames unharmed, identically
+  at 4:3 and 342px, and identically with the callback dispatch executing
+  via forced LLE -- so it is NOT a widescreen or dispatch-contract defect.
+  Suspect surface: player-sprite collision path in the recomp runtime (or
+  an authentic-behavior misread -- verify the same stand-still against
+  real-hardware/emulator ground truth first). Evidence:
+  build/death_final.png (wide), build/death_native.png (native),
+  ws_death.jsonl.

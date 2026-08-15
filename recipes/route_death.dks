@@ -1,0 +1,15 @@
+# Two-Kong death: gameplay -> death -> map transition capture
+wait 0032 == 0001 timeout 600
+0 * 5100
+pulse 8 6 120 003e == 00eb timeout 6000
+pulse 8 6 120 003e == 00ec timeout 2000
+pulse 8 6 120 003e == 0016 timeout 2000
+0 * 1500
+pulse 8 8 150 0028 <= 0008 timeout 4000
+wait 1b25 >= 0100 timeout 600
+wait 088b <= 0100 timeout 600
+checkpoint level_entry
+82 * 380
+0 * 4200
+checkpoint after_death
+0 * 60
