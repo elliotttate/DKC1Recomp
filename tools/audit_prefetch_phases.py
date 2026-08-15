@@ -11,8 +11,8 @@ report compares, at the frame the STOCK run first allocates it:
 
   - whether the wide run had already allocated it (prefetch), and how early;
   - identity, position, motion, state, and animation of the wide actor at
-    that exact stock-allocation frame (from the nearest wide keyframe or
-    transition at/before the frame);
+    that exact stock-allocation frame (requires captures made with
+    DKC1_LIFECYCLE_SAMPLE_EVERY_FRAME=1);
   - the honest verdict vocabulary from the SuperZSNES auditor:
       matched                     same episode timing, no differences
       harmless_visual_prefetch    early alloc, but state matches at stock t0
@@ -23,6 +23,8 @@ report compares, at the frame the STOCK run first allocates it:
       indeterminate_without_stock_allocation
                                   wide allocated, stock never did (within
                                   the compared window)
+      prefetch_needs_exact_sample transition-only evidence cannot prove the
+                                  actor state at stock allocation time
 
 For byte-exact field comparison beyond the trace fields, re-run the wide
 route with DKC1_WRAM_DUMP around the reported frames and inspect the actor
@@ -69,6 +71,14 @@ class Episode:
                 break
         return best
 
+    def state_at_exact(self, frame: int) -> dict | None:
+        for state in reversed(self.states):
+            if state["frame"] == frame:
+                return state
+            if state["frame"] < frame:
+                break
+        return None
+
 
 def build_episodes(events: list[dict]) -> dict[int, list[Episode]]:
     open_by_index: dict[int, Episode] = {}
@@ -91,6 +101,11 @@ def build_episodes(events: list[dict]) -> dict[int, list[Episode]]:
             index = event.get("actor_index", event.get("slot"))
             episode = open_by_index.get(index)
             if episode is not None:
+                episode.states.append(event)
+        elif kind == "actor_sample":
+            index = event.get("actor_index")
+            episode = open_by_index.get(index)
+            if episode is not None and event.get("source") == episode.source:
                 episode.states.append(event)
         elif kind in ("actor_free", "slot_free"):
             index = event.get("actor_index", event.get("slot"))
@@ -148,15 +163,16 @@ def main() -> int:
                 finding["stock_start"] = stock_ep.start
                 finding["wide_start"] = wide_ep.start
                 finding["wide_lead_frames"] = lead
-                wide_state = wide_ep.state_at(stock_ep.start)
-                differences = compare_states(stock_ep.alloc,
-                                             wide_state or wide_ep.alloc)
+                wide_state = wide_ep.state_at_exact(stock_ep.start)
+                differences = (compare_states(stock_ep.alloc, wide_state)
+                               if wide_state is not None else None)
                 # release/persistence comparison
                 stock_end = stock_ep.end
                 wide_end = wide_ep.end
                 persists = (stock_end is not None and
                             (wide_end is None or wide_end > stock_end + 2))
-                if lead == 0 and not differences and not persists:
+                if lead == 0 and not compare_states(
+                        stock_ep.alloc, wide_ep.alloc) and not persists:
                     finding["verdict"] = "matched"
                 elif persists:
                     finding["verdict"] = "wide_persists_stock_culls"
@@ -164,21 +180,26 @@ def main() -> int:
                     finding["stock_end"] = stock_end
                     finding["wide_end"] = wide_end
                     needs_wram_pass.add(stock_end or stock_ep.start)
+                elif lead > 0 and wide_state is None:
+                    finding["verdict"] = "prefetch_needs_exact_sample"
+                    finding["disposition"] = "indeterminate"
+                    needs_wram_pass.add(stock_ep.start)
                 elif lead > 0 and not differences:
                     finding["verdict"] = "harmless_visual_prefetch"
                 elif lead > 0:
                     finding["verdict"] = "behavior_phase_advancement"
                     finding["differences_at_stock_alloc"] = differences
                     needs_wram_pass.add(stock_ep.start)
-                elif differences:
+                elif lead == 0:
+                    differences = compare_states(stock_ep.alloc,
+                                                 wide_ep.alloc)
                     finding["verdict"] = "behavior_phase_difference"
                     finding["differences_at_stock_alloc"] = differences
                     needs_wram_pass.add(stock_ep.start)
                 else:
-                    finding["verdict"] = "matched_late" if lead < 0 \
-                        else "matched"
-                    if lead < 0:
-                        needs_wram_pass.add(stock_ep.start)
+                    finding["verdict"] = "wide_allocates_late"
+                    finding["disposition"] = "indeterminate"
+                    needs_wram_pass.add(stock_ep.start)
             findings.append(finding)
 
     verdicts = defaultdict(int)

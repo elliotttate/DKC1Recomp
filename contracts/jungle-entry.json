@@ -1,0 +1,21 @@
+{
+  "name": "jungle-entry",
+  "script": "../recipes/route_jungle.dks",
+  "frames": 16000,
+  "widescreen": true,
+  "repeats": 3,
+  "checkpoints": {
+    "level_entry": {
+      "expect": [
+        {"addr": "0x003E", "op": "==", "value": "0x0016"},
+        {"addr": "0x1B25", "op": ">=", "value": "0x0100"},
+        {"addr": "0x088B", "op": "<=", "value": "0x0100"}
+      ]
+    },
+    "camera_0200": {
+      "expect": [
+        {"addr": "0x088B", "op": ">=", "value": "0x0200"}
+      ]
+    }
+  }
+}

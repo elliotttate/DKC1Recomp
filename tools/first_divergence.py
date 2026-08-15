@@ -113,24 +113,30 @@ def load_hash_log(path: Path) -> list[tuple[int, str]]:
 
 
 def load_wram_frames(prefix: Path) -> dict[int, bytes]:
+    """Read wram_dump.c output: <raw>.bin plus <raw>.bin.jsonl whose frame
+    rows carry relative_frame, offset, length, and sha256 (first row is a
+    manifest)."""
     frames: dict[int, bytes] = {}
-    index_path = prefix.with_suffix(".jsonl")
     raw_path = prefix.with_suffix(".bin")
+    index_path = Path(str(raw_path) + ".jsonl")
     if not index_path.exists() or not raw_path.exists():
         return frames
     raw = raw_path.read_bytes()
-    offset = 0
     for line in index_path.read_text().splitlines():
         record = json.loads(line)
-        frame = record.get("frame") or record.get("relative_frame")
-        payload = raw[offset:offset + WRAM_SIZE]
-        if len(payload) == WRAM_SIZE:
-            frames[int(frame)] = payload
-            digest = record.get("sha256")
-            if digest and hashlib.sha256(payload).hexdigest() != digest:
-                raise RuntimeError(
-                    f"wram dump index/sha mismatch at frame {frame}")
-        offset += WRAM_SIZE
+        if record.get("type") != "frame":
+            continue
+        frame = record.get("relative_frame", record.get("frame"))
+        offset = int(record.get("offset", 0))
+        length = int(record.get("length", WRAM_SIZE))
+        payload = raw[offset:offset + length]
+        if frame is None or len(payload) != length:
+            continue
+        digest = record.get("sha256")
+        if digest and hashlib.sha256(payload).hexdigest() != digest:
+            raise RuntimeError(
+                f"wram dump index/sha mismatch at frame {frame}")
+        frames[int(frame)] = payload
     return frames
 
 
@@ -261,8 +267,8 @@ def main() -> int:
     dumps = {}
     for mode, wide in (("stock", False), ("wide", True)):
         prefix = (work / f"{mode}_wram").resolve()
-        for suffix in (".bin", ".jsonl"):
-            stale = prefix.with_suffix(suffix)
+        for stale in (prefix.with_suffix(".bin"),
+                      Path(str(prefix.with_suffix(".bin")) + ".jsonl")):
             if stale.exists():
                 stale.unlink()
         run_headless(

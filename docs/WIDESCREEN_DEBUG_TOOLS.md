@@ -330,3 +330,43 @@ built as a separate capture format—the bundle must reference their hashes.
 
 Add tool 13 beside 12, tool 14 after the region-aware differ, tool 15 after
 the lifecycle/OAM pair, and tool 16 once route snapshots and raw planes exist.
+
+## Session results (2026-08-15, tool build-out)
+
+Substrate and tools landed (commits b73d599, f14f769, a6376f7+):
+script engine with wait/hold/pulse predicates and checkpoint/state
+directives; evidence taps (WRAM hash log, input recorder, OAM dual log,
+transition-only lifecycle trace with exact-frame sampling); wram_dump
+ranged raw captures; first-divergence locator; OAM inspector; prefetch
+phase auditor; regression contract runner (3x byte-identical gate);
+macro minimizer; timeline exporter; level sweep grader; dispatch resolver.
+Isolated tool build: build_host_tools.bat -> dkc1_headless_tools.exe.
+
+First real evidence produced:
+
+- **$BE8179 resolved** (open issue 7): the animation-callback
+  `JML [$007A]` behind `PHK/PEA $810D`. force_lle + DKC1_TRACE_PC harvested
+  12 targets; authorized as a ptrcall contract in bankbe.cfg. Routes now
+  complete with zero unresolved-abandon reports (2,599 AOT variants).
+  Re-harvest on pointer_match misses; coverage grows with routes.
+- **First stock-vs-wide divergence located and classified** (open issue 4):
+  frame 7332 is byte-identical end to end; frame 7333 (first level frame)
+  differs in 31 bytes — widened scanner window right ($0140 -> $0196),
+  scanner record index 6 -> 8, two margin actors allocated (records 6/7,
+  one at x=$0190 inside the right margin), bookmarks set. Divergence is
+  entirely activation-window driven at entry; nothing outside the
+  expected adapters fired earlier.
+- **Prefetch audit over the Jungle route**: 59 episodes — 14 matched,
+  34 indeterminate_without_stock_allocation (short route; margins activate
+  records stock never reaches), 4 wide_persists_stock_culls
+  (indeterminate — queue for the WRAM pass at the reported frames),
+  1 behavior_phase_difference, 6 needing exact-frame samples.
+- **WS trace step-0 capture** on the predicate route: zero raw fallbacks,
+  zero margin-change-while-static events, zero prefill refreshes across
+  7,645 frames. The margin-nondeterminism repro (issue 1) still needs the
+  original fixed-frame 7,500-7,599 route and a gameplay-to-title
+  transition capture under this trace.
+
+Still open, deliberately left for the session owning dkc1_game.c:
+two-phase calibrate/commit restructure (issue 2) and hard identity
+invalidators (issue 3) — the trace now provides the evidence they need.
