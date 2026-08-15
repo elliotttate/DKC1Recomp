@@ -92,6 +92,25 @@ the exact 256x224 presentation path. The headless validator accepts a frame
 count and supports deterministic input playback and private frame/state
 captures; its environment variables are documented in `docs/BRINGUP.md`.
 
+For visible widescreen debugging, `F7` pauses or resumes, `F8` advances one
+frame while paused, and `F9` exports the rolling repro history when the flight
+recorder is armed:
+
+```powershell
+$env:DKC1_FLIGHT_RECORDER = '1'
+$env:DKC1_FLIGHT_RECORDER_DIR = "$env:TEMP\dkc1-repros"
+.\build\dkc1_desktop.exe "C:\private\dkc1.sfc"
+```
+
+The recorder keeps roughly one minute of input and periodic native snapshot
+anchors in memory; it writes nothing until F9. Validate and deterministically
+replay an exported bundle with:
+
+```powershell
+python tools\verify_flight_bundle.py "<bundle>" `
+  --runner build\dkc1_snesrecomp_headless.exe --rom "C:\private\dkc1.sfc"
+```
+
 ## Content boundary
 
 - Never commit ROMs, saves, extracted assets, or generated game binaries.

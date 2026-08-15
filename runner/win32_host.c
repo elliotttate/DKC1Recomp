@@ -10,6 +10,7 @@
  */
 #include "dkc1_game.h"
 #include "dkc1_debug_dump.h"
+#include "dkc1_flight_recorder.h"
 #include "dkc1_script.h"
 #include "dkc1_video.h"
 #include "input_playback.h"
@@ -45,6 +46,7 @@ static int s_step_once;
 static int s_script_loaded;
 static int s_script_failed;
 static int s_route_finished;
+static int s_export_requested;
 static long s_host_frame;
 static uint32_t s_last_input;
 static char s_host_status[512] = "manual play";
@@ -127,10 +129,12 @@ static void PresentFrame(HDC dc) {
            "WS trace: %s\r\n"
            "OAM: %s   lifecycle: %s\r\n"
            "WRAM dump: %s   input record: %s\r\n"
+           "Flight recorder: %s\r\n"
            "\r\n"
            "F1 provenance   F2 composite\r\n"
            "F3 BG1  F4 BG2  F5 BG3  F6 OBJ\r\n"
            "F7 pause/resume   F8 single-step\r\n"
+           "F9 export rolling repro bundle\r\n"
            "Esc quit\r\n"
            "\r\n"
            "The side panel is host-only and is not\r\n"
@@ -149,7 +153,8 @@ static void PresentFrame(HDC dc) {
            EnvironmentEnabled("DKC1_OAM_LOG") ? "ON" : "off",
            EnvironmentEnabled("DKC1_LIFECYCLE_TRACE") ? "ON" : "off",
            EnvironmentEnabled("DKC1_WRAM_DUMP") ? "ON" : "off",
-           EnvironmentEnabled("DKC1_INPUT_RECORD") ? "ON" : "off");
+           EnvironmentEnabled("DKC1_INPUT_RECORD") ? "ON" : "off",
+           Dkc1FlightRecorderEnabled() ? "ARMED (60 seconds)" : "off");
   RECT text_rect = panel;
   text_rect.left += 12;
   text_rect.top += 12;
@@ -197,6 +202,10 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         s_step_once = 1;
         snprintf(s_host_status, sizeof s_host_status,
                  "single frame requested");
+      } else if (wp == VK_F9) {
+        s_export_requested = 1;
+        snprintf(s_host_status, sizeof s_host_status,
+                 "repro bundle export requested");
       }
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
@@ -369,6 +378,21 @@ int main(int argc, char **argv) {
       return 20;
     }
   }
+  {
+    char error[256];
+    int armed = Dkc1FlightRecorderInitialize(error, sizeof error);
+    if (armed < 0) {
+      char message[512];
+      snprintf(message, sizeof message,
+               "Flight recorder setup failed:\n%s", error);
+      MessageBoxA(NULL, message, "DKC1Recomp", MB_ICONERROR);
+      (void)Dkc1WramDumpClose(&s_wram_dump, NULL, 0);
+      Dkc1ScriptFree();
+      Dkc1InputPlaybackFree(&s_input_playback);
+      free(rom);
+      return 20;
+    }
+  }
 
   s_width = Dkc1VideoWidth();
   s_height = kDkc1VideoHeight;
@@ -418,6 +442,19 @@ int main(int argc, char **argv) {
       DispatchMessage(&msg);
     }
     if (!s_running) break;
+
+    if (s_export_requested) {
+      char bundle[1024], error[256];
+      s_export_requested = 0;
+      if (Dkc1FlightRecorderExport(s_host_frame, bundle, sizeof bundle,
+                                   error, sizeof error))
+        snprintf(s_host_status, sizeof s_host_status,
+                 "repro exported: %.470s", bundle);
+      else
+        snprintf(s_host_status, sizeof s_host_status,
+                 "repro export failed: %.460s", error);
+      UpdateDebugTitle();
+    }
 
     if (s_paused && !s_step_once) {
       HDC dc = GetDC(s_window);
@@ -517,6 +554,7 @@ int main(int argc, char **argv) {
       }
     }
     Dkc1DebugDumpFrame((int)s_host_frame);
+    Dkc1FlightRecorderRecord(s_host_frame, input);
     AudioPump();
 
     HDC dc = GetDC(s_window);
@@ -551,6 +589,7 @@ int main(int argc, char **argv) {
       fprintf(stderr, "wram_dump: %s\n", error);
   }
   Dkc1DebugDumpClose();
+  Dkc1FlightRecorderClose();
   Dkc1ScriptFree();
   Dkc1InputPlaybackFree(&s_input_playback);
   free(rom);

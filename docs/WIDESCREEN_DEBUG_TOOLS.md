@@ -265,13 +265,24 @@ completion, K. Rool fresh entry. **Serves:** open issue 5 and most release
 gates. **Cost:** 2–3 days plus route re-recording.
 
 ### 9. Input flight recorder + macro minimizer
-The tool the emulator effort wished it had on day one: rolling input ring +
-periodic runtime snapshot in the desktop host, one key exports a repro
-bundle (anchor snapshot + per-frame masks + final WRAM hash). Companion
-ddmin minimizer (port `DKCMacroMinimizer`) shrinking failing macros with
-button-transition preservation and 3x hash-confirmed candidates,
-treating any nondeterminism as an abort. Trivial natively (~200 lines +
-port). **Serves:** every future playtest report. **Cost:** 1–2 days.
+**Status: rolling visible-host recorder implemented; minimizer implemented
+separately.** Set `DKC1_FLIGHT_RECORDER=1` before launching the desktop host.
+It retains about one minute of resolved controller input plus a native snapshot
+anchor every 300 frames entirely in memory. Pressing **F9** exports a versioned
+repro bundle containing the covered anchor and current snapshots, exact
+per-frame input masks, full WRAM/VRAM/CGRAM, both WRAM-shadow and PPU OAM, and
+SHA-256 provenance. `tools/verify_flight_bundle.py` validates the bundle and can
+replay it through a supplied runner to prove the final 128 KiB WRAM hash.
+`DKC1_FLIGHT_RECORDER_DIR` selects the export root. The recorder is default-off,
+allocates and writes nothing when disabled, and performs no disk I/O while
+playing until F9 is pressed. The cost when armed is a native in-memory snapshot
+every five seconds and storage for sixteen anchors; it should remain a
+playtest/debug facility rather than a release default.
+
+The companion `tools/minimize_route.py` performs transition-preserving ddmin
+with repeated outcome checks and treats nondeterminism as an abort. Together
+these tools turn a playtester's F9 bundle into a deterministic, shrinkable route.
+**Serves:** every future playtest report.
 
 ### 10. Whole-game level sweep harness
 The emulator effort's biggest structural gap, and far more achievable here:

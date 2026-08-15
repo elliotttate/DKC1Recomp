@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dkc1-flight-recorder-v1.schema.json",
+  "title": "DKC1 rolling playtest repro bundle",
+  "type": "object",
+  "required": ["schema", "anchor_frame", "current_frame", "snes_frame",
+               "replay_frames", "scene", "rom_sha256", "files"],
+  "properties": {
+    "schema": {"const": "dkc1.flight-recorder.v1"},
+    "anchor_frame": {"type": "integer", "minimum": 0},
+    "current_frame": {"type": "integer", "minimum": 0},
+    "snes_frame": {"type": "integer", "minimum": 0},
+    "replay_frames": {"type": "integer", "minimum": 0, "maximum": 3600},
+    "scene": {
+      "type": "object",
+      "required": ["mode", "level", "entrance"],
+      "properties": {
+        "mode": {"type": "integer", "minimum": 0, "maximum": 65535},
+        "level": {"type": "integer", "minimum": 0, "maximum": 65535},
+        "entrance": {"type": "integer", "minimum": 0, "maximum": 65535}
+      },
+      "additionalProperties": false
+    },
+    "rom_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "files": {
+      "type": "object",
+      "required": ["anchor.snapshot", "current.snapshot", "inputs.txt",
+                   "final.wram.bin", "final.vram.bin", "final.cgram.bin",
+                   "final.wram-oam.bin", "final.ppu-oam.bin"],
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    }
+  },
+  "additionalProperties": false
+}
