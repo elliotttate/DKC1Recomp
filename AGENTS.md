@@ -300,7 +300,8 @@ Maintain clean pre-entry anchors and deterministic recipes for at least:
 - a boss arena using camera bounds for logic;
 - title, Nintendo splash, file select, world map, bonus exit, death, and level
   transitions;
-- 358x224 and optional 16:9 presentation modes.
+- 342x224 and optional 16:9 (398x224) presentation modes. (358x224 was
+  the LEGACY emulator hack's geometry and does not exist in this host.)
 
 When a new bug class is found, add its smallest clean fresh-entry route and its
 behavioral closure to this corpus before considering the fix complete.

@@ -20,12 +20,14 @@ There were TWO widescreen projects. Only this repo is current:
 | | **This repo (current)** | **Legacy emulator hack (reference only)** |
 |---|---|---|
 | Approach | Host-side presentation over stock logic | ROM patched with asar (game code modified) |
-| Location | `C:\Users\ellio\Documents\GitHub\DKC1Recomp` | `D:\Downloads\DKLR\DKC-Widescreen-358x224\`, `D:\Downloads\DKLR\DKC_Widescreen_358x224*.sfc` (+398 variants, MSU1 builds), `DKC1_Disassembly\DKC1\Custom\Patches\Widescreen_358x224.asm`, `RomMap\ROM_Map_HACK_*` |
+| Location | `C:\Users\ellio\Documents\GitHub\DKC1Recomp` | in-repo consolidated copy: `reference/legacy-widescreen/` (canonical for reading); originals at `D:\Downloads\DKLR\DKC-Widescreen-358x224\`, `D:\Downloads\DKLR\DKC_Widescreen_358x224*.sfc` (+398 variants, MSU1 builds), `reference/disassembly/DKC1/Custom\Patches\Widescreen_358x224.asm`, `RomMap\ROM_Map_HACK_*` |
 | Use for | All new work | Prior-art reference: its worklog documents bug classes (OAM X-high wrap, exit-boundary coverage, section controllers) that inspired our detectors. **Never copy its code or compare its patched-ROM behavior as "stock".** |
 
-If a file mentions `358x224`, `398x224`, asar, or lives under
-`D:\Downloads\DKLR\` outside the disassembly's clean sources, it is the
-legacy effort.
+If a file mentions `358x224`, asar patching, or lives under
+`reference/legacy-widescreen/` or under `D:\Downloads\DKLR\` outside the
+disassembly's clean sources, it is the legacy effort. (Careful: the
+RECOMP host renders 342x224 / 398x224 — a `398x224` mention alone does
+not mean legacy; `358x224` always does.)
 
 ## Repo map
 

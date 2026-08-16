@@ -3,8 +3,11 @@
 Distilled 2026-08-15 from three sources:
 
 - `docs/WIDESCREEN_HANDOFF.md` — the seven open issues and release gates;
-- the SuperZSNES emulator effort (`D:\Downloads\DKLR\DKC-Widescreen-358x224`,
-  38 BepInEx plugins + 13 offline tools + `docs/WORKLOG.md` bug history);
+- the LEGACY SuperZSNES emulator effort (in-repo copy:
+  `reference/legacy-widescreen/`; original at
+  `D:\Downloads\DKLR\DKC-Widescreen-358x224` — prior art only, see the
+  dkc1-tools skill's two-efforts warning), 38 BepInEx plugins + 13
+  offline tools + `docs/WORKLOG.md` bug history;
 - what the snesrecomp runtime already provides (WsShadow stats/debug cells,
   `framedump.c`, snapshots, input playback, the DKC2Recomp script set).
 

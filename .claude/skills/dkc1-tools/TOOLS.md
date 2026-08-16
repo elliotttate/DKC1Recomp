@@ -308,11 +308,15 @@ bookkeeping `$192B` len $100 · collision flags `$12A5` · invuln `$11A1`.
 
 ## Knowledge sources (read-only; addresses join them — use the atlas)
 
-- `D:\Downloads\DKLR\DKC1_Disassembly\` — labeled disassembly + RAM map
+- `reference/disassembly/` (in-repo consolidated copy; original at
+  `D:\Downloads\DKLR\DKC1_Disassembly\`) — labeled disassembly + RAM map
   (semantic intent; its `Custom\Patches\*Widescreen*` and `ROM_Map_HACK_*`
   belong to the LEGACY hack — ignore for recomp work)
-- `...\DKC1\Pseudocode\` — mechanical C lift + lossless listing +
-  `instruction_index.csv` (a stale recomp snapshot; never diagnose recomp
-  behavior from it)
-- `...\Tools\IDA\DKC1_U1.i64` + `work\rename_map.json` — curated names/
-  descriptions + our runtime dispatch xrefs; rebuildable headlessly
+- `reference/disassembly/DKC1/Pseudocode/` — mechanical C lift +
+  lossless listing + `instruction_index.csv` (a stale recomp snapshot;
+  never diagnose recomp behavior from it)
+- `reference/disassembly/Tools/IDA/DKC1_U1.i64` +
+  `work\rename_map.json` — curated names/descriptions + our runtime
+  dispatch xrefs; rebuildable headlessly
+- `reference/legacy-widescreen/` — the retired SuperZSNES-era emulator
+  hack (worklogs/tools; prior art only, never current workflow)
