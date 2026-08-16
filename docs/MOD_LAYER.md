@@ -23,41 +23,48 @@ mod declarations + conflict checking + the existing evidence gates
 | Typed WRAM accessors | `tools/gen_wram_header.py` → `runner/dkc1_wram_gen.h` | live — 88 named offsets, 53 actor SoA field accessors, struct mirrors; little-endian views over live WRAM, never copies; `--check` staleness + cross-parser gate |
 | Conflict checking | `tools/mod_conflicts.py` | live — routine conflicts, WRAM write-set overlap, presentation-class violations, oracle-eligibility and no-runtime-evidence warnings |
 | Deterministic mod tests | recipes/contracts/`run_regression.py`/`first_divergence.py`/`promote_bundle.py` | live — this IS the mod test framework; point contracts at a modded build |
+| Differential oracle | engine capture (`SNESRECOMP_ORACLE*` in the trace build) + `tools/oracle_run.py` + `tools/oracle_diff.py` | live — per-call entry/exit registers, flags, WRAM ranges, cycle delta; two deterministic legs must match byte-for-byte |
+| Routine replacement | `tools/gen_replacements.py` + `runner/replacements/` + `build_host_replace.bat` | live — see DKC1_REPLACE below; demo replacement proven equivalent |
 | Gameplay/presentation split | `first_divergence.py` + byte-identical WRAM A/B + `contracts/wide-intended-differences.json` | live discipline; `mod_conflicts.py` enforces it at declaration level |
 
 Regeneration order after source changes:
 `tools/ir/summarize.py` → `tools/oracle_spec.py --emit-all` →
 `tools/gen_symbols.py` → `tools/gen_wram_header.py`.
 
-## Planned: DKC1_REPLACE (routine replacement) — engine seam
+## DKC1_REPLACE (routine replacement) — LIVE
 
-Deferred until the in-flight engine work in `snesrecomp/runner/src`
-(common_cpu_infra.c, cpu_trace.c) lands; the seam belongs in the ENGINE
-so DKC2Recomp inherits it.
+Mechanism: **link-level variant takeover**. Generated call sites invoke
+the M/X variant symbol (`CODE_BDF88A_M0X0`) directly, so
+`tools/gen_replacements.py` stages a build override that recompiles the
+defining generated TU with the variant renamed to `*_original` and
+links `runner/replacements/dkc1_replacements.c` in its place
+(`build_host_replace.bat` → `build/dkc1_headless_replace_trace.exe`).
+Every call site — direct, dispatch, alias — reaches the replacement;
+the untouched original remains the runtime fallback
+(`DKC1_REPLACE_DISABLE=1`).
 
-Contract for a replacement, all checks fail-closed at registration:
+Contract, all checks fail-closed at staging:
 
-1. **ROM identity**: the replaced region's bytes must hash to the
-   supported ROM's (stage-1 decode machinery already proves listing ↔
-   ROM byte equality; reuse it).
-2. **Entry mode**: assert the symbol DB's proven `entry_mode` at entry
-   (the `_M{m}X{x}` claim check in trace builds already does this for
-   generated code).
-3. **ABI wrapper**: generated from the symbol record — registers/flags
-   read and written, RTS vs RTL return, exit M/X.
-4. **Validation**: a replacement of an `oracle-ready` function must pass
-   the differential oracle (same harness as recomp validation: capture
-   per `build/ir/oracle_specs.json`, run original and replacement, diff
-   exit state + write sets) plus `impact.py`'s required regression
-   contracts. `needs-lle-shadow` functions require the write-log
-   compare; until that exists they are not replaceable.
-5. **Fallback**: every replacement is toggleable at runtime; disabled →
-   original generated routine runs. Two mods claiming one routine is a
-   registration error (`mod_conflicts.py` semantics, enforced live).
+1. **ROM identity**: supported-ROM sha + the replaced region's actual
+   ROM bytes (entry..end from cfg facts, mirror fold) must hash to the
+   manifest's blessed `region_sha256`.
+2. **Entry mode**: manifest mode must equal the proven entry facts.
+3. **Single definer**: exactly one generated TU may define the variant.
+4. **Validation**: the differential oracle. `oracle_run.py` on the
+   stock trace exe vs the replace exe must produce byte-identical
+   capture logs (registers, flags byte, WRAM ranges, cycle delta at
+   every outermost call), plus identical end-of-run
+   frame/WRAM/VRAM hashes, plus `impact.py`'s required contracts.
+5. **Fallback**: `DKC1_REPLACE_DISABLE=1` runs originals; two mods
+   claiming one routine is a `mod_conflicts.py` error.
 
-Dispatch mechanics: a `{pc24 → C function}` override table consulted
-before the generated entry in the dispatch path
-(`cpu_dispatch_has_entry` / `dispatch_v2.c` layer).
+Proven on `CODE_BDF88A` (object-scanner window): readable C with the
+widescreen adapters preserved; 980/980 oracle calls and all end-of-run
+hashes byte-identical to stock on route_jungle, with the disabled leg
+separately proving the fallback path. Replacements must replicate cycle
+accounting and flag semantics exactly (the demo shows the pattern:
+mechanical prologue/epilogue copied from the generated original — a
+future wrapper generator's job — around a readable core).
 
 ## Planned: semantic events — EXPERIMENTAL tier only
 

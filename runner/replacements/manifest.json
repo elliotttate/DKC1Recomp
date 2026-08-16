@@ -1,0 +1,12 @@
+{
+  "note": "Routine replacements staged by tools/gen_replacements.py (fail-closed ROM/mode/region verification). See docs/MOD_LAYER.md.",
+  "replacements": [
+    {
+      "label": "CODE_BDF88A",
+      "variant": "CODE_BDF88A_M0X0",
+      "mode": "M16X16",
+      "purpose": "object-scanner window from camera (readable demo)",
+      "region_sha256": "ddcb2802dd5c27da6fc305bfac92d1a8ed0cb15ee92ed98f76b50f5afcb68180"
+    }
+  ]
+}

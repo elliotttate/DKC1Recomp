@@ -174,6 +174,25 @@ optional `quickload` leg seeded by a state the entry route itself saves.
   write-set overlaps between mods, presentation-class violations
   (presentation mods may not replace gameplay-writing routines), and
   oracle-eligibility / no-runtime-evidence warnings.
+- `oracle_run.py FN --rom R --route S --out LOG [--exe EXE]` — one
+  differential-oracle capture leg: arms the trace host
+  (`SNESRECOMP_ORACLE`/`_RANGES`/`_LOG`, ranges derived from the
+  function's oracle spec) and replays a deterministic route; per
+  outermost call it logs entry/exit registers, flags byte, WRAM
+  ranges, and cycle delta. Zero captures = the route never ran the
+  function (not equivalence).
+- `oracle_diff.py A.jsonl B.jsonl` — byte-identical = proven-equivalent
+  over that route; otherwise the FIRST divergent call with field-level
+  breakdown and an upstream-vs-local verdict (entry states matching
+  means the function itself diverged).
+- `gen_replacements.py --rom R [--bless]` — fail-closed staging for
+  DKC1_REPLACE: supported-ROM sha, blessed region-byte hash, proven
+  entry-mode match, single defining TU; emits the build override that
+  renames the generated variant to `*_original` and links
+  `runner/replacements/`. Then `build_host_replace.bat` builds
+  `build/dkc1_headless_replace_trace.exe` (`DKC1_REPLACE_DISABLE=1`
+  falls back to originals at runtime). Validate stock-vs-replace with
+  oracle_run/oracle_diff + end-of-run hashes; see docs/MOD_LAYER.md.
 - `coverage_explorer.py` — docs/COVERAGE.md + build/coverage.json: the
   full 256-entrance universe joined against capabilities + sweep
   evidence, with a ranked next-evidence worklist (centered-only scenes
