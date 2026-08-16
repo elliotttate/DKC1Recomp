@@ -163,6 +163,16 @@ schema v2 also writes a backdrop-only frame and backdrop-subtracted occupancy
 masks, allowing partial-height legacy-boundary culls to be distinguished from
 transparent OBJ space or a shared fixed-color backdrop.
 
+## Tool suite documentation
+
+The complete debugging/verification tool suite (hosts and debug keys, all
+env-gated evidence taps and integrity detectors, the route DSL, regression
+contracts, and every script under `tools/`) is documented in one place:
+`.claude/skills/dkc1-tools/` (`SKILL.md` for workflows, `TOOLS.md` for the
+full reference). That guide also spells out the boundary between this
+recomp's host-side widescreen and the retired asar/emulator ROM-hack
+effort, which is kept only as reference material.
+
 ## Content boundary
 
 - Never commit ROMs, saves, extracted assets, or generated game binaries.
