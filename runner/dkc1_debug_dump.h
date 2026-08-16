@@ -36,6 +36,22 @@ void Dkc1DebugRecordInput(uint32_t mask);
  * a JSONL row with WRAM/VRAM/OAM-shadow/PPU-OAM sha256 hashes. */
 bool Dkc1DebugCheckpoint(const char *name, int frame);
 
+/* Decision-level companion to DKC1_LIFECYCLE_TRACE. These calls are inert
+ * unless that trace is enabled. They record why a placed actor was first
+ * held, released at the reconstructed stock window, or accepted as a native
+ * allocation, and when the gameplay context—not PPU presentation state—was
+ * reset. */
+void Dkc1DebugTracePlacedActorContext(uint16_t mode, uint16_t level,
+                                      uint16_t entrance);
+void Dkc1DebugTracePlacedActorPhase(const char *event,
+                                    uint16_t actor_index, uint16_t id,
+                                    uint16_t source, uint16_t source_x,
+                                    uint16_t current_left,
+                                    uint16_t current_right,
+                                    uint16_t stock_left,
+                                    uint16_t stock_right,
+                                    bool terrain_ready);
+
 void Dkc1DebugDumpClose(void);
 
 #endif

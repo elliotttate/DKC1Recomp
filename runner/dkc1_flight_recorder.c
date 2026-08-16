@@ -45,6 +45,12 @@ typedef struct SnapshotAnchor {
 static int s_initialized;
 static int s_enabled;
 static char s_root[768] = "flight-recorder";
+static char s_build_info[192] = "unset";
+
+void Dkc1FlightRecorderSetBuildInfo(const char *build_info) {
+  if (build_info && *build_info)
+    snprintf(s_build_info, sizeof s_build_info, "%s", build_info);
+}
 static InputFrame s_inputs[kInputCapacity];
 static SnapshotAnchor s_anchors[kAnchorCount];
 static int s_next_anchor;
@@ -241,6 +247,25 @@ int Dkc1FlightRecorderExport(long completed_frame,
   uint8_t ppu_oam[kPpuOamSize];
   BuildPpuOam(ppu_oam);
   WRITE_BUNDLE_FILE("final.ppu-oam.bin", ppu_oam, sizeof ppu_oam);
+  char ppu_regs[512];
+  int ppu_regs_length = snprintf(
+      ppu_regs, sizeof ppu_regs,
+      "{\"schema\":\"dkc1.ppu-regs.v1\",\"inidisp\":%u,\"bgmode\":%u,"
+      "\"mosaic\":%u,\"bgxsc\":[%u,%u,%u,%u],"
+      "\"hscroll\":[%u,%u,%u,%u],\"vscroll\":[%u,%u,%u,%u],"
+      "\"main_screen\":%u,\"sub_screen\":%u}\n",
+      (unsigned)g_ppu->inidisp, (unsigned)g_ppu->bgmode,
+      (unsigned)g_ppu->mosaic, (unsigned)g_ppu->bgXsc[0],
+      (unsigned)g_ppu->bgXsc[1], (unsigned)g_ppu->bgXsc[2],
+      (unsigned)g_ppu->bgXsc[3], (unsigned)g_ppu->hScroll[0],
+      (unsigned)g_ppu->hScroll[1], (unsigned)g_ppu->hScroll[2],
+      (unsigned)g_ppu->hScroll[3], (unsigned)g_ppu->vScroll[0],
+      (unsigned)g_ppu->vScroll[1], (unsigned)g_ppu->vScroll[2],
+      (unsigned)g_ppu->vScroll[3], (unsigned)g_ppu->screenEnabled[0],
+      (unsigned)g_ppu->screenEnabled[1]);
+  if (ppu_regs_length > 0)
+    WRITE_BUNDLE_FILE("final.ppu-regs.json", ppu_regs,
+                      (size_t)ppu_regs_length);
 #undef WRITE_BUNDLE_FILE
 
   char anchor_hash[65], current_hash[65], input_hash[65], wram_hash[65];
@@ -258,6 +283,7 @@ int Dkc1FlightRecorderExport(long completed_frame,
       manifest, sizeof manifest,
       "{\n"
       "  \"schema\": \"dkc1.flight-recorder.v1\",\n"
+      "  \"build\": \"%s\",\n"
       "  \"anchor_frame\": %ld,\n"
       "  \"current_frame\": %ld,\n"
       "  \"snes_frame\": %d,\n"
@@ -279,6 +305,7 @@ int Dkc1FlightRecorderExport(long completed_frame,
       "    \"final.ppu-oam.bin\": \"%s\"\n"
       "  }\n"
       "}\n",
+      s_build_info,
       anchor->frame, completed_frame, snes_frame_counter, replay_frames,
       (unsigned)(g_ram[0x0032] | ((uint16_t)g_ram[0x0033] << 8)),
       (unsigned)(g_ram[0x0030] | ((uint16_t)g_ram[0x0031] << 8)),

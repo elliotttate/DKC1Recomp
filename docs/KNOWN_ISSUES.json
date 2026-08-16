@@ -1,0 +1,54 @@
+{
+  "schema": "dkc1.known-issues.v1",
+  "issues": [
+    {
+      "id": "no-contact-damage",
+      "status": "open",
+      "summary": "Contact damage never lands: DK overlaps the first Gnawty for 3800+ frames unharmed in BOTH native and wide modes, and identically under forced LLE (not a dispatch/widescreen defect).",
+      "repro": "recipes/route_death.dks",
+      "evidence": "build/death_final.png, build/death_native.png",
+      "expected": "Verify against emulator ground truth first; if stock damages a standing DK here, suspect the recomp collision path.",
+      "first_seen": "2026-08-15"
+    },
+    {
+      "id": "entry-wide-centered-flap",
+      "status": "open",
+      "summary": "WIDE<->CENTERED presentation flap during level entry (frames 7304-7331 of the jungle route).",
+      "repro": "recipes/route_jungle.dks with DKC1_WS_TRACE",
+      "expected": "Single clean transition to EXTEND once bounds/calibration are ready.",
+      "first_seen": "2026-08-15"
+    },
+    {
+      "id": "wide-world-key-unwrap",
+      "status": "open",
+      "summary": "Wide world key camX=$FFF0 (-16) unwrap artifact near level start.",
+      "repro": "recipes/route_jungle.dks with DKC1_WS_TRACE",
+      "expected": "World keys clamp at the level's west bound instead of unwrapping.",
+      "first_seen": "2026-08-15"
+    },
+    {
+      "id": "margin-decode-attribute-mismatch",
+      "status": "open",
+      "summary": "Stream retrodiction proves 1690 served-margin entries on the jungle entry route disagree with the game's own later stream, overwhelmingly in the ATTRIBUTE byte (palette/priority/flip: xor 0x1c00/0x5c00/0x4c00 clusters; whole 29-row columns as they scroll into view). The ROM level-map decoder's attribute derivation does not match streamed truth for some metatiles - margins can show wrong-palette art.",
+      "repro": "SNESRECOMP_WS_RETRODICT=out.jsonl + recipes/route_jungle.dks; analyze with tools/analyze_retrodiction.py",
+      "expected": "retrodictMismatch == 0 on every route.",
+      "first_seen": "2026-08-16"
+    },
+    {
+      "id": "entry-oam-xhigh-loss",
+      "status": "open",
+      "summary": "At level entry (~frame 7488) an OAM sprite drops its X high bit: (317,158) -> (69,158) with the low byte continuous - right-margin art teleporting to the left. Caught by level_sweep's wrap detector; likely tied to the entry-time presentation-bias window (see entry-wide-centered-flap / wide-world-key-unwrap).",
+      "repro": "recipes/route_death.dks or route_jungle.dks via tools/level_sweep.py (oam_wrap.first_suspect)",
+      "expected": "Sprites keep the 9-bit X across the entry transition; zero wrap_suspects in the sweep.",
+      "first_seen": "2026-08-16"
+    },
+    {
+      "id": "standstill-pillarbox",
+      "status": "open",
+      "summary": "Standing still at level start pillarboxes for 4000+ frames (layout never selected, source bank 0) until the camera moves; seen on route_death.dks stand-still segment.",
+      "repro": "recipes/route_death.dks via tools/level_sweep.py",
+      "expected": "Calibration should lock from the entry decode without requiring camera motion.",
+      "first_seen": "2026-08-16"
+    }
+  ]
+}

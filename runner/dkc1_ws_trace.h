@@ -23,6 +23,11 @@ typedef struct Dkc1WsTraceFrame {
   bool world_valid[2];
   uint32_t world_x[2];
   uint32_t world_y[2];
+  bool shadow_origin_valid[2];
+  uint32_t shadow_origin_x[2];
+  uint32_t shadow_origin_y[2];
+  uint32_t shadow_local_x[2];
+  uint32_t shadow_local_y[2];
   bool reset;
   bool cold_start;
   bool source_reset;
@@ -35,6 +40,7 @@ typedef struct Dkc1WsTraceFrame {
   bool prefill;
   bool edge_extension;
   bool centered_fallback;
+  bool debug_forced_fallback;
   WsShadowMarginStat shadow_before[2];
   WsShadowMarginStat shadow_after[2];
 } Dkc1WsTraceFrame;

@@ -1,3 +1,4 @@
+#include "dkc1_blank_scan.h"
 #include "dkc1_game.h"
 #include "dkc1_video.h"
 #include "input_playback.h"
@@ -400,6 +401,8 @@ int main(int argc, char **argv) {
       return 5;
     }
     Dkc1DrawPpuFrame();
+    Dkc1BlankScanFrame(frame + 1, pixels, Dkc1VideoWidth(),
+                       kDkc1VideoHeight);
     if (g_ppu->rangeOver) obj_range_over_frames++;
     if (g_ppu->timeOver) obj_time_over_frames++;
     {

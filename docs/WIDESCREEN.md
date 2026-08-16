@@ -27,10 +27,13 @@ constants:
 
 DKC1's level maps are static ROM data rather than DKC2's WRAM maps, so its
 margin decoder follows DKC1's horizontal and vertical metatile formats.
-The terrain shadow uses absolute world-X/world-Y keys. The shared
-`RetainHistory` mode is deliberately disabled because it changes Y to a
-viewport-relative key; combining that mode with DKC1's absolute ROM-prefill
-rows caused complete margin misses and the original hard black side cutoff.
+The terrain decoder retains absolute world-X/world-Y coordinates, while each
+bounded shadow plane projects them through a stable scene-local origin. X
+origins are 512-pixel aligned to preserve the rolling map's two-screen parity;
+Y origins are 256-pixel aligned to preserve its 32-row wrap. This is required
+for high-coordinate bonus and vertical stages whose absolute tile indices
+exceed the shared cache dimensions. `RetainHistory` remains disabled because
+its viewport-relative Y contract is incompatible with DKC1's ROM-prefill rows.
 
 ## What came from the SuperZSNES work
 
@@ -186,6 +189,14 @@ Object prefetch is not purely visual: an actor may start simulating before it
 would in a native-width run. This is necessary when the actor is visible, but
 it can change allocation order or phase. The current child retry repairs the
 proven permanent-loss case; it does not prove every actor family safe.
+
+An experimental, default-off dispatch guard can retain the early allocation
+and bookmark while delaying placed-actor behavior until the source enters the
+stock scanner interval. Its phase history is keyed to gameplay context and
+survives soft presentation fallbacks; native state loads/imports reset it
+explicitly. The three-repeat forced-fallback contract passes, but the guard is
+not a release default until wide-persistent actors and opaque initialization
+work have authored route oracles.
 
 Future acceptance should compare narrow and wide deterministic routes at
 object lifecycle boundaries, not require byte-identical WRAM after prefetch.

@@ -208,6 +208,8 @@ divergence at frame 7,600 is currently unclassified). **Cost:** 2–3 days.
 ## Tier 1 — bug-class instruments
 
 ### 4. Object lifecycle tracer + prefetch phase auditor
+**Status: implemented; placed-actor behavior guard remains experimental and
+default-off.**
 The emulator program's crown jewels (`DKCObjectLifecycleTracer`,
 `DKCObjectPrefetchPhaseAuditor`), ported to native sampling of `g_ram`:
 per-frame decode of the bank-$BD actor pool, the $192B–$1A2A bookmark
@@ -223,7 +225,19 @@ first stock allocation frame, and uses the honest vocabulary:
 `harmless_visual_prefetch`, `behavior_phase_advancement`,
 `wide_persists_stock_culls` (= indeterminate, never "harmless").
 **Serves:** open issues 4–5; the grouped-child-retry and early-activation
-release gates. **Cost:** 3–5 days; highest-value single instrument.
+release gates.
+
+The native lifecycle stream also has a focused
+`dkc1.prefetch-phase.v1` schema for candidate/suppression/fallback-hold/release
+transitions. `DKC1_WS_FORCE_FALLBACK_FRAME` supplies a deterministic,
+cartridge-state-neutral one-frame fallback injector. Run
+`tools/verify_prefetch_soft_fallback.py` over at least three route directories;
+it rejects context resets during the fallback, missing or duplicate actor
+transitions, release outside the reconstructed stock window, and any
+cross-run semantic mismatch. Accepted evidence is under
+`build/phaseguard-v5-soft-fallback/`. The remaining release blocker is not
+tooling: actors that legitimately remain visible in a wide margin after stock
+culls them still require an explicit gameplay policy and route oracle.
 
 ### 5. Margin provenance overlay + plane isolation (desktop host)
 Debug hotkeys in `dkc1_desktop`: BG1/BG2/BG3/OBJ isolation toggles, and a
@@ -244,6 +258,11 @@ comparison invalid when raw PPU inputs differ (only equal inputs isolate a
 renderer difference). Add headless dumps of the live rolling tilemap and
 the WsShadow world-keyed store as raw bytes for direct comparison against
 the ROM-decoded expectation — three-way: ROM decode vs VRAM vs shadow.
+`tools/verify_shadow_localization.py` additionally validates that high-world
+absolute keys project into stable per-layer cache windows, that 512px/256px
+origins preserve rolling-map parity, and that terrain margins have no misses.
+This catches the bonus/vertical-stage 4:3 cutoff that looked like a BG-width
+policy failure.
 **Serves:** open issues 1, 6; the transition release gate ("no prior world
 tiles may survive in either margin"). **Cost:** ~1 day.
 
@@ -261,6 +280,10 @@ with each latch, checkpoints retain both booleans, and an F9 bundle records
 their final-frame state. This distinguishes malformed OAM from valid OAM whose
 8x8 pieces were discarded by the scanline budget.
 **Serves:** margin sprite work (cull adapters, rope/banana private paths).
+`tools/verify_vertical_rope_margins.py` is the two-sided route gate: it
+requires native-to-margin crossings, correct 9-bit X, no low-byte alias copy,
+no mismatch beyond the normal one-VBlank OAM handoff, and three byte-identical
+OAM streams per side.
 **Cost:** ~1 day.
 
 ## Tier 2 — route/regression infrastructure

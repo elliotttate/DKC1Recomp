@@ -675,6 +675,17 @@ static bool s_ws_shadow_active;
 static bool s_ws_origin_valid[2];
 static uint32_t s_ws_world_x[2];
 static uint32_t s_ws_world_y[2];
+/* WsShadow is a bounded cache, while DKC uses full 16-bit authored world
+ * coordinates (bonus rooms can be near X=$9AF9 and vertical rooms above
+ * Y=$5600). Indexing that cache with absolute tile coordinates silently
+ * discarded every high-world margin cell. Keep decoder coordinates absolute
+ * and project only cache keys into one stable scene-local window.
+ *
+ * X stays 512-pixel aligned to preserve the two 32-column tilemap-screen
+ * parity. Y stays 256-pixel aligned to preserve the 32-row map wrap. */
+static bool s_ws_shadow_origin_valid[2];
+static uint32_t s_ws_shadow_origin_x[2];
+static uint32_t s_ws_shadow_origin_y[2];
 static Dkc1LevelLayout s_ws_layout;
 static int s_ws_layout_grace;  /* bounded transient calibration misses */
 static bool s_ws_trace_reset_pending;
@@ -835,6 +846,9 @@ static void Dkc1ClearWidescreenShadow(bool clear_identity) {
     WsShadowReset();
   s_ws_shadow_active = false;
   memset(s_ws_origin_valid, 0, sizeof s_ws_origin_valid);
+  memset(s_ws_shadow_origin_valid, 0, sizeof s_ws_shadow_origin_valid);
+  memset(s_ws_shadow_origin_x, 0, sizeof s_ws_shadow_origin_x);
+  memset(s_ws_shadow_origin_y, 0, sizeof s_ws_shadow_origin_y);
   s_ws_layout = kDkc1LayoutUnknown;
   s_ws_layout_grace = 0;
   if (clear_identity) {
@@ -1044,6 +1058,74 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     return false;
   }
 
+  uint32_t shadow_world_x[2] = {0, 0};
+  uint32_t shadow_world_y[2] = {0, 0};
+  /* Select a stable cache window per layer only after calibration accepts
+   * this frame. Terrain must cover the complete camera range; an independent
+   * parallax plane is centered around its own coordinates so a low-Y sky can
+   * coexist with high-Y terrain in vertical levels. */
+  for (int layer = 0; layer < 2; layer++) {
+    if (!candidate_valid[layer])
+      continue;
+    if (!s_ws_shadow_origin_valid[layer]) {
+      const uint64_t x_left_pad = (uint64_t)Dkc1VideoExtra() + 8u;
+      const uint64_t x_right_pad =
+          (uint64_t)kDkc1VideoNativeWidth + Dkc1VideoExtra() + 8u;
+      uint64_t min_x = candidate_world_x[layer];
+      uint64_t max_x = candidate_world_x[layer];
+      if (layer == terrain_layer) {
+        if (lower_bound < min_x) min_x = lower_bound;
+        if (upper_bound > max_x) max_x = upper_bound;
+      }
+      const uint64_t wanted_lo =
+          min_x > x_left_pad ? min_x - x_left_pad : 0;
+      const uint64_t wanted_hi = max_x + x_right_pad;
+      const uint64_t capacity_x = (uint64_t)kWsShadowXTiles * 8u;
+      if (wanted_hi - wanted_lo >= capacity_x)
+        return false;
+      uint64_t base_x = wanted_lo & ~UINT64_C(0x1ff);
+      if (wanted_hi - base_x > capacity_x) {
+        const uint64_t minimum_base = wanted_hi - capacity_x;
+        base_x = (minimum_base + 0x1ffu) & ~UINT64_C(0x1ff);
+        if (base_x > wanted_lo)
+          return false;
+      }
+      const uint64_t wanted_y =
+          candidate_world_y[layer] > 8u
+              ? candidate_world_y[layer] - 8u : 0;
+      s_ws_shadow_origin_x[layer] = (uint32_t)base_x;
+      s_ws_shadow_origin_y[layer] =
+          (uint32_t)(wanted_y & ~UINT64_C(0xff));
+      s_ws_shadow_origin_valid[layer] = true;
+    }
+    if (candidate_world_x[layer] < s_ws_shadow_origin_x[layer] ||
+        candidate_world_y[layer] < s_ws_shadow_origin_y[layer])
+      return false;
+    shadow_world_x[layer] =
+        candidate_world_x[layer] - s_ws_shadow_origin_x[layer];
+    shadow_world_y[layer] =
+        candidate_world_y[layer] - s_ws_shadow_origin_y[layer];
+    const uint64_t last_x = (uint64_t)shadow_world_x[layer] +
+                            kDkc1VideoNativeWidth + Dkc1VideoExtra() + 8u;
+    const uint64_t last_y = (uint64_t)shadow_world_y[layer] +
+                            kDkc1VideoHeight + 8u;
+    if (last_x >= (uint64_t)kWsShadowXTiles * 8u ||
+        last_y >= (uint64_t)kWsShadowYTiles * 8u)
+      return false;
+  }
+  if (trace) {
+    memcpy(trace->shadow_origin_valid, s_ws_shadow_origin_valid,
+           sizeof trace->shadow_origin_valid);
+    memcpy(trace->shadow_origin_x, s_ws_shadow_origin_x,
+           sizeof trace->shadow_origin_x);
+    memcpy(trace->shadow_origin_y, s_ws_shadow_origin_y,
+           sizeof trace->shadow_origin_y);
+    memcpy(trace->shadow_local_x, shadow_world_x,
+           sizeof trace->shadow_local_x);
+    memcpy(trace->shadow_local_y, shadow_world_y,
+           sizeof trace->shadow_local_y);
+  }
+
   /* Phase 2 commits only an accepted frame. A rejected candidate cannot
    * capture tiles, move origins, or seed data that a later scene observes. */
   if (!s_ws_shadow_active) {
@@ -1064,17 +1146,17 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     s_ws_world_y[layer] = candidate_world_y[layer];
     s_ws_origin_valid[layer] = candidate_valid[layer];
 
-    WsShadowSetWorld(layer, s_ws_world_x[layer], s_ws_world_y[layer]);
+    WsShadowSetWorld(layer, shadow_world_x[layer], shadow_world_y[layer]);
     WsShadowSetScroll(layer,
                       (uint16_t)(g_ppu->hScroll[layer] + presentation_bias),
                       g_ppu->vScroll[layer]);
     WsShadowSetWestKeep(layer, keep_tiles);
     WsShadowSetEastKeep(layer, keep_tiles);
-    /* Keep the default absolute-world Y key. RetainHistory intentionally
-     * switches the shared shadow to viewport-relative Y keys; DKC1's ROM
-     * decoder fills absolute world tile rows, so enabling it made every
-     * margin lookup miss and exposed the transparent fallback as a hard
-     * vertical cutoff. DKC2's exact-prefill path likewise leaves this off. */
+    /* Keep the default world-relative Y key (projected through the stable
+     * per-layer origin above). RetainHistory switches the shared shadow to
+     * viewport-relative rows; DKC1's ROM decoder fills authored world rows,
+     * so enabling it made every margin lookup miss and exposed the
+     * transparent fallback as a hard vertical cutoff. */
     WsShadowSetRespectGameWrites(layer, layer == terrain_layer ? 1 : 0);
     uint16_t blank_entry = 0;
     if (!PPU_bigTiles(g_ppu, layer))
@@ -1137,11 +1219,31 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
         if (!Dkc1VideoDecodeLevelTile(s_ws_layout, map_bank, map_base,
                                       metatile_base, wtx, wty, &entry))
           entry = blank_entry;
-        WsShadowForceTile(terrain_layer, wtx, wty, entry);
+        const uint32_t origin_tx =
+            s_ws_shadow_origin_x[terrain_layer] >> 3;
+        const uint32_t origin_ty =
+            s_ws_shadow_origin_y[terrain_layer] >> 3;
+        if (wtx >= origin_tx && wty >= origin_ty)
+          WsShadowForceTile(terrain_layer, wtx - origin_tx,
+                            wty - origin_ty, entry);
       }
     }
   }
   return true;
+}
+
+static bool Dkc1DebugForceWidescreenFallback(void) {
+  /* Deterministic regression injector. Unset by default and presentation-
+   * only: the exact absolute SNES frame is centered over black as though
+   * calibration rejected it. This exercises actor lifecycle continuity
+   * across a soft fallback without modifying cartridge state. */
+  const char *setting = getenv("DKC1_WS_FORCE_FALLBACK_FRAME");
+  if (!setting || !*setting)
+    return false;
+  char *end = NULL;
+  const long requested = strtol(setting, &end, 0);
+  return end && *end == '\0' && requested >= 0 &&
+         requested == snes_frame_counter;
 }
 
 void Dkc1DrawPpuFrame(void) {
@@ -1172,8 +1274,11 @@ void Dkc1DrawPpuFrame(void) {
       wide_layer_mask != 0 ? Dkc1WidescreenPresentationBias() : 0;
   trace.wide_layer_mask = wide_layer_mask;
   trace.presentation_bias = presentation_bias;
+  const bool debug_forced_fallback =
+      wide_layer_mask != 0 && Dkc1DebugForceWidescreenFallback();
+  trace.debug_forced_fallback = debug_forced_fallback;
   const bool extend_world =
-      wide_layer_mask != 0 &&
+      wide_layer_mask != 0 && !debug_forced_fallback &&
       Dkc1PrepareWidescreenShadow(wide_layer_mask, presentation_bias,
                                   trace_enabled ? &trace : NULL);
   if (trace_enabled) {

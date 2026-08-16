@@ -315,6 +315,40 @@ void Dkc1DebugRecordInput(uint32_t mask) {
     fprintf(s_input_record, "%X\n", mask);
 }
 
+void Dkc1DebugTracePlacedActorContext(uint16_t mode, uint16_t level,
+                                      uint16_t entrance) {
+  Initialize();
+  if (!s_lifecycle) return;
+  fprintf(s_lifecycle,
+      "{\"schema\":\"dkc1.prefetch-phase.v1\","
+      "\"event\":\"context_reset\",\"frame\":%d,"
+      "\"mode\":%u,\"level\":%u,\"entrance\":%u}\n",
+      snes_frame_counter, mode, level, entrance);
+}
+
+void Dkc1DebugTracePlacedActorPhase(const char *event,
+                                    uint16_t actor_index, uint16_t id,
+                                    uint16_t source, uint16_t source_x,
+                                    uint16_t current_left,
+                                    uint16_t current_right,
+                                    uint16_t stock_left,
+                                    uint16_t stock_right,
+                                    bool terrain_ready) {
+  Initialize();
+  if (!s_lifecycle || !event) return;
+  fprintf(s_lifecycle,
+      "{\"schema\":\"dkc1.prefetch-phase.v1\","
+      "\"event\":\"%s\",\"frame\":%d,"
+      "\"actor_index\":%u,\"pool_ordinal\":%u,"
+      "\"id\":%u,\"source\":%u,\"source_x\":%u,"
+      "\"terrain_ready\":%s,\"current_window\":[%u,%u],"
+      "\"stock_window\":[%u,%u]}\n",
+      event, snes_frame_counter, actor_index,
+      (unsigned)((actor_index - kActorFirst) >> 1), id, source, source_x,
+      terrain_ready ? "true" : "false", current_left, current_right,
+      stock_left, stock_right);
+}
+
 void Dkc1DebugDumpFrame(int frame) {
   Initialize();
 

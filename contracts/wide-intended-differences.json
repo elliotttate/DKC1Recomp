@@ -1,0 +1,12 @@
+{
+  "schema": "dkc1.intended-differences.v1",
+  "note": "Explicit profile of WRAM ranges where stock-vs-wide differences are intended consequences of the presentation split. first_divergence.py subtracts these when locating the first UNEXPECTED divergence; raw differences are always reported alongside, so this profile can hide nothing outright.",
+  "expected_activation_ranges": [
+    ["0x00EF", "0x00F3"]
+  ],
+  "expected_activation_note": "Scanner window bounds: the wide build compares against a widened activation window by design (v2 architecture, object visibility may widen).",
+  "expected_presentation_ranges": [
+    ["0x0200", "0x0420"]
+  ],
+  "expected_presentation_note": "WRAM OAM shadow (low table + 9-bit high table): sprites for margin-visible actors are submitted earlier/later than stock by design."
+}

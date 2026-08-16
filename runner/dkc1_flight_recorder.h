@@ -13,6 +13,9 @@
  */
 int Dkc1FlightRecorderInitialize(char *error, size_t error_size);
 int Dkc1FlightRecorderEnabled(void);
+
+/* Host build identity recorded into exported bundle manifests. */
+void Dkc1FlightRecorderSetBuildInfo(const char *build_info);
 void Dkc1FlightRecorderRecord(long completed_frame, uint32_t input_mask);
 int Dkc1FlightRecorderExport(long completed_frame,
                              char *bundle_path, size_t bundle_path_size,

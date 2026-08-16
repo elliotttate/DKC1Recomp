@@ -4,6 +4,12 @@ rem builds never contend with the primary build_host.bat session.
 rem Build the DKC1 headless host with MSVC directly (no CMake required).
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
 cd /d %~dp0
+rem Build identity: git commit (+dirty), timestamp, config -> window title,
+rem debug panel, and save-state sidecars (stale-executable detection).
+set DKC1_GIT=nogit
+for /f %%i in ('git rev-parse --short HEAD 2^>nul') do set DKC1_GIT=%%i
+git diff-index --quiet HEAD -- 2>nul || set DKC1_GIT=%DKC1_GIT%-dirty
+set BUILD_ID_DEFS=/DDKC1_BUILD_COMMIT=\"%DKC1_GIT%\" "/DDKC1_BUILD_TIME=\"%DATE% %TIME:~0,5%\"" /DDKC1_BUILD_CONFIG=\"tools\"
 set SR=..\..\snesrecomp\runner\src
 if not exist build\hostobj_tools mkdir build\hostobj_tools
 cd build\hostobj_tools
@@ -31,12 +37,15 @@ cl /nologo /c /MP8 /W0 /O1 %DEFS% %INCS% ^
   ..\..\runner\wram_dump.c ^
   ..\..\runner\dkc1_script.c ..\..\runner\dkc1_debug_dump.c ^
   ..\..\runner\dkc1_flight_recorder.c ^
+  ..\..\runner\dkc1_blank_scan.c ^
   ..\..\runner\verified_rom.c ^
   ..\..\generated\snesrecomp\*.c
 if errorlevel 1 exit /b 1
-cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:..\main_headless.obj ..\..\runner\headless_main.c
+cl /nologo /c /W0 /O1 %DEFS% %INCS% %BUILD_ID_DEFS% /Fo:..\main_headless.obj ..\..\runner\headless_main.c
 if errorlevel 1 exit /b 1
-cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:..\main_win32.obj ..\..\runner\win32_host.c
+cl /nologo /c /W0 /O1 %DEFS% %INCS% %BUILD_ID_DEFS% /Fo:..\main_win32.obj ..\..\runner\win32_host.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% %BUILD_ID_DEFS% /Fo:..\main_layer_capture.obj ..\..\runner\layer_capture_main.c
 if errorlevel 1 exit /b 1
 set LINK_RETRIES=0
 dir /b *.obj > objects.rsp
@@ -59,4 +68,6 @@ timeout /t 2 /nobreak >nul
 goto link_desktop
 
 :build_ok
+link /nologo /out:..\dkc1_layer_capture.exe @objects.rsp ..\main_layer_capture.obj ws2_32.lib user32.lib
+if errorlevel 1 exit /b 1
 echo HOST_BUILD_OK

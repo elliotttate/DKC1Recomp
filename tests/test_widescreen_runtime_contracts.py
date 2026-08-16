@@ -114,6 +114,15 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("memcpy(s_prefetch_wram, cpu->ram", source)
         self.assertIn("memcpy(cpu->ram, s_prefetch_wram", source)
         self.assertIn("Dkc1VideoEndPlacedActorDispatch", source)
+        self.assertIn("prefetch_candidate", source)
+        self.assertIn("prefetch_suppressed", source)
+        self.assertIn("prefetch_released", source)
+        self.assertIn("soft_fallback_held", source)
+        self.assertIn("Dkc1DebugTracePlacedActorContext", source)
+        debug = (ROOT / "runner" / "dkc1_debug_dump.c").read_text(
+            encoding="utf-8")
+        self.assertIn("dkc1.prefetch-phase.v1", debug)
+        self.assertIn('\\"stock_window\\":[%u,%u]', debug)
         terrain = source.split(
             "void Dkc1VideoSetTerrainReady", 1)[1].split(
                 "bool Dkc1VideoTerrainReady", 1)[0]
@@ -134,6 +143,11 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("Dkc1VideoEndPlacedActorDispatch(cpu)", injector)
         game = (ROOT / "runner" / "dkc1_game.c").read_text(
             encoding="utf-8")
+        self.assertIn("DKC1_WS_FORCE_FALLBACK_FRAME", game)
+        self.assertIn("!debug_forced_fallback", game)
+        ws_trace = (ROOT / "runner" / "dkc1_ws_trace.c").read_text(
+            encoding="utf-8")
+        self.assertIn("debug_forced_fallback", ws_trace)
         frame = game.split("static void Dkc1RunOneFrame", 1)[1].split(
             "static void Dkc1SaveExtra", 1)[0]
         self.assertLess(frame.index("Dkc1VideoObserveActorPool(g_ram)"),
@@ -277,6 +291,43 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertLess(bounds_gate, commit)
         self.assertIn(
             "upper_bound - lower_bound >= minimum_span", body)
+
+    def test_high_world_shadow_keys_are_scene_local_and_parity_safe(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        body = game.split(
+            "static bool Dkc1PrepareWidescreenShadow", 1)[1].split(
+                "void Dkc1DrawPpuFrame", 1)[0]
+        self.assertIn("s_ws_shadow_origin_valid", game)
+        self.assertIn("wanted_lo & ~UINT64_C(0x1ff)", body)
+        self.assertIn("wanted_y & ~UINT64_C(0xff)", body)
+        self.assertIn(
+            "WsShadowSetWorld(layer, shadow_world_x[layer], "
+            "shadow_world_y[layer])", body)
+        self.assertIn("wtx - origin_tx", body)
+        self.assertIn("wty - origin_ty", body)
+        self.assertIn("kWsShadowXTiles * 8u", body)
+        self.assertIn("kWsShadowYTiles * 8u", body)
+
+        # Exact bonus-room regression from the user quicksave: absolute
+        # X=$9AF9 exceeded the 4096-tile cache before localization.
+        lower, upper, world_x = 0x9460, 0xA2C0, 0x9AF9
+        extra = 43
+        wanted_lo = min(lower, world_x) - (extra + 8)
+        origin = wanted_lo & ~0x1FF
+        local_x = world_x - origin
+        self.assertEqual(origin, 0x9400)
+        self.assertEqual(local_x, 0x06F9)
+        self.assertLess(upper + 256 + extra + 8 - origin, 4096 * 8)
+        # A 512-pixel X origin preserves the rolling map half parity.
+        self.assertEqual((world_x // 256) & 1, (local_x // 256) & 1)
+
+        # A 256-pixel Y origin preserves the 32-row tilemap wrap even in a
+        # high vertical room.
+        world_y = 0x568B
+        origin_y = (world_y - 8) & ~0xFF
+        local_y = world_y - origin_y
+        self.assertEqual((world_y // 8) & 31, (local_y // 8) & 31)
 
     def test_visible_host_emits_atomic_route_results_and_can_autoclose(self):
         source = (ROOT / "runner" / "win32_host.c").read_text(

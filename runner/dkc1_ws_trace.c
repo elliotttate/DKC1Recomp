@@ -173,8 +173,13 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"bounds_ready\":%u,"
       "\"calibration_accepted\":%u,\"grace_accepted\":%u,"
       "\"shadow_commit\":%u,\"shadow_frame\":%u,\"prefill\":%u,"
-      "\"edge_extension\":%u,\"centered_fallback\":%u},"
-      "\"world\":[{\"valid\":%u,\"x\":%u,\"y\":%u},"
+      "\"edge_extension\":%u,\"centered_fallback\":%u,"
+      "\"debug_forced_fallback\":%u},"
+      "\"world\":[{\"valid\":%u,\"x\":%u,\"y\":%u,"
+      "\"shadow_x\":%u,\"shadow_y\":%u},"
+      "{\"valid\":%u,\"x\":%u,\"y\":%u,"
+      "\"shadow_x\":%u,\"shadow_y\":%u}],"
+      "\"shadow_origin\":[{\"valid\":%u,\"x\":%u,\"y\":%u},"
       "{\"valid\":%u,\"x\":%u,\"y\":%u}],"
       "\"margin_tiles\":%d,\"shadow_delta\":[",
       frame->frame, (unsigned)ReadWram16(0x0032),
@@ -211,9 +216,17 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       frame->shadow_frame ? 1u : 0u,
       frame->prefill ? 1u : 0u, frame->edge_extension ? 1u : 0u,
       frame->centered_fallback ? 1u : 0u,
+      frame->debug_forced_fallback ? 1u : 0u,
       frame->world_valid[0] ? 1u : 0u, frame->world_x[0],
-      frame->world_y[0], frame->world_valid[1] ? 1u : 0u,
-      frame->world_x[1], frame->world_y[1], frame->margin_tiles);
+      frame->world_y[0], frame->shadow_local_x[0],
+      frame->shadow_local_y[0], frame->world_valid[1] ? 1u : 0u,
+      frame->world_x[1], frame->world_y[1], frame->shadow_local_x[1],
+      frame->shadow_local_y[1],
+      frame->shadow_origin_valid[0] ? 1u : 0u,
+      frame->shadow_origin_x[0], frame->shadow_origin_y[0],
+      frame->shadow_origin_valid[1] ? 1u : 0u,
+      frame->shadow_origin_x[1], frame->shadow_origin_y[1],
+      frame->margin_tiles);
   PrintShadow(s_trace_file, &frame->shadow_before[0],
               &frame->shadow_after[0]);
   fputc(',', s_trace_file);

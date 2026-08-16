@@ -378,6 +378,18 @@ Across frames 3,320-3,346, the old PPU rope X advanced 503..508 (signed
 WRAM-shadow and PPU OAM match, the rope entries are all X=252/large=1, the
 OAM inspector verdict is `clean`, and range/time overflow remain zero.
 
+The reusable two-sided contract is
+`tools/verify_vertical_rope_margins.py`. Its immutable Ropey Rampage anchor is
+the rolling-repro snapshot under
+`build/visible-flight-rope-fixed/capture-f00102424-20260815-205454-p6496/`.
+Three exact 240-frame runs per side pass. Right-margin OAM is byte-identical at
+SHA-256 `338208A6B4E707BC16AAD2E4055A0A0912A16410785FFCC6146374EBEAD3B30A`
+and reaches X=257..297; left-margin OAM is byte-identical at SHA-256
+`1DE73321638E9F889045D32B482FE2ED6BF79795EA66602040D36F08504B5073`
+and reaches signed X=-2..-41. There are zero low-byte alias copies and the
+maximum WRAM-shadow/PPU disagreement is the expected one VBlank. The machine
+report is `build/rope-margin-contract-v3/verification.json`.
+
 The native safety replay is byte-identical before and after:
 
 - final WRAM SHA-256:
@@ -405,7 +417,27 @@ The corrected experiment reads `$82`, reconstructs the stock scanner interval
 from `$EF/$F1`, and suppresses the first behavior dispatch until the source
 record reaches that interval. A whole-pool seed on the first dispatch after a
 reset treats actors already present in a loaded snapshot as left-censored and
-started. Evidence is under `build/phaseguard-v3-first-divergence/`.
+started. Phase history is reset only by a real gameplay-context change
+(`mode`, `level`, or `entrance`) or an explicit state import/load. A rejected
+presentation frame is not a gameplay transition and no longer clears the
+history. Evidence is under `build/phaseguard-v3-first-divergence/`.
+
+The default-off `DKC1_WS_FORCE_FALLBACK_FRAME=<absolute-frame>` diagnostic
+forces exactly one centered presentation frame without modifying cartridge
+state. `dkc1.prefetch-phase.v1` records `prefetch_candidate`,
+`prefetch_suppressed`, `soft_fallback_held`, and `prefetch_released`
+transitions. Three independent 932-frame Jungle runs forced frame 7635 after
+source `$0D` was prefetched. In all three, it was first suppressed at 7634,
+remained held during the fallback at 7635, and released at the original stock
+eligibility frame 7648. The phase and widescreen trace hashes were identical:
+
+- phase: `BA36B9AAC7655908AE6B66D91854533CB99EAF25A4986C35B27207B4C21E2483`;
+- widescreen: `33D30B1B8BAC33787C76E2631C9BE003A524D0590E398570F804C8B92908B244`.
+
+The machine-verifiable result is
+`build/phaseguard-v5-soft-fallback/verification.json`; rerun it with
+`tools/verify_prefetch_soft_fallback.py`. The diagnostic and trace are inert
+unless their environment variables are set.
 
 This removes source `$0D`'s early motion/speed difference, while retaining its
 early allocation/bookmark. It is **not accepted as a complete object-prefetch
@@ -488,6 +520,31 @@ The earlier repeat-only SHA-256
 `AFFC248C6CB1EBFF9D9FE7BBFB09AA5FA1348B5F355E97A9BD8FD19CF2446885`
 is retained only as rejected evidence: it removed the copied fragment but
 still stopped BG3 at the old 4:3 boundary.
+
+### High-world shadow-address regression (2026-08-15)
+
+The later Jungle bonus quicksave at level `$0050`, entrance `$006C` exposed a
+different hard 4:3 cutoff. Plane isolation showed that bounded BG3 correctly
+repeated across 16:9; BG1 terrain was the plane stopping at the native edges.
+Its absolute world X was `$9AF9` (tile 4,959), beyond WsShadow's 4,096-tile X
+capacity. The trace recorded exactly 1,568 west and 1,344 east BG1 misses per
+frame, all resolved as transparent blank. This also explains how high-Y
+vertical stages could fail despite a valid PPU/map shape.
+
+The fix keeps ROM decoding and trace world coordinates absolute but projects
+each BG independently into a stable local cache window. Terrain origin X is
+chosen to cover the full published camera range, native viewport, margins,
+and guard tiles. Parallax gets its own origin so low-Y sky and high-Y terrain
+can coexist. X origins are multiples of 512 pixels, preserving the rolling
+map's left/right screen parity; Y origins are multiples of 256, preserving
+its 32-row map wrap and VRAM-write attribution.
+
+On the exact quicksave, BG1 origin `$9400` maps world `$9AF9` to local `$06F9`.
+The three-frame regression has 8,736 terrain-margin hits and zero misses, and
+the visible output is continuous on both sides. Evidence is under
+`build/bonus-bg3-quicksave-20260815-2156-step/`; the durable gate is
+`tools/verify_shadow_localization.py` and its report is
+`shadow-localization-verification.json`.
 
 ### Runtime 4:3 / 16:9 desktop option (2026-08-15)
 

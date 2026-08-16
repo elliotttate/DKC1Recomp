@@ -8,6 +8,7 @@
  * Keys: arrows = D-pad, Z=B (jump), X=Y (run/grab), A=X, S=A,
  *       Q=L, W=R, Enter=Start, Right Shift=Select, Esc=quit.
  */
+#include "dkc1_blank_scan.h"
 #include "dkc1_game.h"
 #include "dkc1_debug_dump.h"
 #include "dkc1_flight_recorder.h"
@@ -19,7 +20,9 @@
 
 #include "common_cpu_infra.h"
 #include "common_rtl.h"
+#include "sha256.h"
 #include "snes/snes.h"
+#include "snes/ws_shadow.h"
 
 #include <windows.h>
 #include <commdlg.h>
@@ -59,6 +62,18 @@ enum {
 
 static const DWORD kWindowedStyle =
     WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX;
+
+/* Build identity, injected by the build scripts. A binary built outside
+ * them still runs but self-identifies as untracked. */
+#ifndef DKC1_BUILD_COMMIT
+#define DKC1_BUILD_COMMIT "untracked"
+#endif
+#ifndef DKC1_BUILD_TIME
+#define DKC1_BUILD_TIME "unknown-time"
+#endif
+#ifndef DKC1_BUILD_CONFIG
+#define DKC1_BUILD_CONFIG "dev"
+#endif
 
 /* Dark theme palette. The debug panel already uses 18,21,25; the menu bar
  * sits slightly lighter so the strips read as distinct surfaces. */
@@ -106,6 +121,166 @@ static Dkc1WramDump s_wram_dump;
 
 static uint16_t ReadWram16(unsigned address) {
   return (uint16_t)(g_ram[address] | ((uint16_t)g_ram[address + 1] << 8));
+}
+
+/* ---- build identity --------------------------------------------------- */
+
+static char s_exe_hash[12] = "nohash";
+static char s_build_id[160];
+
+static void InitBuildIdentity(void) {
+  char exe_path[MAX_PATH];
+  if (GetModuleFileNameA(NULL, exe_path, sizeof exe_path)) {
+    FILE *file = fopen(exe_path, "rb");
+    if (file) {
+      if (fseek(file, 0, SEEK_END) == 0) {
+        long size = ftell(file);
+        if (size > 0 && fseek(file, 0, SEEK_SET) == 0) {
+          uint8_t *data = (uint8_t *)malloc((size_t)size);
+          if (data && fread(data, 1, (size_t)size, file) == (size_t)size) {
+            uint8_t digest[32];
+            sha256_compute(data, (size_t)size, digest);
+            snprintf(s_exe_hash, sizeof s_exe_hash, "%02x%02x%02x%02x",
+                     digest[0], digest[1], digest[2], digest[3]);
+          }
+          free(data);
+        }
+      }
+      fclose(file);
+    }
+  }
+  snprintf(s_build_id, sizeof s_build_id, "%s %s %s exe:%s",
+           DKC1_BUILD_COMMIT, DKC1_BUILD_CONFIG, DKC1_BUILD_TIME, s_exe_hash);
+}
+
+/* Sidecar recording which build produced a state, so a stale-executable
+ * session can never silently mix states across incompatible builds. */
+static void WriteStateBuildInfo(const char *state_path) {
+  char side[1200];
+  snprintf(side, sizeof side, "%s.buildinfo.json", state_path);
+  FILE *file = fopen(side, "wb");
+  if (!file)
+    return;
+  fprintf(file,
+          "{\"schema\":\"dkc1.state-buildinfo.v1\",\"commit\":\"%s\","
+          "\"config\":\"%s\",\"build_time\":\"%s\",\"exe_sha8\":\"%s\","
+          "\"host_frame\":%ld,\"snes_frame\":%d,\"widescreen\":%s}\n",
+          DKC1_BUILD_COMMIT, DKC1_BUILD_CONFIG, DKC1_BUILD_TIME, s_exe_hash,
+          s_host_frame, snes_frame_counter,
+          Dkc1VideoIsWidescreen() ? "true" : "false");
+  fclose(file);
+}
+
+/* Reads the recorded producing commit from a state's sidecar. Returns 1
+ * when a commit was recovered, 0 when the state has no sidecar (legacy or
+ * externally produced). */
+static int StateBuildCommit(const char *state_path, char *out,
+                            size_t out_size) {
+  char side[1200];
+  snprintf(side, sizeof side, "%s.buildinfo.json", state_path);
+  FILE *file = fopen(side, "rb");
+  if (!file)
+    return 0;
+  char text[768] = {0};
+  size_t got = fread(text, 1, sizeof text - 1, file);
+  fclose(file);
+  text[got] = 0;
+  const char *key = strstr(text, "\"commit\":\"");
+  if (!key)
+    return 0;
+  key += 10;
+  size_t i = 0;
+  for (; i + 1 < out_size && key[i] && key[i] != '"'; i++)
+    out[i] = key[i];
+  out[i] = 0;
+  return 1;
+}
+
+/* Returns 1 to proceed with the load. States without a sidecar load
+ * silently; a recorded commit that differs from this build requires an
+ * explicit user decision. */
+static int ConfirmStateBuildCompat(const char *state_path) {
+  char commit[80];
+  if (!StateBuildCommit(state_path, commit, sizeof commit))
+    return 1;
+  if (strcmp(commit, DKC1_BUILD_COMMIT) == 0)
+    return 1;
+  char message[512];
+  snprintf(message, sizeof message,
+           "This state was saved by a different build.\n\n"
+           "State build:  %s\nThis build:   %s (%s)\n\n"
+           "Loading across builds can produce divergence that is not a real "
+           "bug. Load anyway?",
+           commit, DKC1_BUILD_COMMIT, DKC1_BUILD_TIME);
+  return MessageBoxA(s_window, message, "DKC1Recomp - build mismatch",
+                     MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2) == IDYES;
+}
+
+static char s_rom_path[1024];
+
+/* Detector-triggered evidence capture: when any always-on integrity
+ * detector fires (scene-local cache violations, stream-retrodiction
+ * mismatches, rendered-blank margins), auto-request the same repro bundle
+ * F9 would export — the moment of first detection is preserved without
+ * the player having to react. Opt-in: DKC1_AUTO_EXPORT=1 and the flight
+ * recorder armed. One export per burst (10s cooldown). */
+static void MaybeAutoExport(void) {
+  static int s_mode = -1;
+  static long s_seen_total;
+  static long s_cooldown_until;
+  if (s_mode < 0)
+    s_mode = EnvironmentEnabled("DKC1_AUTO_EXPORT") ? 1 : 0;
+  if (!s_mode || !Dkc1FlightRecorderEnabled())
+    return;
+  if ((s_host_frame & 15) != 0)
+    return; /* poll every 16 frames; counters are cumulative */
+  long total = Dkc1BlankScanEventCount();
+  for (int layer = 0; layer < 2; layer++) {
+    WsShadowMarginStat stat;
+    WsShadowGetMarginStats(layer, &stat);
+    total += (long)(stat.outOfRangeRead + stat.outOfRangeWrite +
+                    stat.retrodictMismatch);
+  }
+  if (total > s_seen_total) {
+    s_seen_total = total;
+    if (s_host_frame >= s_cooldown_until) {
+      s_cooldown_until = s_host_frame + 600;
+      s_export_requested = 1;
+      snprintf(s_host_status, sizeof s_host_status,
+               "integrity detector fired (total %ld) — auto-exporting",
+               total);
+    }
+  }
+}
+
+/* Fire-and-forget same-frame layer isolation over a freshly exported repro
+ * bundle's current.snapshot. Out of process so this session's PPU/HDMA
+ * state is untouched; the tool reloads the snapshot per layer mask, which
+ * guarantees every image shows the same emulated frame. */
+static void SpawnLayerCapture(const char *bundle_dir) {
+  char exe[MAX_PATH];
+  if (!GetModuleFileNameA(NULL, exe, sizeof exe))
+    return;
+  char *slash = strrchr(exe, '\\');
+  if (!slash)
+    return;
+  snprintf(slash + 1, sizeof exe - (size_t)(slash + 1 - exe),
+           "dkc1_layer_capture.exe");
+  if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES)
+    return;
+  char command[2048];
+  snprintf(command, sizeof command,
+           "\"%s\" \"%s\" \"%s\\current.snapshot\" \"%s\"", exe, s_rom_path,
+           bundle_dir, bundle_dir);
+  STARTUPINFOA startup;
+  PROCESS_INFORMATION process;
+  memset(&startup, 0, sizeof startup);
+  startup.cb = sizeof startup;
+  if (CreateProcessA(NULL, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                     NULL, NULL, &startup, &process)) {
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+  }
 }
 
 static int EnvironmentEnabled(const char *name) {
@@ -398,8 +573,8 @@ static void UpdateDebugTitle(void) {
   if (!s_window) return;
   char title[320];
   snprintf(title, sizeof title,
-           "DKC1Recomp | frame %ld | %s | %s | %s | provenance %s",
-           s_host_frame, s_paused ? "PAUSED" : "running",
+           "DKC1Recomp %s | frame %ld | %s | %s | %s | provenance %s",
+           DKC1_BUILD_COMMIT, s_host_frame, s_paused ? "PAUSED" : "running",
            Dkc1VideoIsWidescreen() ? "16:9" : "4:3",
            LayerModeName(Dkc1DebugLayerMask()),
            Dkc1DebugProvenanceOverlay() ? "ON" : "off");
@@ -509,6 +684,7 @@ static void PresentFrame(HDC dc) {
   char text[2048];
   snprintf(text, sizeof text,
            "VISIBLE WIDESCREEN DEBUGGER\r\n"
+           "Build: %s\r\n"
            "\r\n"
            "Host frame: %ld\r\n"
            "State: %s%s%s\r\n"
@@ -539,6 +715,7 @@ static void PresentFrame(HDC dc) {
            "\r\n"
            "The side panel is host-only and is not\r\n"
            "included in framebuffer evidence.",
+           s_build_id,
            s_host_frame,
            s_paused ? "PAUSED" : "running",
            s_route_finished ? " / ROUTE COMPLETE" : "",
@@ -930,7 +1107,10 @@ static void AudioPump(void) {
 }
 
 int main(int argc, char **argv) {
+  InitBuildIdentity();
+  Dkc1FlightRecorderSetBuildInfo(s_build_id);
   const char *rom_path = argc > 1 ? argv[1] : "dkc1.sfc";
+  snprintf(s_rom_path, sizeof s_rom_path, "%s", rom_path);
   size_t rom_size = 0;
   char rom_error[160];
   uint8_t *rom =
@@ -977,13 +1157,25 @@ int main(int argc, char **argv) {
   }
   {
     const char *snapshot = getenv("DKC1_SAVESTATE_INPUT");
-    if (snapshot && *snapshot && !RtlLoadSnapshot(snapshot)) {
-      char message[1024];
-      snprintf(message, sizeof message, "Unable to load native snapshot:\n%s",
-               snapshot);
-      MessageBoxA(NULL, message, "DKC1Recomp", MB_ICONERROR);
-      free(rom);
-      return 20;
+    if (snapshot && *snapshot) {
+      if (!RtlLoadSnapshot(snapshot)) {
+        char message[1024];
+        snprintf(message, sizeof message,
+                 "Unable to load native snapshot:\n%s", snapshot);
+        MessageBoxA(NULL, message, "DKC1Recomp", MB_ICONERROR);
+        free(rom);
+        return 20;
+      }
+      /* Automation path: never modal, but never silent either. */
+      char commit[80];
+      if (StateBuildCommit(snapshot, commit, sizeof commit) &&
+          strcmp(commit, DKC1_BUILD_COMMIT) != 0) {
+        snprintf(s_host_status, sizeof s_host_status,
+                 "WARNING: state from build %.32s, this is %s",
+                 commit, DKC1_BUILD_COMMIT);
+        fprintf(stderr, "state_build_mismatch state=%s this=%s\n", commit,
+                DKC1_BUILD_COMMIT);
+      }
     }
   }
   {
@@ -1143,10 +1335,11 @@ int main(int argc, char **argv) {
       char bundle[1024], error[256];
       s_export_requested = 0;
       if (Dkc1FlightRecorderExport(s_host_frame, bundle, sizeof bundle,
-                                   error, sizeof error))
+                                   error, sizeof error)) {
+        SpawnLayerCapture(bundle);
         snprintf(s_host_status, sizeof s_host_status,
-                 "repro exported: %.470s", bundle);
-      else
+                 "repro exported (+layer captures): %.450s", bundle);
+      } else
         snprintf(s_host_status, sizeof s_host_status,
                  "repro export failed: %.460s", error);
       UpdateDebugTitle();
@@ -1157,25 +1350,40 @@ int main(int argc, char **argv) {
      * (loaded-state evidence discipline); margins rebuild within a frame. */
     if (s_quicksave_requested) {
       s_quicksave_requested = 0;
+      const int saved = RtlSaveSnapshot("quicksave.state");
+      if (saved)
+        WriteStateBuildInfo("quicksave.state");
       snprintf(s_host_status, sizeof s_host_status,
-               RtlSaveSnapshot("quicksave.state")
-                   ? "quick save -> quicksave.state"
-                   : "quick save FAILED");
+               saved ? "quick save -> quicksave.state"
+                     : "quick save FAILED");
       UpdateDebugTitle();
     }
     if (s_quickload_requested) {
       s_quickload_requested = 0;
-      snprintf(s_host_status, sizeof s_host_status,
-               RtlLoadSnapshot("quicksave.state")
-                   ? "quick load <- quicksave.state"
-                   : "quick load FAILED (no quicksave.state?)");
+      if (!ConfirmStateBuildCompat("quicksave.state")) {
+        snprintf(s_host_status, sizeof s_host_status,
+                 "quick load declined (build mismatch)");
+      } else {
+        snprintf(s_host_status, sizeof s_host_status,
+                 RtlLoadSnapshot("quicksave.state")
+                     ? "quick load <- quicksave.state"
+                     : "quick load FAILED (no quicksave.state?)");
+      }
       UpdateDebugTitle();
     }
     if (s_pending_state_op) {
       const int save_op = s_pending_state_op == 1;
       s_pending_state_op = 0;
+      if (!save_op && !ConfirmStateBuildCompat(s_pending_state_path)) {
+        snprintf(s_host_status, sizeof s_host_status,
+                 "state load declined (build mismatch)");
+        UpdateDebugTitle();
+        continue;
+      }
       const int accepted = save_op ? RtlSaveSnapshot(s_pending_state_path)
                                    : RtlLoadSnapshot(s_pending_state_path);
+      if (save_op && accepted)
+        WriteStateBuildInfo(s_pending_state_path);
       snprintf(s_host_status, sizeof s_host_status, "state %s %s %.400s",
                save_op ? "save" : "load",
                accepted ? (save_op ? "->" : "<-") : "FAILED:",
@@ -1274,6 +1482,8 @@ int main(int argc, char **argv) {
     }
     Dkc1DrawPpuFrame();
     s_host_frame++;
+    Dkc1BlankScanFrame(s_host_frame, s_pixels, s_width, s_height);
+    MaybeAutoExport();
     {
       char error[256];
       if (!Dkc1WramDumpFrame(&s_wram_dump, s_host_frame,

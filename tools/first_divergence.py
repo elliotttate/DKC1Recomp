@@ -65,6 +65,10 @@ BOOKKEEPING = (0x192B, 0x1A2B)
 # must not mask the first real gameplay difference. Everything else that
 # differs is unexpected. Deliberately narrow: raw differences are always
 # reported alongside.
+#
+# These built-ins are the fallback; the authoritative copy is the explicit
+# profile (contracts/wide-intended-differences.json, or --profile), so
+# intended-difference policy is versioned data, not tool internals.
 EXPECTED_WIDESCREEN_RANGES = [
     (0x00EF, 0x00F3),   # scanner window (widened activation comparisons)
 ]
@@ -72,6 +76,25 @@ EXPECTED_WIDESCREEN_RANGES = [
 EXPECTED_PRESENTATION_RANGES = [
     (0x0200, 0x0420),   # WRAM OAM shadow (low table + 9-bit high table)
 ]
+
+DEFAULT_PROFILE = Path(__file__).resolve().parent.parent / \
+    "contracts" / "wide-intended-differences.json"
+
+
+def load_profile(path: Path) -> dict:
+    """Replace the intended-difference ranges from an explicit profile."""
+    global EXPECTED_WIDESCREEN_RANGES, EXPECTED_PRESENTATION_RANGES
+    profile = json.loads(path.read_text())
+
+    def ranges(key):
+        return [(int(first, 0), int(last, 0))
+                for first, last in profile.get(key, [])]
+
+    if "expected_activation_ranges" in profile:
+        EXPECTED_WIDESCREEN_RANGES = ranges("expected_activation_ranges")
+    if "expected_presentation_ranges" in profile:
+        EXPECTED_PRESENTATION_RANGES = ranges("expected_presentation_ranges")
+    return profile
 
 INCLUDE_GROUPS = {
     "core_gameplay": [(0x0020, 0x0100), (0x0500, 0x0600)],
@@ -341,6 +364,10 @@ def classify(stock: bytes, wide: bytes) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", type=Path, default=None,
+                        help="intended-differences profile JSON (defaults "
+                             "to contracts/wide-intended-differences.json "
+                             "when present)")
     parser.add_argument("--exe", type=Path)
     parser.add_argument("--rom", required=True, type=Path)
     parser.add_argument("--script", type=Path,
@@ -367,6 +394,13 @@ def main() -> int:
               "--work; every reused artifact is revalidated before the two "
               "semantic passes run"))
     args = parser.parse_args()
+
+    profile_path = args.profile or (
+        DEFAULT_PROFILE if DEFAULT_PROFILE.exists() else None)
+    if profile_path is not None:
+        profile = load_profile(profile_path)
+        print(f"intended-differences profile: {profile_path} "
+              f"({profile.get('note', 'no note')})")
 
     work = args.work
     work.mkdir(parents=True, exist_ok=True)

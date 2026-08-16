@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "cpu_state.h"
+#include "dkc1_debug_dump.h"
 
 bool g_ws_active;
 int g_ws_extra;
@@ -14,6 +15,8 @@ typedef struct Dkc1PlacedActorPhase {
   uint16_t id;
   uint16_t source;
   bool stock_started;
+  bool suppression_reported;
+  bool fallback_hold_reported;
 } Dkc1PlacedActorPhase;
 
 /* Normal actor indexes are the even values $02..$32.  This is host-only
@@ -189,6 +192,8 @@ static void Dkc1VideoObservePlacedActorContext(const uint8_t *wram) {
   Dkc1VideoClearPlacedActorPhases();
   s_placed_actor_context = current;
   s_placed_actor_context_valid = true;
+  Dkc1DebugTracePlacedActorContext(current.mode, current.level,
+                                   current.entrance);
 }
 
 void Dkc1VideoObserveActorPool(const uint8_t *wram) {
@@ -212,6 +217,8 @@ void Dkc1VideoObserveActorPool(const uint8_t *wram) {
     phase->id = 0;
     phase->source = 0;
     phase->stock_started = false;
+    phase->suppression_reported = false;
+    phase->fallback_hold_reported = false;
   }
 }
 
@@ -254,7 +261,8 @@ bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu) {
       cpu, 0x7e, (uint16_t)(0x0d45u + actor_index));
   const uint16_t source = cpu_read16(
       cpu, 0x7e, (uint16_t)(0x15fdu + actor_index));
-  if (phase->id != id || phase->source != source) {
+  const bool new_identity = phase->id != id || phase->source != source;
+  if (new_identity) {
     phase->id = id;
     phase->source = source;
     /* A new identity allocated while widening is inactive came from the
@@ -262,6 +270,8 @@ bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu) {
      * identity allocated while widening is active may be margin-prefetched
      * and must pass the reconstructed stock interval below. */
     phase->stock_started = !Dkc1VideoTerrainReady();
+    phase->suppression_reported = false;
+    phase->fallback_hold_reported = false;
   }
 
   /* Kongs, generated effects, grouped children, and non-authored actor slots
@@ -304,9 +314,34 @@ bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu) {
   const uint16_t source_x = cpu_read16(
       cpu, 0xbd, (uint16_t)(record + 2u));
 
+  const bool was_started = phase->stock_started;
   if (!phase->stock_started &&
       Dkc1UnsignedInside(source_x, stock_left, stock_right))
     phase->stock_started = true;
+  if (new_identity) {
+    Dkc1DebugTracePlacedActorPhase(
+        phase->stock_started ? "stock_identity" : "prefetch_candidate",
+        actor_index, id, source, source_x, current_left, current_right,
+        stock_left, stock_right, Dkc1VideoTerrainReady());
+  }
+  if (!was_started && phase->stock_started) {
+    Dkc1DebugTracePlacedActorPhase(
+        "prefetch_released", actor_index, id, source, source_x,
+        current_left, current_right, stock_left, stock_right,
+        Dkc1VideoTerrainReady());
+  } else if (!phase->stock_started && !Dkc1VideoTerrainReady() &&
+             !phase->fallback_hold_reported) {
+    Dkc1DebugTracePlacedActorPhase(
+        "soft_fallback_held", actor_index, id, source, source_x,
+        current_left, current_right, stock_left, stock_right, false);
+    phase->fallback_hold_reported = true;
+  } else if (!phase->stock_started && !phase->suppression_reported) {
+    Dkc1DebugTracePlacedActorPhase(
+        "prefetch_suppressed", actor_index, id, source, source_x,
+        current_left, current_right, stock_left, stock_right,
+        Dkc1VideoTerrainReady());
+    phase->suppression_reported = true;
+  }
   return phase->stock_started;
 }
 

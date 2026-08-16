@@ -46,11 +46,12 @@ def write_inputs(path: Path, masks: list[int]) -> None:
 
 class Replayer:
     def __init__(self, exe: Path, rom: Path, work: Path, widescreen: bool,
-                 settle: int, confirm: int):
+                 settle: int, confirm: int, snapshot: Path | None = None):
         self.exe, self.rom, self.work = exe, rom, work
         self.widescreen = widescreen
         self.settle = settle
         self.confirm = confirm
+        self.snapshot = snapshot
         self.replays = 0
 
     def run(self, masks: list[int]) -> tuple[bytes, str]:
@@ -62,6 +63,10 @@ class Replayer:
         env["DKC1_WIDESCREEN"] = "1" if self.widescreen else "0"
         env["SNESRECOMP_INPUT_PLAY"] = str(inputs)
         env["DKC1_WRAM_OUTPUT"] = str(wram_out)
+        if self.snapshot is not None:
+            # Replay from a mid-session anchor (flight-recorder bundles)
+            # instead of power-on: the recording is the anchor's suffix.
+            env["DKC1_SAVESTATE_INPUT"] = str(self.snapshot)
         frames = len(masks) + self.settle
         result = subprocess.run(
             [str(self.exe), str(self.rom), str(frames)],
@@ -146,6 +151,9 @@ def main() -> int:
     parser.add_argument("--predicate", required=True,
                         help='JSON, e.g. {"addr":"0x057B","op":">=",'
                              '"value":"0x0003"}')
+    parser.add_argument("--snapshot-input", type=Path,
+                        help="native snapshot to load before replaying (e.g. a
+                             flight-recorder bundle anchor)")
     parser.add_argument("--settle", type=int, default=60)
     parser.add_argument("--confirm", type=int, default=3)
     parser.add_argument("--widescreen", action="store_true", default=True)
@@ -159,7 +167,9 @@ def main() -> int:
     predicate = make_predicate(json.loads(args.predicate))
     replayer = Replayer(args.exe.resolve(), args.rom.resolve(),
                         args.work.resolve(), args.widescreen,
-                        args.settle, args.confirm)
+                        args.settle, args.confirm,
+                        snapshot=args.snapshot_input.resolve()
+                        if args.snapshot_input else None)
 
     print(f"baseline: {len(masks)} frames, confirming x{args.confirm}...")
     if not replayer.check(masks, predicate):
