@@ -22,6 +22,9 @@ typedef struct Dkc1WsTraceFrame {
   int terrain_layer;
   int presentation_bias;
   int selected_layout;
+  int selected_definition_bank;
+  int decode_tile_offset_x;
+  int decode_tile_offset_y;
   int layout_grace;
   int margin_tiles;
   int boundary_continuation_tiles;

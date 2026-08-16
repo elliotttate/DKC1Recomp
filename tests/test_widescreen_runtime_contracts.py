@@ -315,7 +315,7 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("WsShadowFrame(g_ppu)", committed)
         self.assertIn("trace->shadow_commit = true", committed)
 
-    def test_level_decoder_uses_independent_map_and_metatile_banks(self):
+    def test_level_decoder_calibrates_cartridge_authentic_definition_banks(self):
         game = (ROOT / "runner" / "dkc1_game.c").read_text(
             encoding="utf-8")
         video = (ROOT / "runner" / "dkc1_video.c").read_text(
@@ -325,19 +325,58 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         trace = (ROOT / "runner" / "dkc1_ws_trace.c").read_text(
             encoding="utf-8")
 
-        self.assertIn("const uint8_t metatile_bank = g_ram[0x00d6];", game)
-        self.assertIn("map_bank, metatile_bank", game)
-        self.assertIn("uint8_t metatile_bank", header)
+        self.assertIn(
+            "const uint8_t alternate_definition_bank = g_ram[0x00d6];",
+            game)
+        self.assertIn("Dkc1DefinitionBankCandidates", game)
+        self.assertIn("uint8_t definition_bank", header)
         self.assertIn("RomWord(map_bank, map_offset", video)
-        self.assertIn("RomWord(metatile_bank, definition_offset", video)
+        self.assertIn("RomWord(definition_bank, definition_offset", video)
         self.assertIn("metatile_bank << 56", game)
         self.assertIn(r'\"metatile_bank\":%u', trace)
+        self.assertIn("? map_bank : 0x81u", game)
+        self.assertIn("alternate_bank != banks[0]", game)
+        self.assertIn(r'\"definition_bank\":%d', trace)
 
-        # Exact current underwater repro: Level_SetTilemapPointers selects
-        # map E9:0000 and metatile definitions D0:0000. The former one-bank
-        # decoder scored vertical calibration 50/224; the split-bank decode
-        # scores 212/224 and safely clears the 70% acceptance threshold.
+        # CODE_818705 keeps DB=$D5 for horizontal map and definition reads;
+        # CODE_818DFA restores PB=$81 before vertical definition reads. The
+        # alternate $D6 bank remains available for specialized rooms. Exact
+        # underwater repro E9:0000/D0:0000 scores 212/224 and therefore wins
+        # safely without forcing D0 onto ordinary land maps.
         self.assertGreaterEqual(212 * 10, 224 * 7)
+
+    def test_calibration_scores_both_cartridge_coordinate_systems(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        body = game.split(
+            "static bool Dkc1PrepareWidescreenShadow", 1)[1].split(
+                "void Dkc1DrawPpuFrame", 1)[0]
+        self.assertIn(
+            "(uint16_t)(g_ppu->hScroll[layer] + presentation_bias)", body)
+        self.assertIn("const uint32_t calibration_x[2]", body)
+        self.assertIn("const uint32_t calibration_y[2]", body)
+        self.assertIn("g_ppu->hScroll[terrain_layer], camera_x", body)
+        self.assertIn("g_ppu->vScroll[terrain_layer], camera_y", body)
+        self.assertIn("camera_x,", body)
+        self.assertIn("camera_y,", body)
+        calibration = body.split("const uint32_t calibration_x", 1)[1].split(
+            "Dkc1LevelLayout best", 1)[0]
+        self.assertNotIn("presentation_bias", calibration)
+        call = body.index("Dkc1CalibrateLayout(")
+        self.assertIn("calibration_x[coordinate_source]",
+                      body[call:call + 700])
+        self.assertIn("calibration_y[coordinate_source]",
+                      body[call:call + 700])
+        self.assertIn("accepted_decode_tile_offset_x", body)
+        self.assertIn("signed_decode_wtx", body)
+        self.assertIn("signed_decode_wty", body)
+        self.assertIn("trace.decode_tile_offset_x", game)
+        self.assertIn(r'\"decode_tile_offset\":[%d,%d]',
+                      (ROOT / "runner" / "dkc1_ws_trace.c").read_text(
+                          encoding="utf-8"))
+        self.assertIn("s_ws_definition_bank = accepted_definition_bank", body)
+        self.assertIn("snapshot.definitionBank = s_ws_definition_bank", game)
+        self.assertIn("s_ws_definition_bank == 0", game)
 
     def test_underwater_boundary_continuation_is_margin_only(self):
         game = (ROOT / "runner" / "dkc1_game.c").read_text(
@@ -357,12 +396,16 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         continuation = body.index("allow_underwater_boundary")
         self.assertLess(prefill, continuation)
         self.assertIn("Dkc1ReadWram16(0x0030) == 0x0061u", body)
-        self.assertIn("map_bank == 0xe9u && metatile_bank == 0xd0u", body)
-        self.assertIn("native_edge_metatile_x[2]", body[continuation:])
+        self.assertIn(
+            "map_bank == 0xe9u && alternate_definition_bank == 0xd0u",
+            body)
+        self.assertIn("accepted_definition_bank == 0xd0u", body)
+        self.assertIn("native_edge_tile_x[2]", body[continuation:])
+        self.assertIn("native_edge_tile_x[side] >> 2", body[continuation:])
         self.assertIn("side == 0 ?", body[continuation:])
-        self.assertIn("target_metatile_x < native_edge_metatile_x[side]",
+        self.assertIn("target_metatile_x < native_edge_metatile_x",
                       body[continuation:])
-        self.assertIn("target_metatile_x > native_edge_metatile_x[side]",
+        self.assertIn("target_metatile_x > native_edge_metatile_x",
                       body[continuation:])
 
         # Empty targets are filled only from a completely populated adjacent
@@ -550,9 +593,15 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("SpawnLayerCapture(bundle)", block)
         self.assertIn("sparse host-only", host)
 
-    def test_v8_native_state_preserves_host_widescreen_state(self):
+    def test_v9_native_state_preserves_host_and_ppu_internal_state(self):
         rtl = (ROOT / "snesrecomp" / "runner" / "src" /
                "common_rtl.c").read_text(encoding="utf-8")
+        snes = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
+                "snes.c").read_text(encoding="utf-8")
+        ppu_h = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
+                 "ppu.h").read_text(encoding="utf-8")
+        ppu_c = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
+                 "ppu.c").read_text(encoding="utf-8")
         shadow_h = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
                     "ws_shadow.h").read_text(encoding="utf-8")
         shadow_c = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
@@ -563,8 +612,20 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             encoding="utf-8")
         video_c = (ROOT / "runner" / "dkc1_video.c").read_text(
             encoding="utf-8")
+        verifier = (ROOT / "tools" / "verify_widescreen_savestate.py").read_text(
+            encoding="utf-8")
 
-        self.assertIn("#define RTL_SAV_VERSION 8u", rtl)
+        self.assertIn("#define RTL_SAV_VERSION 9u", rtl)
+        self.assertIn("RTL_PRESENTATION_VERSION = 9", verifier)
+        self.assertIn('split_state = output_dir / "split-v9.state"', verifier)
+        self.assertIn("ppu_saveload_internal", ppu_h)
+        self.assertIn("ppu_reset_internal_after_legacy_load", ppu_h)
+        self.assertIn("'P' | 'P' << 8 | 'I' << 16 | '0' << 24", ppu_c)
+        self.assertIn("ppu_saveload_internal(snes->ppu, sli);", snes)
+        self.assertIn("ppu_reset_internal_after_legacy_load(snes->ppu);", snes)
+        self.assertIn("s_saveload_version >= 9", snes)
+        self.assertIn("if (version < 9)", game)
+        self.assertIn("vramIncrementOnHigh = true;", game)
         for symbol in ("WsShadowSnapshotSize", "WsShadowSnapshotSave",
                        "WsShadowSnapshotLoad"):
             self.assertIn(symbol, shadow_h)

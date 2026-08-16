@@ -182,11 +182,19 @@ static void Dkc1LoadExtra(SaveLoadInfo *sli, uint32_t version) {
 static void Dkc1ResetWidescreenShadow(void);
 
 static void Dkc1OnStateLoaded(uint32_t version) {
-  (void)version;
   g_cpu.ram = g_ram;
   g_apu_last_sync_master = g_cpu.master_cycles;
   g_snes->beamMasterLast = g_cpu.master_cycles;
   interp_bridge_set_master_deadline(0);
+  /* RTLS v4-v8 omitted VMAIN and the other PPU write-port latches.  Every DKC
+   * frame-boundary path restores VMAIN to $80 after temporary $00/$81 tilemap
+   * transfers.  Re-establish that cartridge invariant for existing playtester
+   * states; v9+ restores the exact serialized value instead. */
+  if (version < 9) {
+    g_snes->ppu->vramIncrementOnHigh = true;
+    g_snes->ppu->vramRemapMode = 0;
+    g_snes->ppu->vramIncrement = 1;
+  }
   const bool restored_host_widescreen = s_ws_snapshot_restore_valid;
   const char *cold_load = getenv("DKC1_WS_COLD_STATE_LOAD");
   const bool force_cold_widescreen =
@@ -750,6 +758,17 @@ static bool s_ws_shadow_origin_valid[2];
 static uint32_t s_ws_shadow_origin_x[2];
 static uint32_t s_ws_shadow_origin_y[2];
 static Dkc1LevelLayout s_ws_layout;
+/* Definition reads do not use one universal bank. The horizontal streamer
+ * at $81:8705 keeps DB=$D5, while the vertical streamer at $81:8DFA restores
+ * DB=$81 around definition reads. Some specialized rooms publish an
+ * alternate bank in $D6. Calibration selects among those cartridge-authentic
+ * candidates and proves the choice against the native rolling map. */
+static uint8_t s_ws_definition_bank;
+/* Map a tile in the presentation-keyed shadow back to the coordinates used
+ * by the cartridge's level-map streamer. Usually zero; vertical ice rooms
+ * intentionally phase BG1VOFS by $0100, which is -32 source tile rows. */
+static int8_t s_ws_decode_tile_offset_x;
+static int8_t s_ws_decode_tile_offset_y;
 static int s_ws_layout_grace;  /* bounded transient calibration misses */
 static bool s_ws_trace_reset_pending;
 
@@ -798,7 +817,11 @@ typedef struct Dkc1WidescreenSnapshot {
   uint8_t identityValid;
   uint8_t traceResetPending;
   uint8_t terrainReady;
-  uint8_t reserved;
+  uint8_t definitionBank;
+  /* These consume the two bytes that were structure padding in v1, keeping
+   * the wire size and every following field byte-exact for old snapshots. */
+  int8_t decodeTileOffsetX;
+  int8_t decodeTileOffsetY;
   int32_t presentationBias;
   uint32_t worldX[2];
   uint32_t worldY[2];
@@ -832,6 +855,9 @@ static void Dkc1SaveWidescreenSnapshot(SaveLoadInfo *sli) {
   memcpy(snapshot.shadowOriginY, s_ws_shadow_origin_y,
          sizeof snapshot.shadowOriginY);
   snapshot.layout = (int32_t)s_ws_layout;
+  snapshot.definitionBank = s_ws_definition_bank;
+  snapshot.decodeTileOffsetX = s_ws_decode_tile_offset_x;
+  snapshot.decodeTileOffsetY = s_ws_decode_tile_offset_y;
   snapshot.layoutGrace = s_ws_layout_grace;
   snapshot.identity = s_ws_identity;
 
@@ -911,7 +937,20 @@ static bool Dkc1LoadWidescreenSnapshot(SaveLoadInfo *sli) {
   memcpy(s_ws_shadow_origin_y, snapshot.shadowOriginY,
          sizeof s_ws_shadow_origin_y);
   s_ws_layout = (Dkc1LevelLayout)snapshot.layout;
+  s_ws_definition_bank = snapshot.definitionBank;
+  s_ws_decode_tile_offset_x = snapshot.decodeTileOffsetX;
+  s_ws_decode_tile_offset_y = snapshot.decodeTileOffsetY;
   s_ws_layout_grace = snapshot.layoutGrace;
+  /* Earlier host snapshots used this byte as zeroed padding. Never let an
+   * old retained shadow resume with an unproven definition-bank choice. */
+  if (s_ws_layout != kDkc1LayoutUnknown && s_ws_definition_bank == 0) {
+    s_ws_shadow_active = false;
+    s_ws_layout = kDkc1LayoutUnknown;
+    s_ws_decode_tile_offset_x = 0;
+    s_ws_decode_tile_offset_y = 0;
+    s_ws_layout_grace = 0;
+    Dkc1VideoSetTerrainReady(false);
+  }
   s_ws_identity = snapshot.identity;
   Dkc1VideoSetPresentationBias(snapshot.presentationBias);
   Dkc1VideoSetTerrainReady(snapshot.terrainReady != 0);
@@ -1052,6 +1091,9 @@ static void Dkc1ClearWidescreenShadow(bool clear_identity) {
   memset(s_ws_shadow_origin_x, 0, sizeof s_ws_shadow_origin_x);
   memset(s_ws_shadow_origin_y, 0, sizeof s_ws_shadow_origin_y);
   s_ws_layout = kDkc1LayoutUnknown;
+  s_ws_definition_bank = 0;
+  s_ws_decode_tile_offset_x = 0;
+  s_ws_decode_tile_offset_y = 0;
   s_ws_layout_grace = 0;
   if (clear_identity) {
     s_ws_identity_valid = false;
@@ -1109,7 +1151,7 @@ static uint16_t Dkc1RollingMapWord(uint16_t map_base, uint32_t tile_x,
  * comparing with the live rolling tilemap. Dynamic tiles (animation, item
  * pickups) legitimately mismatch, so the gate is a ratio, not equality. */
 static int Dkc1CalibrateLayout(Dkc1LevelLayout layout, uint16_t ppu_map_base,
-                               uint8_t map_bank, uint8_t metatile_bank,
+                               uint8_t map_bank, uint8_t definition_bank,
                                uint16_t map_base,
                                uint16_t metatile_base, uint32_t world_x,
                                uint32_t world_y, int *decodable_out) {
@@ -1119,7 +1161,7 @@ static int Dkc1CalibrateLayout(Dkc1LevelLayout layout, uint16_t ppu_map_base,
       const uint32_t wtx = (world_x >> 3) + (uint32_t)col;
       const uint32_t wty = (world_y >> 3) + (uint32_t)row;
       uint16_t decoded;
-      if (!Dkc1VideoDecodeLevelTile(layout, map_bank, metatile_bank,
+      if (!Dkc1VideoDecodeLevelTile(layout, map_bank, definition_bank,
                                     map_base, metatile_base, wtx, wty,
                                     &decoded))
         continue;
@@ -1135,6 +1177,23 @@ static int Dkc1CalibrateLayout(Dkc1LevelLayout layout, uint16_t ppu_map_base,
   return matches;
 }
 
+static int Dkc1DefinitionBankCandidates(Dkc1LevelLayout layout,
+                                        uint8_t map_bank,
+                                        uint8_t alternate_bank,
+                                        uint8_t banks[2]) {
+  /* Mirror the actual DB ownership of each standard stream body. Horizontal
+   * CODE_818705 reads both map and definitions with DB=$D5. Vertical
+   * CODE_818DFA temporarily loads $D5 for map cells, then restores PB=$81
+   * before definition reads. $D6 remains a real alternate used by special
+   * maps such as the D0 underwater definitions, but it must earn acceptance
+   * against the live native tilemap instead of overriding every level. */
+  banks[0] = layout == kDkc1LayoutHorizontal ? map_bank : 0x81u;
+  int count = 1;
+  if (alternate_bank != 0 && alternate_bank != banks[0])
+    banks[count++] = alternate_bank;
+  return count;
+}
+
 static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
                                         int presentation_bias,
                                         bool cartridge_stream_ready,
@@ -1146,7 +1205,7 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
   const uint32_t camera_y = Dkc1ReadWram16(0x0895);
   const uint16_t stream_vram = Dkc1ReadWram16(0x1b13);
   const uint8_t map_bank = g_ram[0x00d5];
-  const uint8_t metatile_bank = g_ram[0x00d6];
+  const uint8_t alternate_definition_bank = g_ram[0x00d6];
   const uint16_t map_base = Dkc1ReadWram16(0x00d3);
   const uint16_t metatile_base = Dkc1ReadWram16(0x1b11);
   const int terrain_layer =
@@ -1230,32 +1289,81 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       (uint16_t)PPU_bgTilemapAdr(g_ppu, terrain_layer);
   const uint32_t wx = candidate_world_x[terrain_layer];
   const uint32_t wy = candidate_world_y[terrain_layer];
+  /* Most scenes key the rolling map and PPU viewport to the same tile. Two
+   * authored exceptions prove that neither coordinate source is universal:
+   * underwater terrain follows the unwrapped PPU scroll, while vertical ice
+   * rooms phase BG1VOFS by $0100 even though $81:8DFA still indexes the map
+   * with Layer1X/Layer1Y. Score both cartridge-authentic coordinate systems
+   * against the native ring. The winning tile delta is then applied only to
+   * ROM decoding; shadow placement remains in presentation coordinates. */
+  const uint32_t calibration_x[2] = {
+      Dkc1VideoUnwrapPpuScroll(g_ppu->hScroll[terrain_layer], camera_x),
+      camera_x,
+  };
+  const uint32_t calibration_y[2] = {
+      Dkc1VideoUnwrapPpuScroll(g_ppu->vScroll[terrain_layer], camera_y),
+      camera_y,
+  };
   Dkc1LevelLayout best = kDkc1LayoutUnknown;
+  uint8_t best_definition_bank = 0;
+  int best_coordinate_source = 0;
   int best_matches = 0, best_decodable = 0;
   for (int candidate = kDkc1LayoutHorizontal;
        candidate <= kDkc1LayoutVertical; candidate++) {
-    int decodable = 0;
-    int matches = Dkc1CalibrateLayout(
-        (Dkc1LevelLayout)candidate, ppu_map_base, map_bank, metatile_bank,
-        map_base, metatile_base, wx, wy, &decodable);
+    uint8_t banks[2];
+    const int bank_count = Dkc1DefinitionBankCandidates(
+        (Dkc1LevelLayout)candidate, map_bank,
+        alternate_definition_bank, banks);
+    int layout_matches = 0, layout_decodable = 0;
+    for (int bank_index = 0; bank_index < bank_count; bank_index++) {
+      for (int coordinate_source = 0; coordinate_source < 2;
+           coordinate_source++) {
+        int decodable = 0;
+        const int matches = Dkc1CalibrateLayout(
+            (Dkc1LevelLayout)candidate, ppu_map_base, map_bank,
+            banks[bank_index], map_base, metatile_base,
+            calibration_x[coordinate_source],
+            calibration_y[coordinate_source], &decodable);
+        if (matches > layout_matches) {
+          layout_matches = matches;
+          layout_decodable = decodable;
+        }
+        if (matches > best_matches) {
+          best_matches = matches;
+          best_decodable = decodable;
+          best = (Dkc1LevelLayout)candidate;
+          best_definition_bank = banks[bank_index];
+          best_coordinate_source = coordinate_source;
+        }
+      }
+    }
     if (trace) {
       const int index = candidate - kDkc1LayoutHorizontal;
-      trace->calibration_matches[index] = matches;
-      trace->calibration_decodable[index] = decodable;
-    }
-    if (matches > best_matches) {
-      best_matches = matches;
-      best_decodable = decodable;
-      best = (Dkc1LevelLayout)candidate;
+      trace->calibration_matches[index] = layout_matches;
+      trace->calibration_decodable[index] = layout_decodable;
     }
   }
+  const int64_t best_offset_x =
+      (int64_t)(calibration_x[best_coordinate_source] >> 3) -
+      (int64_t)(wx >> 3);
+  const int64_t best_offset_y =
+      (int64_t)(calibration_y[best_coordinate_source] >> 3) -
+      (int64_t)(wy >> 3);
   const bool calibrated =
-      best_decodable >= 64 && best_matches * 10 >= best_decodable * 7;
+      best_decodable >= 64 && best_matches * 10 >= best_decodable * 7 &&
+      best_offset_x >= INT8_MIN && best_offset_x <= INT8_MAX &&
+      best_offset_y >= INT8_MIN && best_offset_y <= INT8_MAX;
   Dkc1LevelLayout accepted_layout = kDkc1LayoutUnknown;
+  uint8_t accepted_definition_bank = 0;
+  int8_t accepted_decode_tile_offset_x = 0;
+  int8_t accepted_decode_tile_offset_y = 0;
   int next_grace = 0;
   bool stream_revalidated = false;
   if (calibrated) {
     accepted_layout = best;
+    accepted_definition_bank = best_definition_bank;
+    accepted_decode_tile_offset_x = (int8_t)best_offset_x;
+    accepted_decode_tile_offset_y = (int8_t)best_offset_y;
     next_grace = 2;
     if (trace) trace->calibration_accepted = true;
   } else if (cartridge_stream_ready &&
@@ -1268,6 +1376,9 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
      * instead of widening with an inactive shadow or pillarboxing gameplay.
      * Do not ROM-prefill this path: the rejected decoder is not an oracle. */
     accepted_layout = s_ws_layout;
+    accepted_definition_bank = s_ws_definition_bank;
+    accepted_decode_tile_offset_x = s_ws_decode_tile_offset_x;
+    accepted_decode_tile_offset_y = s_ws_decode_tile_offset_y;
     stream_revalidated = true;
     if (trace) trace->stream_revalidated = true;
   } else if (s_ws_layout != kDkc1LayoutUnknown && s_ws_layout_grace > 0) {
@@ -1276,6 +1387,9 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
      * that proof exists, the live PPU map is stronger than a rejected ROM
      * decoder and must take precedence over this grace budget. */
     accepted_layout = s_ws_layout;
+    accepted_definition_bank = s_ws_definition_bank;
+    accepted_decode_tile_offset_x = s_ws_decode_tile_offset_x;
+    accepted_decode_tile_offset_y = s_ws_decode_tile_offset_y;
     next_grace = s_ws_layout_grace - 1;
     if (trace) trace->grace_accepted = true;
   } else {
@@ -1372,6 +1486,9 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     s_ws_shadow_active = true;
   }
   s_ws_layout = accepted_layout;
+  s_ws_definition_bank = accepted_definition_bank;
+  s_ws_decode_tile_offset_x = accepted_decode_tile_offset_x;
+  s_ws_decode_tile_offset_y = accepted_decode_tile_offset_y;
   s_ws_layout_grace = next_grace;
   for (int layer = 0; layer < 2; layer++) {
     const uint8_t bit = (uint8_t)(1u << layer);
@@ -1491,10 +1608,11 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       s_ws_layout == kDkc1LayoutVertical &&
       Dkc1ReadWram16(0x0032) == 0x0003u &&
       Dkc1ReadWram16(0x0030) == 0x0061u &&
-      map_bank == 0xe9u && metatile_bank == 0xd0u;
-  const uint32_t native_edge_metatile_x[2] = {
-      (wx >> 3) >> 2,
-      ((wx + kDkc1VideoNativeWidth - 1u) >> 3) >> 2,
+      map_bank == 0xe9u && alternate_definition_bank == 0xd0u &&
+      accepted_definition_bank == 0xd0u;
+  const uint32_t native_edge_tile_x[2] = {
+      wx >> 3,
+      (wx + kDkc1VideoNativeWidth - 1u) >> 3,
   };
   const uint16_t character_base =
       (uint16_t)PPU_bgTileAdr(g_ppu, terrain_layer);
@@ -1506,39 +1624,61 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       if (signed_wtx < 0)
         continue;
       const uint32_t wtx = (uint32_t)signed_wtx;
+      const int64_t signed_decode_wtx =
+          signed_wtx + accepted_decode_tile_offset_x;
       for (int row = -1; row < visible_rows; row++) {
         const int64_t signed_wty = (int64_t)(wy >> 3) + row;
         if (signed_wty < 0)
           continue;
         const uint32_t wty = (uint32_t)signed_wty;
+        const int64_t signed_decode_wty =
+            signed_wty + accepted_decode_tile_offset_y;
         uint16_t entry;
-        if (!Dkc1VideoDecodeLevelTile(s_ws_layout, map_bank, metatile_bank,
-                                      map_base, metatile_base, wtx, wty,
-                                      &entry))
+        if (signed_decode_wtx < 0 || signed_decode_wty < 0 ||
+            !Dkc1VideoDecodeLevelTile(
+                s_ws_layout, map_bank, accepted_definition_bank,
+                map_base, metatile_base, (uint32_t)signed_decode_wtx,
+                (uint32_t)signed_decode_wty, &entry))
           entry = blank_entry;
         const uint32_t target_metatile_x = wtx >> 2;
+        const uint32_t native_edge_metatile_x =
+            native_edge_tile_x[side] >> 2;
         const bool beyond_native_edge =
-            side == 0 ? target_metatile_x < native_edge_metatile_x[side]
-                      : target_metatile_x > native_edge_metatile_x[side];
-        if (allow_underwater_boundary && beyond_native_edge) {
+            side == 0 ? target_metatile_x < native_edge_metatile_x
+                      : target_metatile_x > native_edge_metatile_x;
+        const int64_t signed_decode_edge_wtx =
+            (int64_t)native_edge_tile_x[side] +
+            accepted_decode_tile_offset_x;
+        if (allow_underwater_boundary && beyond_native_edge &&
+            signed_decode_wtx >= 0 && signed_decode_wty >= 0 &&
+            signed_decode_edge_wtx >= 0) {
           bool target_empty = false, target_full = false;
           bool edge_empty = false, edge_full = false;
-          const uint32_t metatile_y = wty >> 2;
+          const uint32_t decode_metatile_x =
+              (uint32_t)signed_decode_wtx >> 2;
+          const uint32_t decode_metatile_y =
+              (uint32_t)signed_decode_wty >> 2;
+          const uint32_t decode_edge_metatile_x =
+              (uint32_t)signed_decode_edge_wtx >> 2;
           if (Dkc1VideoClassifyLevelMetatile(
-                  s_ws_layout, map_bank, metatile_bank, map_base,
-                  metatile_base, target_metatile_x, metatile_y, g_ppu->vram,
+                  s_ws_layout, map_bank, accepted_definition_bank, map_base,
+                  metatile_base, decode_metatile_x, decode_metatile_y,
+                  g_ppu->vram,
                   0x8000u, character_base, &target_empty, &target_full) &&
               target_empty &&
               Dkc1VideoClassifyLevelMetatile(
-                  s_ws_layout, map_bank, metatile_bank, map_base,
-                  metatile_base, native_edge_metatile_x[side], metatile_y,
+                  s_ws_layout, map_bank, accepted_definition_bank, map_base,
+                  metatile_base, decode_edge_metatile_x,
+                  decode_metatile_y,
                   g_ppu->vram, 0x8000u, character_base, &edge_empty,
                   &edge_full) && edge_full) {
-            const uint32_t source_wtx =
-                native_edge_metatile_x[side] * 4u + (wtx & 3u);
+            const uint32_t source_decode_wtx =
+                decode_edge_metatile_x * 4u +
+                ((uint32_t)signed_decode_wtx & 3u);
             if (Dkc1VideoDecodeLevelTile(
-                    s_ws_layout, map_bank, metatile_bank, map_base,
-                    metatile_base, source_wtx, wty, &entry) && trace)
+                    s_ws_layout, map_bank, accepted_definition_bank, map_base,
+                    metatile_base, source_decode_wtx,
+                    (uint32_t)signed_decode_wty, &entry) && trace)
               trace->boundary_continuation_tiles++;
           }
         }
@@ -1622,6 +1762,9 @@ void Dkc1DrawPpuFrame(void) {
   trace.cartridge_stream_ready = cartridge_stream_ready;
   if (trace_enabled) {
     trace.selected_layout = s_ws_layout;
+    trace.selected_definition_bank = s_ws_definition_bank;
+    trace.decode_tile_offset_x = s_ws_decode_tile_offset_x;
+    trace.decode_tile_offset_y = s_ws_decode_tile_offset_y;
     trace.layout_grace = s_ws_layout_grace;
   }
   /* These PPU policies are host presentation state, not cartridge state.

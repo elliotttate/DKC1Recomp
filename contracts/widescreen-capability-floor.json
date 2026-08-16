@@ -1,0 +1,16 @@
+{
+  "schema": "dkc1.widescreen-capability-floor.v1",
+  "source_report_schema": "dkc1.fresh-entry-stress-sweep.v1",
+  "minimum_frames": 180,
+  "minimum_entry_settle_frames": 360,
+  "minimum_repeats": 1,
+  "required_action": "neutral",
+  "expected_entrances": [
+    "0001", "0007", "000A", "000C", "000D", "0012", "0014", "0016",
+    "0017", "0018", "0022", "0024", "0027", "002B", "002E", "002F",
+    "0030", "0031", "0036", "003E", "0040", "0041", "0042", "0043",
+    "006D", "00A4", "00A5", "00A7", "00BF", "00CE", "00D0", "00D9",
+    "00DE", "00E0", "00E1", "00E2", "00E3", "00E4", "00E5", "00EA"
+  ],
+  "centered_fixed_camera_entrances": ["00E1", "00E3", "00E4"]
+}

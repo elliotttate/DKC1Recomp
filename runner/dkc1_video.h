@@ -175,7 +175,7 @@ typedef enum Dkc1LevelLayout {
  * keep both explicit. Returns false when either source is unresolvable. */
 bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
                               uint8_t map_bank,
-                              uint8_t metatile_bank,
+                              uint8_t definition_bank,
                               uint16_t map_base,
                               uint16_t metatile_base,
                               uint32_t world_tile_x,
@@ -189,7 +189,7 @@ bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
  * collision solidity. */
 bool Dkc1VideoClassifyLevelMetatile(Dkc1LevelLayout layout,
                                     uint8_t map_bank,
-                                    uint8_t metatile_bank,
+                                    uint8_t definition_bank,
                                     uint16_t map_base,
                                     uint16_t metatile_base,
                                     uint32_t metatile_x,

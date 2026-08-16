@@ -178,7 +178,9 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"wide_mask\":%u,\"render_mask\":%u,\"repeat_mask\":%u,"
       "\"terrain_layer\":%d},"
       "\"calibration\":{\"horizontal\":[%d,%d],"
-      "\"vertical\":[%d,%d],\"selected\":%d,\"grace\":%d},"
+      "\"vertical\":[%d,%d],\"selected\":%d,"
+      "\"definition_bank\":%d,\"decode_tile_offset\":[%d,%d],"
+      "\"grace\":%d},"
       "\"decision\":{\"reset\":%u,\"cold_start\":%u,"
       "\"source_reset\":%u,\"identity_reset\":%u,"
       "\"bounds_ready\":%u,"
@@ -243,7 +245,9 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       (unsigned)frame->repeat_layer_mask, frame->terrain_layer,
       frame->calibration_matches[0], frame->calibration_decodable[0],
       frame->calibration_matches[1], frame->calibration_decodable[1],
-      frame->selected_layout, frame->layout_grace,
+      frame->selected_layout, frame->selected_definition_bank,
+      frame->decode_tile_offset_x, frame->decode_tile_offset_y,
+      frame->layout_grace,
       frame->reset ? 1u : 0u, frame->cold_start ? 1u : 0u,
       frame->source_reset ? 1u : 0u, frame->identity_reset ? 1u : 0u,
       frame->bounds_ready ? 1u : 0u,

@@ -576,12 +576,29 @@ visually tested and rejected.
 
 Current accepted evidence:
 
+- `build/fresh-entry-capability-floor-20260816/report.json` (current runtime,
+  all 40 gameplay entrances retain widescreen capability; Slip-Slide Ride and
+  Poison Pond independently select their cartridge-authentic decode mapping)
 - `build/world-map-fresh-entry-sweep-v8/report.json`
 - `build/world-map-fresh-entry-sweep-v8/grade.json` (40/40, 120 repeats)
 - `build/snowbarrel-live-stream-capture-v6/summary.json`
 - `build/imported-state-suite-live-stream-v20/manifest.json`
 - `build/fresh-entry-stress-v6/report.json` (120 motion branches, zero hard
   presentation failures; all lifecycle differences retained as investigations)
+
+Shared calibration, ROM-decoder, shadow, or presentation-policy changes must
+also pass the committed capability-floor ratchet:
+
+```powershell
+python tools\check_widescreen_capability_floor.py `
+  build\fresh-entry-capability-floor-20260816\report.json
+```
+
+This intentionally grades widescreen capability separately from route-level
+gameplay investigations. An entrance may remain an investigation because a
+neutral route does not prove gameplay closure while still passing the hard
+requirement that it did not regress to centered 4:3, raw margins, missing
+terrain, or nondeterministic presentation.
 
 The stress tool replaces the old frame-to-frame OAM-slot wrap heuristic with
 the evidence-grade dual-view oracle in `tools/oam_inspect.py`. DKC reuses OAM
@@ -615,7 +632,7 @@ tester supplies a native quicksave in the middle of a level or bonus room. It
 never contacts the visible process. Every action/repeat starts a fresh process
 from the same hashed snapshot, applies controller-only fixed/diagonal/sweep/box
 patterns, and records the strict widescreen trace, rendered-blank detector,
-lifecycle stream, dual OAM evidence, final raw WRAM, final frame, and v8 state.
+lifecycle stream, dual OAM evidence, final raw WRAM, final frame, and v9 state.
 Determinism includes the final machine, framebuffer, trace, lifecycle, and both
 OAM artifacts—not merely whether the detector fired.
 
@@ -714,16 +731,17 @@ Native full-machine snapshots exist at three layers: script directives
 `state_save`/`state_load` (both hosts), env anchors DKC1_SAVESTATE_INPUT /
 DKC1_SAVESTATE_OUTPUT / DKC1_SAVESTATE_SAVE_AT, and the F9 repro bundle's
 embedded anchor. Loading resets the widescreen shadow by design
-for legacy v4-v7 states; v8 restores the serialized host state. Interactive
+for legacy v4-v8 states; v9 restores the serialized host and hidden PPU state. Interactive
 F11/F12 quick save/load is implemented in the desktop host.
 
-Save format v8 additionally serializes DKC1's host-only widescreen state.
+Save format v9 serializes DKC1's host-only widescreen state and the PPU's
+hidden VRAM/CGRAM/OAM data-port and latch state.
 The world-keyed BG cache is stored sparsely (only valid cells, their
 captured/prefill/served ownership, cooldown stamps, scene-local origin, and
 vertical-history inputs), together with calibration identity, presentation
-bias, stream-coverage state, and placed-actor phase decisions. Existing v4-v7
-states remain readable and intentionally rebuild this data cold; new v8 states
-resume it exactly. `tools/verify_widescreen_savestate.py` proves this by
+bias, stream-coverage state, and placed-actor phase decisions. Existing v4-v8
+states remain readable through deterministic legacy reconciliation; new v9
+states resume all of it exactly. `tools/verify_widescreen_savestate.py` proves this by
 comparing an uninterrupted run with a fresh-process split-state continuation.
 Its required oracle includes the final framebuffer, WRAM, VRAM, CGRAM, both
 OAM copies, renderer state, and cumulative margin counters—not just a PNG.
@@ -835,8 +853,9 @@ an earlier draw-cache refresh into a false behavior-phase bug.
   machine to `quicksave.state`; when the rolling recorder is armed it also
   exports the covered anchor, resolved input history, final raw machine
   planes, and same-frame isolated layer captures. This matters because the
-  v8 state, including the host-only widescreen shadow and placed-actor phase
-  history, so a margin-history bug remains reproducible after F12. The
+  v9 state, including the host-only widescreen shadow, placed-actor phase
+  history, and hidden PPU port/latch state, so a margin-history or post-load
+  character-DMA bug remains reproducible after F12. The
   default-off `DKC1_WS_COLD_STATE_LOAD=1` diagnostic discards only that host
   history when an exact cold reconstruction is required.
 - **Contact damage/death is closed.** The earlier no-damage result belonged

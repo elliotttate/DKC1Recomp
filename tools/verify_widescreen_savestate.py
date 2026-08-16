@@ -2,11 +2,12 @@
 """Verify that a native state preserves DKC1 host widescreen history.
 
 The oracle is a split run versus an uninterrupted run from the same input
-snapshot.  At ``split`` the runtime writes a v8 state containing guest state,
+snapshot.  At ``split`` the runtime writes a v9 state containing guest state,
 the sparse world-keyed BG shadow, and placed-object/stream phase state.  A
 fresh process loads that state and completes the remaining frames.  Final
 frame/machine hashes, renderer state, and cumulative shadow counters must be
-byte-for-byte equal.
+byte-for-byte equal. Version 9 also preserves hidden PPU data-port/latch state,
+preventing valid character-DMA source bytes from being permuted after load.
 
 This deliberately starts from an existing snapshot instead of a clean boot:
 playtester states are the workflow this feature exists to protect.
@@ -26,7 +27,7 @@ from typing import Iterable
 
 
 RTL_MAGIC = 0x52544C53
-RTL_PRESENTATION_VERSION = 8
+RTL_PRESENTATION_VERSION = 9
 COMPARE_KEYS = (
     "video_state",
     "shadow_stats",
@@ -115,7 +116,7 @@ def verify(args: argparse.Namespace) -> dict:
         if not path.is_file():
             raise FileNotFoundError(f"{label} not found: {path}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    split_state = output_dir / "split-v8.state"
+    split_state = output_dir / "split-v9.state"
 
     continuous_lines, continuous = run_case(
         runner, rom, snapshot, args.frames,

@@ -245,6 +245,10 @@ optional `quickload` leg seeded by a state the entry route itself saves.
   `world_map_fresh_entry_sweep.py`, `snapshot_widescreen_stress.py`,
   `run_imported_state_suite.py`, `triage_stress_lifecycle.py` —
   entry/state stress suites.
+- `check_widescreen_capability_floor.py REPORT` — fail-closed release ratchet
+  for the exact committed 40 gameplay entrances. It rejects a lost entrance,
+  nondeterminism, a failed widescreen grade, raw margin pixels, terrain misses,
+  and unexpected centered/4:3 gameplay.
 
 **Divergence / differential**
 - `first_divergence.py --rom R --script S --frames N [--profile]` —

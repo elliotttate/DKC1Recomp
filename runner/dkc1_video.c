@@ -1131,7 +1131,7 @@ bool Dkc1VideoFindTransparent4bppTile(const uint16_t *vram,
 
 bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
                               uint8_t map_bank,
-                              uint8_t metatile_bank,
+                              uint8_t definition_bank,
                               uint16_t map_base,
                               uint16_t metatile_base,
                               uint32_t world_tile_x,
@@ -1166,7 +1166,7 @@ bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
       (uint16_t)((uint16_t)(cell << 5) + metatile_base +
                  (uint16_t)(sub_x * 2u + sub_y * 8u));
   uint16_t source;
-  if (!RomWord(metatile_bank, definition_offset, &source))
+  if (!RomWord(definition_bank, definition_offset, &source))
     return false;
   *tile_entry = (uint16_t)(source ^ flips);
   return true;
@@ -1190,7 +1190,7 @@ static bool Dkc1VideoTileHasPixels(const uint16_t *vram,
 
 bool Dkc1VideoClassifyLevelMetatile(Dkc1LevelLayout layout,
                                     uint8_t map_bank,
-                                    uint8_t metatile_bank,
+                                    uint8_t definition_bank,
                                     uint16_t map_base,
                                     uint16_t metatile_base,
                                     uint32_t metatile_x,
@@ -1209,7 +1209,7 @@ bool Dkc1VideoClassifyLevelMetatile(Dkc1LevelLayout layout,
     for (uint32_t sub_x = 0; sub_x < 4u; sub_x++) {
       uint16_t entry;
       if (!Dkc1VideoDecodeLevelTile(
-              layout, map_bank, metatile_bank, map_base, metatile_base,
+              layout, map_bank, definition_bank, map_base, metatile_base,
               metatile_x * 4u + sub_x, metatile_y * 4u + sub_y, &entry))
         return false;
       const bool has_pixels = Dkc1VideoTileHasPixels(

@@ -177,6 +177,7 @@ in the same change.
 | `world_map_fresh_entry_sweep.py` | Discover authentic controller-only entrances and archive clean pre-entry anchors. |
 | `fresh_entry_stress_sweep.py` | Stress scrolling, private object windows, OAM margins, and later streaming from each clean entry. |
 | `grade_fresh_entry_sweep.py` | Apply terrain, fallback, blank, and continuation release rules to fresh-entry evidence. |
+| `check_widescreen_capability_floor.py` | Enforce the committed all-entrance widescreen floor so a shared calibration/presentation change cannot silently return gameplay scenes to 4:3. |
 | `snapshot_widescreen_stress.py` | Stress an arbitrary supplied snapshot without touching the visible process. |
 | `level_sweep.py` | Sweep the route library and grade calibration, fallback, pillarbox, margin, cache, and OAM health. |
 | `run_imported_state_suite.py` | Replay imported SuperZSNES states through native and wide hosts with deterministic evidence. |
@@ -257,6 +258,10 @@ A widescreen change may become the default only after all applicable gates pass:
    - Test more than the development room. Include representative scrolling,
      fixed-layout/bonus, vertical, underwater, boss, title/menu, and transition
      scenes when the changed code can reach them.
+   - Any shared calibration, cartridge decoder, shadow, or presentation-policy
+     change must run the complete 40-entrance fresh-entry matrix and pass
+     `tools/check_widescreen_capability_floor.py`. A targeted-room pass cannot
+     replace this floor.
 6. **Transition gate**
    - Run the transition-contamination sentinel and inspect the first failure
      bundle if it does not pass.
