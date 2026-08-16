@@ -20,3 +20,5 @@ tools/SuperZSNESStateExporter/bin/
 tools/SuperZSNESStateExporter/obj/
 *.state.buildinfo.json
 *_ws.jsonl
+reference/*
+!reference/README.md

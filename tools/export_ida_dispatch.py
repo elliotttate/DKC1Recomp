@@ -24,8 +24,12 @@ import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_DATABASE = Path(
-    r"D:\Downloads\DKLR\DKC1_Disassembly\Tools\IDA\DKC1_U1.i64")
+_DB_CANDIDATES = [
+    REPO / "reference" / "disassembly" / "Tools" / "IDA" / "DKC1_U1.i64",
+    Path(r"D:\Downloads\DKLR\DKC1_Disassembly\Tools\IDA\DKC1_U1.i64"),
+]
+DEFAULT_DATABASE = next((p for p in _DB_CANDIDATES if p.exists()),
+                        _DB_CANDIDATES[1])
 DEFAULT_IDAT = Path(
     r"C:\Program Files\IDA Professional 9.3\idat.exe")
 

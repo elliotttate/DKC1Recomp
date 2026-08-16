@@ -25,7 +25,11 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DISASM_ROOT = Path(r"D:\Downloads\DKLR\DKC1_Disassembly")
+# Prefer the consolidated in-repo copy; fall back to the original layout.
+_DISASM_CANDIDATES = [REPO / "reference" / "disassembly",
+                      Path(r"D:\Downloads\DKLR\DKC1_Disassembly")]
+DISASM_ROOT = next((p for p in _DISASM_CANDIDATES if p.exists()),
+                   _DISASM_CANDIDATES[0])
 PSEUDO = DISASM_ROOT / "DKC1" / "Pseudocode"
 RENAME_MAP = DISASM_ROOT / "Tools" / "IDA" / "work" / "rename_map.json"
 RAM_MAP = DISASM_ROOT / "DKC1" / "RAM_Map_DKC1.asm"
