@@ -22,3 +22,5 @@ tools/SuperZSNESStateExporter/obj/
 *_ws.jsonl
 reference/*
 !reference/README.md
+recipes/promoted/
+contracts/promoted/

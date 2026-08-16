@@ -156,6 +156,20 @@ optional `quickload` leg seeded by a state the entry route itself saves.
 - `structure.py ADDR|NAME` — flat symbolized 1:1 listing (curated RAM
   names, context-qualified define annotations, local cross-reference
   labels); display aid, no reconstructed blocks or semantic claims.
+- `coverage_explorer.py` — docs/COVERAGE.md + build/coverage.json: the
+  full 256-entrance universe joined against capabilities + sweep
+  evidence, with a ranked next-evidence worklist (centered-only scenes
+  first — a route already exists; then unobserved *_Main levels).
+  never-observed = absence of evidence, never assumed-unreachable.
+- `promote_bundle.py BUNDLE --rom R [--name N]` — flight-recorder
+  capture -> LOCAL regression asset (recipes/promoted/ +
+  contracts/promoted/, both gitignored: snapshots are never committed).
+  Gates: manifest/ROM/file hashes, Nx byte-identical end-WRAM replay,
+  and match against the bundle's own final.wram.bin
+  (--allow-capture-drift records instead of refusing, for captures from
+  older builds). Emits a state_load + run-length-MASK replay.dks and a
+  contract with scene-identity checkpoints and zero budgets — promoted
+  contracts inherit the full ratchet discipline immediately.
 - `sync_names.py` — derive `<Base>_StateN` names for dispatch-contract
   targets in literal table-ordinal order (provenance-tagged, curated map
   always wins) -> safe generated `docs/derived_names.json`, consumed by
