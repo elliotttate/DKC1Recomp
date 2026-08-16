@@ -1480,21 +1480,22 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     trace->margin_tiles = margin_tiles;
   }
   const int visible_rows = (kDkc1VideoHeight >> 3) + 2;
-  /* Croctopus Chase's vertical room map ends its authored lower-right wall
-   * at the native 256px boundary: the next 32x32 map cells are fully
-   * transparent because the cartridge could never display them. Continue
-   * only that proven boundary into the presentation-only right margin. The
-   * target metatile must be wholly transparent and the nearest native-edge
-   * metatile must have pixels in all 16 characters; partial openings and
-   * decorative edges therefore remain untouched. This does not alter VRAM,
-   * WRAM, collision, streaming, or any pixel in the native viewport. */
-  const bool allow_underwater_right_boundary =
+  /* Croctopus Chase's vertical room map leaves some 32x32 cells immediately
+   * outside the stock viewport fully transparent because the cartridge could
+   * never display them. Continue only a proven lateral wall boundary into a
+   * presentation margin. The target metatile must be wholly transparent and
+   * the nearest native-edge metatile must have pixels in all 16 characters;
+   * partial openings and decorative edges therefore remain untouched. This
+   * does not alter VRAM, WRAM, collision, streaming, or any native pixel. */
+  const bool allow_underwater_boundary =
       s_ws_layout == kDkc1LayoutVertical &&
       Dkc1ReadWram16(0x0032) == 0x0003u &&
       Dkc1ReadWram16(0x0030) == 0x0061u &&
       map_bank == 0xe9u && metatile_bank == 0xd0u;
-  const uint32_t native_edge_metatile_x =
-      ((wx + kDkc1VideoNativeWidth - 1u) >> 3) >> 2;
+  const uint32_t native_edge_metatile_x[2] = {
+      (wx >> 3) >> 2,
+      ((wx + kDkc1VideoNativeWidth - 1u) >> 3) >> 2,
+  };
   const uint16_t character_base =
       (uint16_t)PPU_bgTileAdr(g_ppu, terrain_layer);
   for (int side = 0; side < 2; side++) {
@@ -1515,23 +1516,26 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
                                       map_base, metatile_base, wtx, wty,
                                       &entry))
           entry = blank_entry;
-        if (allow_underwater_right_boundary && side == 1 &&
-            (wtx >> 2) > native_edge_metatile_x) {
+        const uint32_t target_metatile_x = wtx >> 2;
+        const bool beyond_native_edge =
+            side == 0 ? target_metatile_x < native_edge_metatile_x[side]
+                      : target_metatile_x > native_edge_metatile_x[side];
+        if (allow_underwater_boundary && beyond_native_edge) {
           bool target_empty = false, target_full = false;
           bool edge_empty = false, edge_full = false;
           const uint32_t metatile_y = wty >> 2;
           if (Dkc1VideoClassifyLevelMetatile(
                   s_ws_layout, map_bank, metatile_bank, map_base,
-                  metatile_base, wtx >> 2, metatile_y, g_ppu->vram,
+                  metatile_base, target_metatile_x, metatile_y, g_ppu->vram,
                   0x8000u, character_base, &target_empty, &target_full) &&
               target_empty &&
               Dkc1VideoClassifyLevelMetatile(
                   s_ws_layout, map_bank, metatile_bank, map_base,
-                  metatile_base, native_edge_metatile_x, metatile_y,
+                  metatile_base, native_edge_metatile_x[side], metatile_y,
                   g_ppu->vram, 0x8000u, character_base, &edge_empty,
                   &edge_full) && edge_full) {
             const uint32_t source_wtx =
-                native_edge_metatile_x * 4u + (wtx & 3u);
+                native_edge_metatile_x[side] * 4u + (wtx & 3u);
             if (Dkc1VideoDecodeLevelTile(
                     s_ws_layout, map_bank, metatile_bank, map_base,
                     metatile_base, source_wtx, wty, &entry) && trace)

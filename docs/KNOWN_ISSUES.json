@@ -114,6 +114,15 @@
       "expected": "Only wholly transparent 32x32 metatiles beyond the native right edge continue the nearest fully populated wall boundary. Native pixels, cartridge memory, partial openings, and every other level remain unchanged.",
       "first_seen": "2026-08-16",
       "fixed_note": "fixed 2026-08-16 with a scene-locked, presentation-only vertical-boundary continuation. The exact frame replaces 96 transparent margin tiles; WRAM, VRAM, CGRAM, and both OAM copies remain byte-identical. The 256px native center matches its oracle at all 57,344 pixels, three frame captures are byte-identical (SHA-256 AAB0EF0B...), and three 3,551-frame input-history replays end at exact WRAM F5BCA064...."
+    },
+    {
+      "id": "croctopus-authored-left-boundary-gap",
+      "status": "fixed",
+      "summary": "At world X $0241 in Croctopus Chase level $0061/$00BF, BG1's rock wall stopped 11 pixels inside the left widescreen margin and exposed BG2 water. The ROM map has a fully populated wall metatile at the stock left edge (metatile X $12) but a wholly transparent offscreen metatile at X $10.",
+      "repro": "build/current-underwater-leftgap-20260816/level0061-leftgap.state (external evidence; not committed)",
+      "expected": "The same scene-locked margin continuation used on the right applies symmetrically: only wholly transparent metatiles beyond either native lateral edge may reuse the nearest fully populated wall boundary. Native pixels, cartridge memory, partial openings, and every other level remain unchanged.",
+      "first_seen": "2026-08-16",
+      "fixed_note": "fixed 2026-08-16 by generalizing the guarded underwater boundary rule to both margins. The exact frame continues 93 presentation tiles and changes 2,357 pixels, all within the outermost 11 pixels of the left margin; center and right are byte-identical. The 57,344-pixel native center is exact, WRAM/VRAM remain exact, and three independent captures are byte-identical (SHA-256 96B1D386...)."
     }
   ]
 }

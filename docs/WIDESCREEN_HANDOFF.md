@@ -1211,18 +1211,20 @@ art outside the stock viewport. In Croctopus Chase level `$0061`, entrance
 layout at 224/224 entries. BG1 nevertheless stopped at world X `$0640` in the
 lower-right margin. Offline ROM inspection proved that the adjacent native-edge
 metatile at X `$0620-$063F` contains wall art in all sixteen 8x8 characters,
-while the following map cells are wholly transparent. BG2 correctly continued
-the water behind them, so blank-frame and shadow-hit counters could not detect
-the terrain hole.
+while the following map cells are wholly transparent. A second exact state at
+world X `$0241`, Y `$2572` exposes the symmetric left case: native-edge
+metatile X `$12` is fully populated, but offscreen metatile X `$10` is wholly
+transparent and leaves an 11-pixel water gap. BG2 correctly continued the water
+behind both gaps, so blank-frame and shadow-hit counters could not detect them.
 
 The repair is intentionally not a global repeat mode. During ROM margin prefill
 only, and only for this exact gameplay level/source signature (mode `$0003`,
-level `$0061`, vertical layout, map bank `$E9`, definition bank `$D0`), a right-
-margin metatile may reuse the nearest native-edge metatile when the target is
-wholly transparent and the source has pixels in all sixteen characters. Any
-partial target, partial source, left margin, native pixel, or other scene is
-unchanged. `boundary_continuation_tiles` in the widescreen trace records this
-separately from ordinary authored ROM hits.
+level `$0061`, vertical layout, map bank `$E9`, definition bank `$D0`), a
+metatile beyond either native lateral edge may reuse that side's nearest
+native-edge metatile when the target is wholly transparent and the source has
+pixels in all sixteen characters. Any partial target, partial source, native
+pixel, or other scene is unchanged. `boundary_continuation_tiles` in the
+widescreen trace records this separately from ordinary authored ROM hits.
 
 The exact save-state frame continued 96 transparent margin tiles and changed
 only right-margin pixels. WRAM, VRAM, CGRAM, PPU OAM, and WRAM OAM remained
@@ -1232,6 +1234,17 @@ zero-frame captures are byte-identical (SHA-256
 and three replays of the preserved 3,551-frame visible input history end at the
 manifested WRAM SHA-256
 `F5BCA064C4E89CB7BE63E194927D95A6487A8CD32109B9BEFF76C0F923CBAEFC`.
+
+The left-boundary state continued 93 presentation tiles. Relative to the
+previous right-only implementation it changed 2,357 pixels, all inside the
+outermost 11 pixels of the left margin; the center and right regions are
+byte-identical. Its full
+57,344-pixel native center matches the native oracle, WRAM remains
+`75909AB97F6D9F91BC0DF0C8E3AD3BA765F96382F2FFDA097C7240924E812EC0`,
+VRAM remains
+`9C3BDCFF1BB11B9DE5D43A9CDA670E8B1E744B8D8FBB730FFF2156071283D1B1`,
+and three zero-frame captures are byte-identical (SHA-256
+`96B1D386FBC7E64B2EEEF4FB42EC3162E1DEB71D032C2C41A8BB2975EFA6FD12`).
 
 ## Release gates
 
