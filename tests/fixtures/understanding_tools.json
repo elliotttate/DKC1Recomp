@@ -1,0 +1,55 @@
+{
+  "rows": [
+    {"address": "80:9000", "function": "DKC1_NorSpr2A_Fixture_Main", "label": "DKC1_NorSpr2A_Fixture_Main", "assembly": "LDX.b !RAM_DKC1_NorSpr_CurrentIndexLo", "pseudocode": "cpu.ldx(!RAM_DKC1_NorSpr_CurrentIndexLo)"},
+    {"address": "80:9002", "function": "DKC1_NorSpr2A_Fixture_Main", "label": "", "assembly": "LDA.w !RAM_DKC1_NorSpr_RAMTable1029Lo,x", "pseudocode": "cpu.lda(!RAM_DKC1_NorSpr_RAMTable1029Lo,x)"},
+    {"address": "80:9005", "function": "DKC1_NorSpr2A_Fixture_Main", "label": "", "assembly": "ASL", "pseudocode": "cpu.asl()"},
+    {"address": "80:9006", "function": "DKC1_NorSpr2A_Fixture_Main", "label": "", "assembly": "TAX", "pseudocode": "cpu.tax()"},
+    {"address": "80:9007", "function": "DKC1_NorSpr2A_Fixture_Main", "label": "", "assembly": "JMP.w (DATA_80900A,x)", "pseudocode": "goto_indirect (DATA_80900A,x)"},
+
+    {"address": "80:A000", "function": "CODE_80A000", "label": "CODE_80A000", "assembly": "LDA.w #$0005", "pseudocode": "cpu.lda(#$0005)"},
+    {"address": "80:A003", "function": "CODE_80A000", "label": "", "assembly": "ADC.w #$0001", "pseudocode": "cpu.adc(#$0001)"},
+    {"address": "80:A006", "function": "CODE_80A000", "label": "", "assembly": "STA.w !RAM_DKC1_NorSpr_RAMTable1029Lo,x", "pseudocode": "cpu.sta(!RAM_DKC1_NorSpr_RAMTable1029Lo,x)"},
+    {"address": "80:A009", "function": "CODE_80A000", "label": "", "assembly": "RTS", "pseudocode": "rts"},
+
+    {"address": "80:A100", "function": "CODE_80A100", "label": "CODE_80A100", "assembly": "LDA.w #$0003", "pseudocode": "cpu.lda(#$0003)"},
+    {"address": "80:A103", "function": "CODE_80A100", "label": "", "assembly": "STA.w !RAM_DKC1_NorSpr_RAMTable1029Lo,x", "pseudocode": "cpu.sta(!RAM_DKC1_NorSpr_RAMTable1029Lo,x)"},
+    {"address": "80:A106", "function": "CODE_80A100", "label": "", "assembly": "RTS", "pseudocode": "rts"},
+
+    {"address": "80:A200", "function": "CODE_80A200", "label": "CODE_80A200", "assembly": "LDA.w #$0040", "pseudocode": "cpu.lda(#$0040)"},
+    {"address": "80:A203", "function": "CODE_80A200", "label": "", "assembly": "STA.w !RAM_DKC1_NorSpr_RAMTable1595Lo,x", "pseudocode": "cpu.sta(!RAM_DKC1_NorSpr_RAMTable1595Lo,x)"},
+    {"address": "80:A206", "function": "CODE_80A200", "label": "", "assembly": "LDA.w #$0001", "pseudocode": "cpu.lda(#$0001)"},
+    {"address": "80:A209", "function": "CODE_80A200", "label": "", "assembly": "STA.w !RAM_DKC1_NorSpr_RAMTable1029Lo,x", "pseudocode": "cpu.sta(!RAM_DKC1_NorSpr_RAMTable1029Lo,x)"},
+    {"address": "80:A20C", "function": "CODE_80A200", "label": "", "assembly": "RTS", "pseudocode": "rts"},
+
+    {"address": "BF:A0F7", "function": "CODE_BFA0F7", "label": "CODE_BFA0F7", "assembly": "LDX.b !RAM_DKC1_NorSpr_CurrentIndexLo", "pseudocode": "cpu.ldx(!RAM_DKC1_NorSpr_CurrentIndexLo)"},
+    {"address": "BF:A0F9", "function": "CODE_BFA0F7", "label": "", "assembly": "LDA.w !RAM_DKC1_NorSpr_RAMTable1595Lo,x", "pseudocode": "cpu.lda(!RAM_DKC1_NorSpr_RAMTable1595Lo,x)"},
+    {"address": "BF:A0FC", "function": "CODE_BFA0F7", "label": "", "assembly": "AND.w #$7FFF", "pseudocode": "cpu.and(#$7FFF)"},
+    {"address": "BF:A0FF", "function": "CODE_BFA0F7", "label": "", "assembly": "CMP.w #$0001", "pseudocode": "cpu.cmp(#$0001)"},
+    {"address": "BF:A102", "function": "CODE_BFA0F7", "label": "", "assembly": "BEQ.b CODE_BFA115", "pseudocode": "if (cpu.Z) goto CODE_BFA115"},
+    {"address": "BF:A104", "function": "CODE_BFA0F7", "label": "", "assembly": "CMP.w #$0020", "pseudocode": "cpu.cmp(#$0020)"},
+    {"address": "BF:A107", "function": "CODE_BFA0F7", "label": "", "assembly": "BEQ.b CODE_BFA115", "pseudocode": "if (cpu.Z) goto CODE_BFA115"},
+    {"address": "BF:A109", "function": "CODE_BFA0F7", "label": "", "assembly": "CMP.w #$0040", "pseudocode": "cpu.cmp(#$0040)"},
+    {"address": "BF:A10C", "function": "CODE_BFA0F7", "label": "", "assembly": "BEQ.b CODE_BFA11D", "pseudocode": "if (cpu.Z) goto CODE_BFA11D"},
+    {"address": "BF:A115", "function": "CODE_BFA0F7", "label": "CODE_BFA115", "assembly": "STZ.w !RAM_DKC1_NorSpr_RAMTable1595Lo,x", "pseudocode": "cpu.stz(!RAM_DKC1_NorSpr_RAMTable1595Lo,x)"},
+    {"address": "BF:A11D", "function": "CODE_BFA0F7", "label": "CODE_BFA11D", "assembly": "STZ.w !RAM_DKC1_NorSpr_RAMTable1595Lo,x", "pseudocode": "cpu.stz(!RAM_DKC1_NorSpr_RAMTable1595Lo,x)"},
+    {"address": "BF:A120", "function": "CODE_BFA0F7", "label": "", "assembly": "LDA.w #$00C0", "pseudocode": "cpu.lda(#$00C0)"},
+    {"address": "BF:A123", "function": "CODE_BFA0F7", "label": "", "assembly": "STA.w !RAM_DKC1_NorSpr_RAMTable11A1Lo,x", "pseudocode": "cpu.sta(!RAM_DKC1_NorSpr_RAMTable11A1Lo,x)"},
+    {"address": "BF:A126", "function": "CODE_BFA0F7", "label": "", "assembly": "LDA.w #$0019", "pseudocode": "cpu.lda(#$0019)"},
+    {"address": "BF:A129", "function": "CODE_BFA0F7", "label": "", "assembly": "STA.w !RAM_DKC1_NorSpr_RAMTable1029Lo,x", "pseudocode": "cpu.sta(!RAM_DKC1_NorSpr_RAMTable1029Lo,x)"},
+
+    {"address": "80:C000", "function": "CODE_80C000", "label": "CODE_80C000", "assembly": "LDA.b !RAM_DKC1_Global_EntranceIDLo", "pseudocode": "cpu.lda(!RAM_DKC1_Global_EntranceIDLo)"},
+    {"address": "80:C002", "function": "CODE_80C000", "label": "", "assembly": "CMP.w #$0040", "pseudocode": "cpu.cmp(#$0040)"},
+    {"address": "80:C005", "function": "CODE_80C000", "label": "", "assembly": "RTS", "pseudocode": "rts"}
+  ],
+  "curated": {
+    "code": [
+      {"ea": "0x809000", "name": "FixtureMachine_Main", "provenance": "curated"},
+      {"ea": "0x80A100", "name": "FixtureCuratedHandler", "provenance": "curated"},
+      {"ea": "0xBFA0F7", "name": "Player_HandleHitEvents", "provenance": "curated"}
+    ],
+    "ram": []
+  },
+  "dispatches": [
+    {"site": 8425479, "kind": "ptrtail", "attrs": "", "targets": [8430080, 8429568, 8429824], "cfg": "fixture.cfg"}
+  ]
+}

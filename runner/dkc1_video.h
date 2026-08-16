@@ -169,10 +169,13 @@ typedef enum Dkc1LevelLayout {
 } Dkc1LevelLayout;
 
 /* Decode one 8x8 tilemap entry for a world tile straight from the ROM level
- * map (map data and metatile definitions share one bank, per
- * Level_SetTilemapPointers at $81:8C66). Returns false when unresolvable. */
+ * map. Level_SetTilemapPointers at $81:8C66 publishes the map bank in $D5
+ * and the independently selected metatile-definition bank in $D6. Several
+ * layouts use different banks (underwater is map $E9 / definitions $D0), so
+ * keep both explicit. Returns false when either source is unresolvable. */
 bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
                               uint8_t map_bank,
+                              uint8_t metatile_bank,
                               uint16_t map_base,
                               uint16_t metatile_base,
                               uint32_t world_tile_x,

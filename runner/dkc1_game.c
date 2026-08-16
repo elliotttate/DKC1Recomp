@@ -971,10 +971,12 @@ static void Dkc1ApplyProvenanceOverlay(uint8_t wide_layer_mask) {
 
 static uint64_t Dkc1LevelSourceSignature(void) {
   const uint64_t bank = g_ram[0x00d5];
+  const uint64_t metatile_bank = g_ram[0x00d6];
   const uint64_t map = Dkc1ReadWram16(0x00d3);
   const uint64_t metatiles = Dkc1ReadWram16(0x1b11);
   const uint64_t vram = Dkc1ReadWram16(0x1b13);
-  return bank | (map << 8) | (metatiles << 24) | (vram << 40);
+  return bank | (map << 8) | (metatiles << 24) | (vram << 40) |
+         (metatile_bank << 56);
 }
 
 static Dkc1WsIdentity Dkc1BuildWidescreenIdentity(uint8_t wide_layer_mask,
@@ -1107,7 +1109,8 @@ static uint16_t Dkc1RollingMapWord(uint16_t map_base, uint32_t tile_x,
  * comparing with the live rolling tilemap. Dynamic tiles (animation, item
  * pickups) legitimately mismatch, so the gate is a ratio, not equality. */
 static int Dkc1CalibrateLayout(Dkc1LevelLayout layout, uint16_t ppu_map_base,
-                               uint8_t bank, uint16_t map_base,
+                               uint8_t map_bank, uint8_t metatile_bank,
+                               uint16_t map_base,
                                uint16_t metatile_base, uint32_t world_x,
                                uint32_t world_y, int *decodable_out) {
   int matches = 0, decodable = 0;
@@ -1116,8 +1119,9 @@ static int Dkc1CalibrateLayout(Dkc1LevelLayout layout, uint16_t ppu_map_base,
       const uint32_t wtx = (world_x >> 3) + (uint32_t)col;
       const uint32_t wty = (world_y >> 3) + (uint32_t)row;
       uint16_t decoded;
-      if (!Dkc1VideoDecodeLevelTile(layout, bank, map_base, metatile_base,
-                                    wtx, wty, &decoded))
+      if (!Dkc1VideoDecodeLevelTile(layout, map_bank, metatile_bank,
+                                    map_base, metatile_base, wtx, wty,
+                                    &decoded))
         continue;
       decodable++;
       const uint16_t live =
@@ -1142,6 +1146,7 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
   const uint32_t camera_y = Dkc1ReadWram16(0x0895);
   const uint16_t stream_vram = Dkc1ReadWram16(0x1b13);
   const uint8_t map_bank = g_ram[0x00d5];
+  const uint8_t metatile_bank = g_ram[0x00d6];
   const uint16_t map_base = Dkc1ReadWram16(0x00d3);
   const uint16_t metatile_base = Dkc1ReadWram16(0x1b11);
   const int terrain_layer =
@@ -1231,8 +1236,8 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
        candidate <= kDkc1LayoutVertical; candidate++) {
     int decodable = 0;
     int matches = Dkc1CalibrateLayout(
-        (Dkc1LevelLayout)candidate, ppu_map_base, map_bank, map_base,
-        metatile_base, wx, wy, &decodable);
+        (Dkc1LevelLayout)candidate, ppu_map_base, map_bank, metatile_bank,
+        map_base, metatile_base, wx, wy, &decodable);
     if (trace) {
       const int index = candidate - kDkc1LayoutHorizontal;
       trace->calibration_matches[index] = matches;
@@ -1489,8 +1494,9 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
           continue;
         const uint32_t wty = (uint32_t)signed_wty;
         uint16_t entry;
-        if (!Dkc1VideoDecodeLevelTile(s_ws_layout, map_bank, map_base,
-                                      metatile_base, wtx, wty, &entry))
+        if (!Dkc1VideoDecodeLevelTile(s_ws_layout, map_bank, metatile_bank,
+                                      map_base, metatile_base, wtx, wty,
+                                      &entry))
           entry = blank_entry;
         const uint32_t origin_tx =
             s_ws_shadow_origin_x[terrain_layer] >> 3;

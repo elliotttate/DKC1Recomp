@@ -18,6 +18,8 @@ Sets/expects use WRAM hex offsets; values hex. Expect operators:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -27,6 +29,30 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 WRAM_SIZE = 0x20000
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def validate_wram_range(addr: int, width: int, label: str) -> None:
+    if addr < 0 or width < 1 or addr + width > WRAM_SIZE:
+        raise ValueError(
+            f"{label} WRAM range ${addr:X}..${addr + width - 1:X} "
+            f"is outside $00000..${WRAM_SIZE - 1:05X}")
+
+
+def parse_setting(setting: str) -> tuple[int, bytes]:
+    match = re.fullmatch(r"([0-9A-Fa-f]+)=([0-9A-Fa-f]+)",
+                         setting.strip())
+    if not match:
+        raise ValueError(f"bad --set {setting!r}; expected ADDR=HEXBYTES")
+    addr = int(match.group(1), 16)
+    value_text = match.group(2)
+    data = bytes.fromhex(value_text if len(value_text) % 2 == 0
+                         else "0" + value_text)
+    validate_wram_range(addr, len(data), "--set")
+    return addr, data
 
 
 def run_frames(exe: Path, rom: Path, state: Path, frames: int,
@@ -43,7 +69,12 @@ def run_frames(exe: Path, rom: Path, state: Path, frames: int,
     if result.returncode != 0:
         sys.exit(f"replay failed rc={result.returncode}: "
                  f"{result.stderr[-400:]}")
-    return wram_out.read_bytes()
+    if not wram_out.exists():
+        sys.exit("replay succeeded but produced no WRAM output")
+    data = wram_out.read_bytes()
+    if len(data) != WRAM_SIZE:
+        sys.exit(f"WRAM output has {len(data)} bytes; expected {WRAM_SIZE}")
+    return data
 
 
 def locate_wram(state: bytes, reference_wram: bytes) -> int:
@@ -54,11 +85,13 @@ def locate_wram(state: bytes, reference_wram: bytes) -> int:
         if at < 0 or state.find(signature, at + 1) >= 0:
             continue
         base = at - probe
-        if base < 0:
+        if base < 0 or base + WRAM_SIZE > len(state):
             continue
-        check = 0x1F00 if probe != 0x1F00 else 0x0D40
-        if state[base + check:base + check + 64] == \
-                bytes(reference_wram[check:check + 64]):
+        # The snapshot stores WRAM as one contiguous block. A short second
+        # signature is not enough evidence for a destructive fault-injection
+        # edit; require the entire 128 KiB candidate to equal the zero-frame
+        # replay oracle before accepting the offset.
+        if state[base:base + WRAM_SIZE] == bytes(reference_wram):
             return base
     sys.exit("could not locate WRAM inside the snapshot")
 
@@ -71,6 +104,7 @@ def parse_expect(expr: str):
         sys.exit(f"bad --expect {expr!r}")
     addr = int(match.group(1), 16)
     width = 1 if match.group(2) else 2
+    validate_wram_range(addr, width, "--expect")
     return addr, width, match.group(3), int(match.group(4), 16)
 
 
@@ -90,24 +124,38 @@ def main() -> int:
     parser.add_argument("--work", type=Path)
     args = parser.parse_args()
 
+    if args.run < 0:
+        sys.exit("--run must be non-negative")
+    for label, path in (("--state", args.state), ("--rom", args.rom),
+                        ("--exe", args.exe)):
+        if not path.is_file():
+            sys.exit(f"{label} file does not exist: {path}")
+
     work = args.work or Path(tempfile.mkdtemp(prefix="poke_",
                                               dir=str(REPO / "build")))
     work.mkdir(parents=True, exist_ok=True)
 
+    # A zero-frame replay exposes the snapshot's exact WRAM image. Advancing
+    # even one frame before fingerprinting makes rapidly changing states
+    # impossible to locate reliably and can select a coincidental block.
     reference = run_frames(args.exe.resolve(), args.rom.resolve(),
-                           args.state.resolve(), 1, work, args.widescreen)
-    state = bytearray(args.state.read_bytes())
+                           args.state.resolve(), 0, work, args.widescreen)
+    original_state = args.state.read_bytes()
+    state = bytearray(original_state)
     base = locate_wram(state, reference)
     print(f"WRAM located at snapshot offset {base:#x}")
 
+    applied_settings = []
     for setting in args.set:
-        addr_text, _, value_text = setting.partition("=")
-        addr = int(addr_text, 16)
-        data = bytes.fromhex(value_text if len(value_text) % 2 == 0
-                             else "0" + value_text)
+        try:
+            addr, data = parse_setting(setting)
+        except ValueError as exc:
+            sys.exit(str(exc))
         old = bytes(state[base + addr:base + addr + len(data)])
         state[base + addr:base + addr + len(data)] = data
         print(f"  set ${addr:04X}: {old.hex()} -> {data.hex()}")
+        applied_settings.append({"address": addr, "old": old.hex(),
+                                 "new": data.hex()})
 
     patched = work / "poke_patched.state"
     patched.write_bytes(state)
@@ -115,8 +163,12 @@ def main() -> int:
                        args.run, work, args.widescreen)
 
     failures = 0
+    expectation_results = []
     for expr in args.expect:
-        addr, width, op, want = parse_expect(expr)
+        try:
+            addr, width, op, want = parse_expect(expr)
+        except ValueError as exc:
+            sys.exit(str(exc))
         actual = int.from_bytes(after[addr:addr + width], "little")
         ok = {"==": actual == want, "!=": actual != want,
               ">": actual > want, "<": actual < want,
@@ -124,8 +176,30 @@ def main() -> int:
         print(f"  {'ok  ' if ok else 'FAIL'} ${addr:04X}"
               f"{'.b' if width == 1 else ''} = {actual:#x} {op} {want:#x}")
         failures += 0 if ok else 1
+        expectation_results.append({"expression": expr, "address": addr,
+                                    "width": width, "actual": actual,
+                                    "expected": want, "operator": op,
+                                    "passed": ok})
     if not args.expect:
         print("(no --expect given; patched replay completed)")
+    manifest = {
+        "schema": "dkc1.poke-test.v1",
+        "rom": str(args.rom.resolve()),
+        "rom_sha256": sha256_bytes(args.rom.read_bytes()),
+        "source_state": str(args.state.resolve()),
+        "source_state_sha256": sha256_bytes(original_state),
+        "patched_state": str(patched.resolve()),
+        "patched_state_sha256": sha256_bytes(bytes(state)),
+        "wram_snapshot_offset": base,
+        "frames": args.run,
+        "widescreen": args.widescreen,
+        "settings": applied_settings,
+        "expectations": expectation_results,
+        "output_wram_sha256": sha256_bytes(after),
+        "passed": failures == 0,
+    }
+    (work / "poke_manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return 1 if failures else 0
 
 

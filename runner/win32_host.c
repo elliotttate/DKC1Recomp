@@ -695,6 +695,12 @@ static void ResolvePixelInspect(void) {
         ReadWram16(0x0D45 + (unsigned)best_slot),
         (int16_t)ReadWram16(0x15FD + (unsigned)best_slot),
         ReadWram16(0x1029 + (unsigned)best_slot), best_distance);
+    /* Close the pixel->PC loop: hand the exact backward query for this
+     * actor's state word to the reverse-watch tool. */
+    offset += snprintf(
+        s_pixel_report + offset, sizeof s_pixel_report - (size_t)offset,
+        "%snext: reverse_watch --address %X:2 --before-frame %ld",
+        "\r\n", 0x1029 + (unsigned)best_slot, s_host_frame);
   }
   (void)offset;
   snprintf(s_host_status, sizeof s_host_status,

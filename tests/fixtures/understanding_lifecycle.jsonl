@@ -1,0 +1,5 @@
+{"schema":"dkc1.lifecycle.v1","event":"actor_alloc","frame":10,"id":42,"state":0}
+not json
+{"schema":"unrelated.v1","event":"actor_state","frame":11,"id":42,"state":1}
+{"schema":"dkc1.lifecycle.v1","event":"section","frame":12,"id":42,"state":1}
+{"schema":"dkc1.lifecycle.v1","event":"actor_state","frame":13,"id":42,"state":2}

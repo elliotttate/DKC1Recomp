@@ -43,6 +43,17 @@ cl /nologo /c /MP8 /W0 /O1 %DEFS% %INCS% ^
   ..\..\runner\verified_rom.c ^
   ..\..\generated\snesrecomp\*.c
 if errorlevel 1 exit /b 1
+rem Boundary-model regression for lean WRAM attribution.  This links only the
+rem lean cpu_trace object and fails the build if parent post-call or host writes
+rem are assigned to the stale previous function entry.
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:..\lean_watch_attribution_model.obj ..\..\tests\lean_watch_attribution_model.c
+if errorlevel 1 exit /b 1
+link /nologo /out:..\lean_watch_attribution_model.exe cpu_trace.obj ..\lean_watch_attribution_model.obj
+if errorlevel 1 exit /b 1
+..\lean_watch_attribution_model.exe 2> ..\lean_watch_attribution.jsonl
+if errorlevel 1 exit /b 1
+python ..\..\tests\verify_lean_watch_attribution.py ..\lean_watch_attribution.jsonl
+if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% %BUILD_ID_DEFS% /Fo:..\main_headless.obj ..\..\runner\headless_main.c
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% %BUILD_ID_DEFS% /Fo:..\main_win32.obj ..\..\runner\win32_host.c

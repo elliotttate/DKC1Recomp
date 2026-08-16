@@ -11,6 +11,16 @@ set SR=..\..\snesrecomp\runner\src
 set DEFS=/DSNESRECOMP_TRACE=0 /DSNESRECOMP_REVERSE_DEBUG=0 /DSNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1 /DSYSTEM_VOLUME_MIXER_AVAILABLE=0 /D_CRT_SECURE_NO_WARNINGS
 set INCS=/I%SR% /I%SR%\snes /I..\..\recomp /I..\..\runner
 cd build\hostobj_tools
+rem Rebuild the shared presentation/runtime objects too. Candidate builds are
+rem used specifically while the visible tools executable is locked; retaining
+rem these objects from the last full build would silently omit the fix under
+rem test even though the candidate link succeeds.
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_game.obj ..\..\runner\dkc1_game.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_video.obj ..\..\runner\dkc1_video.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_ws_trace.obj ..\..\runner\dkc1_ws_trace.c
+if errorlevel 1 exit /b 1
 rem Rebuild the generated unit that owns the private vertical-rope OAM
 rem override; otherwise an incremental diagnostics link can silently retain
 rem the pre-fix object from the last full build.
@@ -30,5 +40,8 @@ link /nologo /out:..\dkc1_headless_candidate.exe @objects.rsp ^
 if errorlevel 1 exit /b 1
 link /nologo /out:..\dkc1_desktop_candidate.exe @objects.rsp ^
   ..\main_win32.obj ws2_32.lib user32.lib gdi32.lib winmm.lib
+if errorlevel 1 exit /b 1
+link /nologo /out:..\dkc1_layer_capture_candidate.exe @objects.rsp ^
+  ..\main_layer_capture.obj ws2_32.lib user32.lib
 if errorlevel 1 exit /b 1
 echo DIAGNOSTICS_CANDIDATE_BUILD_OK

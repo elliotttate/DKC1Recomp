@@ -18,6 +18,29 @@ non-conclusion vocabulary, and 3x byte-identical repeat gates.
 
 ## Implementation status
 
+- **The staged 65816 IR has a fail-closed read-only viewer.** Stages 1–3
+  (lossless decode, CFG/SSA/width facts, and typed memory) are gated by
+  `tools/ir_validate.py`. `tools/irview.py ADDR|NAME [--ssa]` renders one
+  instruction-index seed group. Because those seed labels are not proof of a
+  closed routine, any contiguous fallthrough into another seed is shown as an
+  exact `TAIL-FALLTHROUGH` and the view is labeled partial; unresolved indirect
+  successors and other CFG/SSA boundary problems are also prominent rather
+  than silently omitted.
+
+- **The evidence-summary tools now fail closed.**
+  `tools/capability_manifest.py` accepts scene evidence only from successful
+  sweep routes and will not emit `proven` when calibration is incomplete or
+  any raw fallback, aggregate blank serve, gameplay pillarbox, or unstable
+  margin was recorded. The aggregate sweep does not carry a per-blank oracle,
+  so no rate-based blank allowance is used. Every blocker is preserved in the
+  manifest. `tools/build_profile_corpus.py` clears prior route profiles and
+  publishes a corpus only if every standalone route exits successfully and
+  produces a nonempty valid JSONL profile. `tools/profile_diff.py` counts the
+  exact 2,558 address-bearing `CpuState` declarations in `recomp/funcs.h`.
+  `tools/impact.py` takes callers from the exported structured IDA call graph,
+  falling back only to exact control-flow operands in the instruction index;
+  a name appearing in pseudocode text is not caller evidence.
+
 - **The visible desktop host is now the primary interactive debugger.** It
   accepts the same `DKC1_SCRIPT`, native snapshot, input playback, checkpoint,
   WRAM dump, OAM, lifecycle, input-recording, and widescreen-trace environment
@@ -828,3 +851,46 @@ an earlier draw-cache refresh into a false behavior-phase bug.
   Each passes three byte-identical WRAM/VRAM/OAM checkpoints and byte-identical
   complete trace files. Both have zero raw fallbacks, policy violations,
   nonblack centered margins, or stable-input margin changes.
+
+## Lean reverse-watch function windows (2026-08-16)
+
+`build_host_trace.bat` builds the default-off `SNESRECOMP_WATCH` path and now
+runs `tests/lean_watch_attribution_model.c` as a mandatory boundary-model
+regression. The model covers a parent write before a nested call, a child
+write, a parent write after the child returns, and a write made outside any
+generated function. The expected writers are parent, child, parent, and
+`host/outside-function-window`; the old entry-only sampler incorrectly labeled
+the third and fourth cases with the stale child/previous entry. It also pins
+the concrete `$0028`/`CODE_80C0F8_M0X0` stale-entry regression and verifies
+that a watchdog-abandoned owner cannot claim a later host-boundary sample.
+
+The concrete `$0028:2` regression was also replayed headlessly twice across the
+full 11,972-frame `recipes/route_death.dks` contract. The repaired logs are
+byte-identical (`SHA-256 2A31065778C04AAD50DC7ACEFCDA7CCEA8D540254B889E30CFA48E2A22FC9D79`)
+and each contains 11,599 byte changes, zero rows attributed to the joypad-only
+`CODE_80C0F8_M0X0`, and no truncation markers. 11,595 changes were correctly
+left unattributed because DKC's top-level interpreter tier made them outside
+an AOT function window; the other four were AOT-window resets. This is the
+expected fail-closed result, not evidence that the host itself wrote `$0028`.
+With the watch environment unset, the hook build and a freshly built no-hook
+control also produced identical final frame, WRAM, VRAM, CGRAM, OAM, source
+OAM, and audio hashes on the same route.
+
+The lean contract is deliberately function-window resolution, not a claim of
+instruction-exact stores. A watched byte is sampled at every matched generated
+entry and exit. The JSONL row carries `attributed`, `attribution`, `writer_pc`,
+`writer`, and the observing `boundary`. Net changes within a window are
+attributed to that function's entry PC. Multiple writes that restore the byte
+before the next boundary are not visible; use force-LLE plus `DKC1_TRACE_PC`
+when the exact opcode or an intra-function transient matters. Changes first
+seen with no AOT window active remain explicitly unattributed so interpreter,
+host, or state-load work can never implicate the last generated guest routine
+by proximity. If a watchdog abandons a generated window, the next host boundary
+also clears its owner before sampling because host and pre-unwind writes can no
+longer be separated safely.
+
+The parser accepts at most 16 nonoverlapping WRAM ranges and 4 KiB total. Zero
+lengths, malformed hex, overlaps, range overflow, and out-of-WRAM endpoints
+disable the watch instead of partially arming it. A 256-row per-frame safety
+limit emits `watch_truncated`; `tools/reverse_watch.py` treats that marker as a
+failed evidence run and asks for narrower ranges.

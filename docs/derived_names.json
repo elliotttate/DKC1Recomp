@@ -1,0 +1,1336 @@
+{
+ "schema": "dkc1.derived-names.v1",
+ "note": "mechanically derived; curated rename_map.json always takes precedence; regenerate with tools/sync_names.py",
+ "code": [
+  {
+   "ea": "0xBFC7A3",
+   "name": "NorSpr29_Slippa_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFC79A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFC7BB",
+   "name": "NorSpr29_Slippa_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFC79A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFC7CA",
+   "name": "NorSpr29_Slippa_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFC79A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFC821",
+   "name": "NorSpr06_Klump_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFC818",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFC839",
+   "name": "NorSpr06_Klump_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFC818",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFC848",
+   "name": "NorSpr06_Klump_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFC818",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCB0C",
+   "name": "NorSpr09_Rambi_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFCAC7",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCB18",
+   "name": "NorSpr09_Rambi_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFCAC7",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCB2A",
+   "name": "NorSpr09_Rambi_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFCAC7",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCB5D",
+   "name": "NorSpr09_Rambi_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFCAC7",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCB88",
+   "name": "NorSpr09_Rambi_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFCAC7",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCB9A",
+   "name": "NorSpr09_Rambi_State5",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 5,
+   "via_site": "0xBFCAC7",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCB9B",
+   "name": "NorSpr09_Rambi_State6",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 6,
+   "via_site": "0xBFCAC7",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCBDC",
+   "name": "NorSpr09_Rambi_State7",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 7,
+   "via_site": "0xBFCAC7",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCEB2",
+   "name": "NorSpr22_SteelKeg_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCEBF",
+   "name": "NorSpr22_SteelKeg_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCEC6",
+   "name": "NorSpr22_SteelKeg_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFCF53",
+   "name": "NorSpr22_SteelKeg_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD09E",
+   "name": "NorSpr22_SteelKeg_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD0DD",
+   "name": "NorSpr22_SteelKeg_State5",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 5,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD10C",
+   "name": "NorSpr22_SteelKeg_State6",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 6,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD11F",
+   "name": "NorSpr22_SteelKeg_State7",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 7,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD14E",
+   "name": "NorSpr22_SteelKeg_State8",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 8,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD164",
+   "name": "NorSpr22_SteelKeg_State9",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 9,
+   "via_site": "0xBFCE9B",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD39F",
+   "name": "NorSpr18_AnimalBuddyBox_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFD370",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD3B0",
+   "name": "NorSpr18_AnimalBuddyBox_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFD370",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD3B5",
+   "name": "NorSpr18_AnimalBuddyBox_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFD370",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD3BE",
+   "name": "NorSpr18_AnimalBuddyBox_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFD370",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD4AF",
+   "name": "NorSpr41_UnknownSprite_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFD49A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD4D4",
+   "name": "NorSpr41_UnknownSprite_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFD49A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD4F5",
+   "name": "NorSpr41_UnknownSprite_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFD49A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD50E",
+   "name": "NorSpr41_UnknownSprite_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFD49A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD526",
+   "name": "NorSpr41_UnknownSprite_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFD49A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD551",
+   "name": "NorSpr41_UnknownSprite_State5",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 5,
+   "via_site": "0xBFD49A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD57B",
+   "name": "NorSpr41_UnknownSprite_State6",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 6,
+   "via_site": "0xBFD49A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD5C6",
+   "name": "NorSpr41_UnknownSprite_State7",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 7,
+   "via_site": "0xBFD49A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD5D3",
+   "name": "NorSpr41_UnknownSprite_State8",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 8,
+   "via_site": "0xBFD49A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD746",
+   "name": "NorSpr15_BananaBunch_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFD731",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD754",
+   "name": "NorSpr15_BananaBunch_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFD731",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD774",
+   "name": "NorSpr15_BananaBunch_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFD731",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD7C9",
+   "name": "NorSpr15_BananaBunch_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFD731",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD7CD",
+   "name": "NorSpr15_BananaBunch_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFD731",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD7E9",
+   "name": "NorSpr15_BananaBunch_State5",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 5,
+   "via_site": "0xBFD731",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD7FD",
+   "name": "NorSpr15_BananaBunch_State6",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 6,
+   "via_site": "0xBFD731",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD801",
+   "name": "NorSpr15_BananaBunch_State7",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 7,
+   "via_site": "0xBFD731",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD811",
+   "name": "NorSpr15_BananaBunch_State8",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 8,
+   "via_site": "0xBFD731",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFD9E1",
+   "name": "NorSpr20_Mincer_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFD9DA",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDA12",
+   "name": "NorSpr20_Mincer_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFD9DA",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDA4D",
+   "name": "NorSpr10_NeckyNut_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFDA28",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDA8A",
+   "name": "NorSpr10_NeckyNut_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFDA28",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDAC5",
+   "name": "NorSpr10_NeckyNut_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFDA28",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDCCB",
+   "name": "NorSpr1B_HalfTire_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFDCC2",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDD94",
+   "name": "NorSpr1B_HalfTire_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFDCC2",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDDA9",
+   "name": "NorSpr1B_HalfTire_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFDCC2",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDDC6",
+   "name": "NorSpr21_UnknownSprite_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFDDC1",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDE5E",
+   "name": "NorSpr1D_RollingTire_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFDE51",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDF04",
+   "name": "NorSpr1D_RollingTire_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFDE51",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDF1A",
+   "name": "NorSpr1D_RollingTire_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFDE51",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDF2D",
+   "name": "NorSpr1D_RollingTire_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFDE51",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFDFAB",
+   "name": "NorSpr1D_RollingTire_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFDE51",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE069",
+   "name": "NorSpr1A_Klaptrap_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFE062",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE0BE",
+   "name": "NorSpr1A_Klaptrap_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFE062",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE0DB",
+   "name": "NorSpr19_Zinger_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFE0D4",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE111",
+   "name": "NorSpr19_Zinger_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFE0D4",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE12F",
+   "name": "NorSpr2C_ItemCache_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFE126",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE141",
+   "name": "NorSpr2C_ItemCache_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFE126",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE159",
+   "name": "NorSpr2C_ItemCache_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFE126",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE365",
+   "name": "NorSpr38_BarrelCannon_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE3DA",
+   "name": "NorSpr38_BarrelCannon_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE48E",
+   "name": "NorSpr38_BarrelCannon_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE4D1",
+   "name": "NorSpr38_BarrelCannon_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE541",
+   "name": "NorSpr38_BarrelCannon_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE667",
+   "name": "NorSpr38_BarrelCannon_State5",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 5,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE67C",
+   "name": "NorSpr38_BarrelCannon_State6",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 6,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE694",
+   "name": "NorSpr38_BarrelCannon_State7",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 7,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE695",
+   "name": "NorSpr38_BarrelCannon_State8",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 8,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE6C5",
+   "name": "NorSpr38_BarrelCannon_State9",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 9,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE6DE",
+   "name": "NorSpr38_BarrelCannon_State10",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 10,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFE712",
+   "name": "NorSpr38_BarrelCannon_State11",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 11,
+   "via_site": "0xBFE34A",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEA35",
+   "name": "NorSpr39_SpritePlatform_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFEA28",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEA39",
+   "name": "NorSpr39_SpritePlatform_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFEA28",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEA43",
+   "name": "NorSpr39_SpritePlatform_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFEA28",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEA4B",
+   "name": "NorSpr39_SpritePlatform_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFEA28",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEA6C",
+   "name": "NorSpr39_SpritePlatform_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFEA28",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEC70",
+   "name": "NorSpr31_SwingingRope_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFEC65",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEC7B",
+   "name": "NorSpr31_SwingingRope_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFEC65",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEC8D",
+   "name": "NorSpr31_SwingingRope_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFEC65",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEC9B",
+   "name": "NorSpr31_SwingingRope_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFEC65",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEE00",
+   "name": "NorSpr30_VerticalRope_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFEDF1",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEE37",
+   "name": "NorSpr30_VerticalRope_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFEDF1",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEE50",
+   "name": "NorSpr30_VerticalRope_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFEDF1",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEE5C",
+   "name": "NorSpr30_VerticalRope_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFEDF1",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEE68",
+   "name": "NorSpr30_VerticalRope_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFEDF1",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEE93",
+   "name": "NorSpr30_VerticalRope_State5",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 5,
+   "via_site": "0xBFEDF1",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEF7B",
+   "name": "NorSpr07_DiddysHat_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFEF72",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEF87",
+   "name": "NorSpr07_DiddysHat_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFEF72",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEFB5",
+   "name": "NorSpr07_DiddysHat_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFEF72",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEFD3",
+   "name": "NorSpr2F_Army_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFEFC6",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEFE7",
+   "name": "NorSpr2F_Army_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFEFC6",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFEFF6",
+   "name": "NorSpr2F_Army_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFEFC6",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF005",
+   "name": "NorSpr2F_Army_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFEFC6",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF01F",
+   "name": "NorSpr2F_Army_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFEFC6",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF0F6",
+   "name": "NorSpr05_Kritter_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFF0EB",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF12C",
+   "name": "NorSpr05_Kritter_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFF0EB",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF13B",
+   "name": "NorSpr05_Kritter_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFF0EB",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF150",
+   "name": "NorSpr05_Kritter_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFF0EB",
+   "base_from": "source-defined",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF262",
+   "name": "Player_CallStateRoutine_State0",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 0,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF263",
+   "name": "Player_CallStateRoutine_State1",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 1,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF2C5",
+   "name": "Player_CallStateRoutine_State2",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 2,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF2FC",
+   "name": "Player_CallStateRoutine_State3",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 3,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF353",
+   "name": "Player_CallStateRoutine_State4",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 4,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF3ED",
+   "name": "Player_CallStateRoutine_State5",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 5,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF43A",
+   "name": "Player_CallStateRoutine_State6",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 6,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF521",
+   "name": "Player_CallStateRoutine_State7",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 7,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF544",
+   "name": "Player_CallStateRoutine_State8",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 8,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF62A",
+   "name": "Player_CallStateRoutine_State9",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 9,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF65D",
+   "name": "Player_CallStateRoutine_State10",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 10,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF65E",
+   "name": "Player_CallStateRoutine_State11",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 11,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF65F",
+   "name": "Player_CallStateRoutine_State12",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 12,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF660",
+   "name": "Player_CallStateRoutine_State13",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 13,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF661",
+   "name": "Player_CallStateRoutine_State14",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 14,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF66C",
+   "name": "Player_CallStateRoutine_State15",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 15,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF67A",
+   "name": "Player_CallStateRoutine_State16",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 16,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF6AD",
+   "name": "Player_CallStateRoutine_State17",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 17,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF78C",
+   "name": "Player_CallStateRoutine_State18",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 18,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF7D8",
+   "name": "Player_CallStateRoutine_State19",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 19,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF900",
+   "name": "Player_CallStateRoutine_State20",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 20,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF919",
+   "name": "Player_CallStateRoutine_State21",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 21,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF937",
+   "name": "Player_CallStateRoutine_State22",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 22,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF964",
+   "name": "Player_CallStateRoutine_State23",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 23,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF967",
+   "name": "Player_CallStateRoutine_State24",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 24,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFF9A8",
+   "name": "Player_CallStateRoutine_State25",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 25,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  },
+  {
+   "ea": "0xBFFA20",
+   "name": "Player_CallStateRoutine_State26",
+   "provenance": "table-derived",
+   "confidence": "dispatch-table-ordinal",
+   "state_ordinal": 26,
+   "via_site": "0xBFF17D",
+   "base_from": "curated",
+   "cfg": "bankbf.cfg"
+  }
+ ]
+}

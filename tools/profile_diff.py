@@ -23,6 +23,11 @@ from pathlib import Path
 import json
 
 REPO = Path(__file__).resolve().parent.parent
+PROFILED_DECLARATION = re.compile(
+    r"^void\s+[A-Za-z_]\w*\s*\(\s*CpuState\s*\*\s*cpu\s*\)\s*;\s*"
+    r"/\*\s*\$[0-9A-Fa-f]{2}:[0-9A-Fa-f]{4}\s+alias\s*\*/\s*$",
+    re.M,
+)
 
 
 def load_profile(path: Path) -> dict[str, dict]:
@@ -36,11 +41,18 @@ def load_profile(path: Path) -> dict[str, dict]:
     return out
 
 
-def total_functions() -> int:
-    funcs = REPO / "recomp" / "funcs.h"
+def total_functions(funcs: Path | None = None) -> int:
+    """Count the address-bearing declarations the entry profiler can touch.
+
+    ``funcs.h`` also declares four M/X variants for each ROM function and a
+    small set of handwritten helpers. The profile is keyed by entry PC, so its
+    exact denominator is the one ``CpuState`` alias carrying a ``$BB:AAAA``
+    address comment for each generated function.
+    """
+    funcs = funcs or REPO / "recomp" / "funcs.h"
     try:
-        return len(re.findall(r"^void ", funcs.read_text(errors="replace"),
-                              re.M))
+        return len(PROFILED_DECLARATION.findall(
+            funcs.read_text(encoding="utf-8", errors="replace")))
     except OSError:
         return 0
 
@@ -59,7 +71,7 @@ def main() -> int:
 
     total = total_functions()
     if total:
-        print(f"coverage: {len(a)} / ~{total} generated functions "
+        print(f"coverage: {len(a)} / {total} generated functions "
               f"({100 * len(a) // total}%) touched by {args.profile_a.name}")
         report["coverage"] = {"touched": len(a), "total": total}
 

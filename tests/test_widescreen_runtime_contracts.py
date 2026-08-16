@@ -217,7 +217,10 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("kDkc1StreamMargin", video)
         self.assertIn("(kDkc1VideoWidescreenExtra + 7) & ~7", video)
         self.assertIn("native_backstep == 0x0100u", video)
-        self.assertIn("the initializer itself is the capability boundary", video)
+        self.assertIn(
+            "shared stock initializer is not itself proof", video)
+        self.assertIn("fixed cave tilemap whose stock initializer", video)
+        self.assertIn("capability boundary", video)
         self.assertIn("return 0x0170u", video)
         self.assertIn("return 0x0178u", video)
         self.assertIn("return 0x002eu", video)
@@ -311,6 +314,30 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("WsShadowSetWorld", committed)
         self.assertIn("WsShadowFrame(g_ppu)", committed)
         self.assertIn("trace->shadow_commit = true", committed)
+
+    def test_level_decoder_uses_independent_map_and_metatile_banks(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        video = (ROOT / "runner" / "dkc1_video.c").read_text(
+            encoding="utf-8")
+        header = (ROOT / "runner" / "dkc1_video.h").read_text(
+            encoding="utf-8")
+        trace = (ROOT / "runner" / "dkc1_ws_trace.c").read_text(
+            encoding="utf-8")
+
+        self.assertIn("const uint8_t metatile_bank = g_ram[0x00d6];", game)
+        self.assertIn("map_bank, metatile_bank", game)
+        self.assertIn("uint8_t metatile_bank", header)
+        self.assertIn("RomWord(map_bank, map_offset", video)
+        self.assertIn("RomWord(metatile_bank, definition_offset", video)
+        self.assertIn("metatile_bank << 56", game)
+        self.assertIn(r'\"metatile_bank\":%u', trace)
+
+        # Exact current underwater repro: Level_SetTilemapPointers selects
+        # map E9:0000 and metatile definitions D0:0000. The former one-bank
+        # decoder scored vertical calibration 50/224; the split-bank decode
+        # scores 212/224 and safely clears the 70% acceptance threshold.
+        self.assertGreaterEqual(212 * 10, 224 * 7)
 
     def test_wide_layers_use_physical_width_not_terrain_mask_for_repeat(self):
         game = (ROOT / "runner" / "dkc1_game.c").read_text(

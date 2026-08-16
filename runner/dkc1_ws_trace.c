@@ -163,7 +163,8 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "{\"schema\":\"dkc1.ws.frame.v1\",\"frame\":%d,"
       "\"scene\":{\"mode\":%u,\"level\":%u,\"entrance\":%u,"
       "\"fade\":%u},"
-      "\"source\":{\"bank\":%u,\"map\":%u,\"metatiles\":%u,"
+      "\"source\":{\"bank\":%u,\"metatile_bank\":%u,"
+      "\"map\":%u,\"metatiles\":%u,"
       "\"stream_vram\":%u},"
       "\"identity\":{\"hash\":\"%016llx\",\"change_mask\":%u},"
       "\"camera\":{\"x\":%u,\"y\":%u,\"lower\":%u,"
@@ -203,7 +204,8 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       frame->frame, (unsigned)ReadWram16(0x0032),
       (unsigned)ReadWram16(0x0030), (unsigned)ReadWram16(0x003e),
       (unsigned)ReadWram16(0x1df1),
-      (unsigned)g_ram[0x00d5], (unsigned)ReadWram16(0x00d3),
+      (unsigned)g_ram[0x00d5], (unsigned)g_ram[0x00d6],
+      (unsigned)ReadWram16(0x00d3),
       (unsigned)ReadWram16(0x1b11), (unsigned)ReadWram16(0x1b13),
       (unsigned long long)frame->identity_hash,
       (unsigned)frame->identity_change_mask,

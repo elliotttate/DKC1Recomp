@@ -1131,6 +1131,7 @@ bool Dkc1VideoFindTransparent4bppTile(const uint16_t *vram,
 
 bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
                               uint8_t map_bank,
+                              uint8_t metatile_bank,
                               uint16_t map_base,
                               uint16_t metatile_base,
                               uint32_t world_tile_x,
@@ -1165,7 +1166,7 @@ bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
       (uint16_t)((uint16_t)(cell << 5) + metatile_base +
                  (uint16_t)(sub_x * 2u + sub_y * 8u));
   uint16_t source;
-  if (!RomWord(map_bank, definition_offset, &source))
+  if (!RomWord(metatile_bank, definition_offset, &source))
     return false;
   *tile_entry = (uint16_t)(source ^ flips);
   return true;

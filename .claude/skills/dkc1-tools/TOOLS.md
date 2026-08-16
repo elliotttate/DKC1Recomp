@@ -158,6 +158,22 @@ optional `quickload` leg seeded by a state the entry route itself saves.
 - `structure.py ADDR|NAME` — flat symbolized 1:1 listing (curated RAM
   names, context-qualified define annotations, local cross-reference
   labels); display aid, no reconstructed blocks or semantic claims.
+
+**Mod layer (docs/MOD_LAYER.md)**
+- `gen_symbols.py [--show ADDR]` — build/ir/symbols.json: ONE canonical
+  generated record per function (names+provenance, proven entry/exit
+  M/X, symbolic read/write sets, callers, dispatch roles, runtime-route
+  evidence, oracle eligibility). rename_map.json stays the only
+  hand-edited name source. Regenerate after summarize/oracle/profile
+  updates.
+- `gen_wram_header.py [--check]` — runner/dkc1_wram_gen.h: named WRAM
+  offsets, little-endian view accessors over live WRAM (never copies),
+  actor SoA per-field accessors, struct mirrors. `--check` = staleness
+  gate + independent cross-parser address agreement.
+- `mod_conflicts.py mods/*.json` — routine-replacement conflicts, WRAM
+  write-set overlaps between mods, presentation-class violations
+  (presentation mods may not replace gameplay-writing routines), and
+  oracle-eligibility / no-runtime-evidence warnings.
 - `coverage_explorer.py` — docs/COVERAGE.md + build/coverage.json: the
   full 256-entrance universe joined against capabilities + sweep
   evidence, with a ranked next-evidence worklist (centered-only scenes

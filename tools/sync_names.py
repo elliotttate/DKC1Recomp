@@ -10,12 +10,14 @@ Sources of truth, in precedence order:
                 named function become <Base>_StateN (state machines run
                 through JMP (table,x) sites our cfg contracts enumerate)
 
-Output goes to derived_names.json BESIDE the curated map — reviewable,
-regenerable, and consumed by atlas/structure as a fallback layer with the
-provenance shown. Nothing here ever mutates rename_map.json.
+Output goes to docs/derived_names.json in this repository — reviewable,
+regenerable, and outside the read-only reference tree.  The understanding
+tools consume it as a fallback layer with the provenance shown.  Nothing
+here ever mutates rename_map.json or any other reference input.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -26,82 +28,131 @@ if str(TOOLS) not in sys.path:
 
 import atlas  # noqa: E402
 
-OUT = atlas.DISASM_ROOT / "Tools" / "IDA" / "work" / "derived_names.json"
+REPO = TOOLS.parent
+OUT = REPO / "docs" / "derived_names.json"
+REFERENCE = REPO / "reference"
+READ_ONLY_ROOTS = (REFERENCE, atlas.DISASM_ROOT)
 
 
-def main() -> int:
-    rows = list(atlas.iter_instruction_index())
-    code_names, _ = atlas.load_rename_map()
-    curated_addresses = set(code_names)
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
 
-    # function label per address (disassembly's own semantic labels)
-    function_of = {}
-    label_semantic = {}
-    for r in rows:
-        addr = atlas.row_address(r)
-        function_of.setdefault(r["function"], addr if
-                               r["function"].startswith("CODE_") is False or
-                               True else addr)
-    # map function label -> entry address (first row of the function)
+
+def ensure_safe_output(path: Path) -> None:
+    """Reject generated output under any immutable source-material root."""
+    for root in READ_ONLY_ROOTS:
+        if _is_within(path, root):
+            raise ValueError(f"refusing to write generated output under "
+                             f"read-only {root}: {path}")
+
+
+def load_name_maps(
+        curated_path: Path = atlas.RENAME_MAP,
+        derived_path: Path | None = OUT
+        ) -> tuple[dict[int, dict], dict[int, dict]]:
+    """Load immutable curation, then merge the safe derived-name layer."""
+    try:
+        curated = json.loads(curated_path.read_text(encoding="utf-8"))
+    except OSError:
+        curated = {}
+    code = {int(entry["ea"], 16): entry
+            for entry in curated.get("code", [])}
+    ram = {int(entry["ea"], 16) & 0x1FFFF: entry
+           for entry in curated.get("ram", [])}
+    if derived_path is not None:
+        try:
+            derived = json.loads(derived_path.read_text(encoding="utf-8"))
+        except OSError:
+            derived = {}
+        for entry in derived.get("code", []):
+            code.setdefault(int(entry["ea"], 16), entry)
+    return code, ram
+
+
+def derive_names(rows: list[dict], code_names: dict[int, dict],
+                 dispatches: list[dict]) -> dict[str, dict]:
+    """Derive target names using each dispatch contract's literal ordinal."""
     entry_of: dict[str, int] = {}
-    for r in rows:
-        entry_of.setdefault(r["function"], atlas.row_address(r))
-    for label, addr in entry_of.items():
-        if not label.startswith("CODE_"):
-            label_semantic[addr] = label
+    function_at: dict[int, str] = {}
+    for row in rows:
+        address = atlas.row_address(row)
+        entry_of.setdefault(row["function"], address)
+        function_at[address] = row["function"]
 
-    # dispatch sites -> containing function name (curated > source label)
     derived: dict[str, dict] = {}
-    for dispatch in atlas.load_dispatches():
+    for dispatch in sorted(dispatches, key=lambda item: item["site"]):
         site = dispatch["site"]
-        site_function = None
-        best = None
-        for label, addr in entry_of.items():
-            if addr <= site and (best is None or addr > best):
-                rows_of = None  # containment via function column instead
-        # containment via the row at the site address
-        for r in rows:
-            if atlas.row_address(r) == site:
-                site_function = r["function"]
-                break
+        site_function = function_at.get(site)
         if site_function is None:
             continue
         site_entry = entry_of.get(site_function)
         base = None
         provenance_base = None
-        if site_entry in curated_addresses and \
-                code_names[site_entry].get("name"):
-            base = code_names[site_entry]["name"]
+        curated_owner = code_names.get(site_entry)
+        if curated_owner and curated_owner.get("name"):
+            base = curated_owner["name"]
             provenance_base = "curated"
         elif not site_function.startswith("CODE_"):
-            base = site_function.replace("DKC1_", "")
+            base = site_function.removeprefix("DKC1_")
             provenance_base = "source-defined"
         if not base:
             continue
-        base = base.replace("_Main", "")
-        for ordinal, target in enumerate(sorted(set(dispatch["targets"]))):
-            if target in curated_addresses:
+        base = base.removesuffix("_Main")
+
+        # Contract target order is dispatch-table order.  Address sorting (or
+        # set conversion) silently renumbers states when handlers are laid out
+        # in a different order, so enumerate the literal list.
+        for ordinal, target in enumerate(dispatch["targets"]):
+            if target in code_names:
                 continue  # curation wins, always
             key = f"0x{target:06X}"
-            if key in derived:
-                continue  # first (lowest site) attribution wins
+            existing = derived.get(key)
+            if existing:
+                if existing["via_site"] == f"0x{site:06X}":
+                    existing.setdefault("state_ordinals",
+                                        [existing["state_ordinal"]])
+                    if ordinal not in existing["state_ordinals"]:
+                        existing["state_ordinals"].append(ordinal)
+                continue  # first dispatch-site attribution wins
             derived[key] = {
                 "ea": key,
                 "name": f"{base}_State{ordinal}",
                 "provenance": "table-derived",
-                "confidence": "inferred-order",
+                "confidence": "dispatch-table-ordinal",
+                "state_ordinal": ordinal,
                 "via_site": f"0x{site:06X}",
                 "base_from": provenance_base,
                 "cfg": dispatch["cfg"],
             }
+    return derived
 
-    OUT.write_text(json.dumps(
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", type=Path, default=OUT,
+                        help=f"output JSON (default: {OUT})")
+    args = parser.parse_args()
+    try:
+        ensure_safe_output(args.out)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    rows = list(atlas.iter_instruction_index())
+    code_names, _ = load_name_maps(derived_path=None)
+    derived = derive_names(rows, code_names, atlas.load_dispatches())
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(
         {"schema": "dkc1.derived-names.v1",
          "note": "mechanically derived; curated rename_map.json always "
                  "takes precedence; regenerate with tools/sync_names.py",
          "code": sorted(derived.values(), key=lambda e: e["ea"])},
-        indent=1))
-    print(f"{len(derived)} derived names -> {OUT}")
+        indent=1) + "\n", encoding="utf-8")
+    print(f"{len(derived)} derived names -> {args.out}")
     bases = {}
     for e in derived.values():
         stem = e["name"].rsplit("_State", 1)[0]
