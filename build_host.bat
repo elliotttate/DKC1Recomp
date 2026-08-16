@@ -49,7 +49,7 @@ goto link_headless
 :link_desktop_begin
 set LINK_RETRIES=0
 :link_desktop
-link /nologo /out:..\dkc1_desktop.exe @objects.rsp ..\main_win32.obj ws2_32.lib user32.lib gdi32.lib winmm.lib
+link /nologo /out:..\dkc1_desktop.exe @objects.rsp ..\main_win32.obj ws2_32.lib user32.lib gdi32.lib winmm.lib comdlg32.lib
 if not errorlevel 1 goto build_ok
 set /a LINK_RETRIES+=1
 if %LINK_RETRIES% GEQ 5 exit /b 1

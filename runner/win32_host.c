@@ -22,6 +22,7 @@
 #include "snes/snes.h"
 
 #include <windows.h>
+#include <commdlg.h>
 #include <mmsystem.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +34,28 @@ enum {
   kAudioBuffers = 8,
   kAudioFramesPerBuffer = 536,
 };
+
+enum {
+  kMenuQuickSave = 100,
+  kMenuQuickLoad,
+  kMenuSaveStateAs,
+  kMenuLoadStateFrom,
+  kMenuExportRepro,
+  kMenuExit,
+  kMenuPauseResume,
+  kMenuSingleStep,
+  kMenuFullscreen,
+  kMenuTogglePanel,
+  kMenuProvenance,
+  kMenuLayerComposite,  /* kMenuLayer* stay contiguous for the radio group */
+  kMenuLayerBg1,
+  kMenuLayerBg2,
+  kMenuLayerBg3,
+  kMenuLayerObj,
+};
+
+static const DWORD kWindowedStyle =
+    WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX;
 
 static uint8_t s_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
 static BITMAPINFO s_bmi;
@@ -55,6 +78,12 @@ static ULONGLONG s_route_terminal_tick;
 static int s_route_result_written;
 static long s_host_frame;
 static uint32_t s_last_input;
+static uint32_t s_manual_input;
+static HMENU s_menu;
+static int s_fullscreen;
+static WINDOWPLACEMENT s_windowed_placement;
+static char s_pending_state_path[1024];
+static int s_pending_state_op;  /* 0 none, 1 save-as, 2 load-from */
 static char s_host_status[512] = "manual play";
 static Dkc1InputPlayback s_input_playback;
 static Dkc1WramDump s_wram_dump;
@@ -69,6 +98,24 @@ static int EnvironmentEnabled(const char *name) {
 }
 
 static void UpdateDebugTitle(void);
+
+static uint32_t InputBitForVirtualKey(WPARAM key) {
+  switch (key) {
+    case 'Z': return 0x001;       /* B */
+    case 'X': return 0x002;       /* Y */
+    case VK_RSHIFT: return 0x004; /* Select */
+    case VK_RETURN: return 0x008; /* Start */
+    case VK_UP: return 0x010;
+    case VK_DOWN: return 0x020;
+    case VK_LEFT: return 0x040;
+    case VK_RIGHT: return 0x080;
+    case 'S': return 0x100;       /* A */
+    case 'A': return 0x200;       /* X */
+    case 'Q': return 0x400;       /* L */
+    case 'W': return 0x800;       /* R */
+    default: return 0;
+  }
+}
 
 static void WriteRouteResult(const char *status) {
   if (s_route_result_written) return;
@@ -116,6 +163,61 @@ static const char *LayerModeName(uint8_t mask) {
   }
 }
 
+static HMENU BuildMenuBar(void) {
+  HMENU file = CreatePopupMenu();
+  AppendMenuA(file, MF_STRING, kMenuQuickSave, "Quick &Save State\tF11");
+  AppendMenuA(file, MF_STRING, kMenuQuickLoad, "Quick &Load State\tF12");
+  AppendMenuA(file, MF_STRING, kMenuSaveStateAs, "Save State &As...");
+  AppendMenuA(file, MF_STRING, kMenuLoadStateFrom, "Load State &From...");
+  AppendMenuA(file, MF_SEPARATOR, 0, NULL);
+  AppendMenuA(file, MF_STRING, kMenuExportRepro, "Export Repro &Bundle\tF9");
+  AppendMenuA(file, MF_SEPARATOR, 0, NULL);
+  AppendMenuA(file, MF_STRING, kMenuExit, "E&xit\tEsc");
+  HMENU emulation = CreatePopupMenu();
+  AppendMenuA(emulation, MF_STRING, kMenuPauseResume, "&Pause/Resume\tF7");
+  AppendMenuA(emulation, MF_STRING, kMenuSingleStep, "Single &Step\tF8");
+  HMENU layers = CreatePopupMenu();
+  AppendMenuA(layers, MF_STRING, kMenuLayerComposite, "&Composite\tF2");
+  AppendMenuA(layers, MF_STRING, kMenuLayerBg1, "BG&1 only\tF3");
+  AppendMenuA(layers, MF_STRING, kMenuLayerBg2, "BG&2 only\tF4");
+  AppendMenuA(layers, MF_STRING, kMenuLayerBg3, "BG&3 only\tF5");
+  AppendMenuA(layers, MF_STRING, kMenuLayerObj, "&Sprites only\tF6");
+  HMENU view = CreatePopupMenu();
+  AppendMenuA(view, MF_STRING, kMenuFullscreen, "&Fullscreen\tAlt+Enter");
+  AppendMenuA(view, MF_STRING, kMenuTogglePanel, "Debug &Panel");
+  AppendMenuA(view, MF_STRING, kMenuProvenance, "Pro&venance Overlay\tF1");
+  AppendMenuA(view, MF_POPUP, (UINT_PTR)layers, "&Layers");
+  HMENU bar = CreateMenu();
+  AppendMenuA(bar, MF_POPUP, (UINT_PTR)file, "&File");
+  AppendMenuA(bar, MF_POPUP, (UINT_PTR)emulation, "&Emulation");
+  AppendMenuA(bar, MF_POPUP, (UINT_PTR)view, "&View");
+  return bar;
+}
+
+static void RefreshMenuChecks(void) {
+  if (!s_menu) return;
+  CheckMenuItem(s_menu, kMenuPauseResume,
+                MF_BYCOMMAND | (s_paused ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(s_menu, kMenuFullscreen,
+                MF_BYCOMMAND | (s_fullscreen ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(s_menu, kMenuTogglePanel,
+                MF_BYCOMMAND | (s_panel_enabled ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(s_menu, kMenuProvenance,
+                MF_BYCOMMAND |
+                    (Dkc1DebugProvenanceOverlay() ? MF_CHECKED
+                                                  : MF_UNCHECKED));
+  UINT layer_item;
+  switch (Dkc1DebugLayerMask()) {
+    case 0x01: layer_item = kMenuLayerBg1; break;
+    case 0x02: layer_item = kMenuLayerBg2; break;
+    case 0x04: layer_item = kMenuLayerBg3; break;
+    case 0x10: layer_item = kMenuLayerObj; break;
+    default: layer_item = kMenuLayerComposite; break;
+  }
+  CheckMenuRadioItem(s_menu, kMenuLayerComposite, kMenuLayerObj,
+                     layer_item, MF_BYCOMMAND);
+}
+
 static void UpdateDebugTitle(void) {
   if (!s_window) return;
   char title[320];
@@ -125,15 +227,48 @@ static void UpdateDebugTitle(void) {
            LayerModeName(Dkc1DebugLayerMask()),
            Dkc1DebugProvenanceOverlay() ? "ON" : "off");
   SetWindowTextA(s_window, title);
+  RefreshMenuChecks();
 }
 
 static void PresentFrame(HDC dc) {
   if (!dc || !s_window || !s_width || !s_height) return;
-  if (s_bmi.bmiHeader.biSize) {
-    StretchDIBits(dc, 0, 0, s_width * kScale, s_height * kScale,
-                  0, 0, s_width, s_height, s_pixels, &s_bmi,
-                  DIB_RGB_COLORS, SRCCOPY);
+  if (!s_bmi.bmiHeader.biSize) return;
+  if (s_fullscreen) {
+    /* Aspect-preserving letterbox across the whole monitor; the debug
+     * panel stays windowed-only. Bars are repainted with the same black
+     * every frame, so there is nothing to flicker. */
+    RECT client;
+    GetClientRect(s_window, &client);
+    const int cw = client.right, ch = client.bottom;
+    if (cw <= 0 || ch <= 0) return;
+    int dw = cw, dh = cw * s_height / s_width;
+    if (dh > ch) {
+      dh = ch;
+      dw = ch * s_width / s_height;
+    }
+    const int dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+    HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RECT bar;
+    if (dy > 0) {
+      SetRect(&bar, 0, 0, cw, dy);
+      FillRect(dc, &bar, black);
+      SetRect(&bar, 0, dy + dh, cw, ch);
+      FillRect(dc, &bar, black);
+    }
+    if (dx > 0) {
+      SetRect(&bar, 0, 0, dx, ch);
+      FillRect(dc, &bar, black);
+      SetRect(&bar, dx + dw, 0, cw, ch);
+      FillRect(dc, &bar, black);
+    }
+    SetStretchBltMode(dc, COLORONCOLOR);  /* crisp pixels, no smoothing */
+    StretchDIBits(dc, dx, dy, dw, dh, 0, 0, s_width, s_height,
+                  s_pixels, &s_bmi, DIB_RGB_COLORS, SRCCOPY);
+    return;
   }
+  StretchDIBits(dc, 0, 0, s_width * kScale, s_height * kScale,
+                0, 0, s_width, s_height, s_pixels, &s_bmi,
+                DIB_RGB_COLORS, SRCCOPY);
   if (!s_panel_enabled) return;
 
   /* Compose the panel off-screen: FillRect-then-DrawText straight onto the
@@ -195,7 +330,8 @@ static void PresentFrame(HDC dc) {
            "F7 pause/resume   F8 single-step\r\n"
            "F9 export rolling repro bundle\r\n"
            "F11 quick save   F12 quick load\r\n"
-           "Esc quit\r\n"
+           "Alt+Enter fullscreen; Esc returns\r\n"
+           "Esc quit (when windowed)\r\n"
            "\r\n"
            "The side panel is host-only and is not\r\n"
            "included in framebuffer evidence.",
@@ -232,6 +368,70 @@ static int16_t s_wave_data[kAudioBuffers][kAudioFramesPerBuffer * 2];
 static int s_wave_index;
 static double s_audio_accumulator;
 
+/* Resize the windowed frame to fit the game view plus the optional panel. */
+static void ApplyWindowedSize(void) {
+  if (!s_window || s_fullscreen) return;
+  RECT rect = { 0, 0,
+                s_width * kScale + (s_panel_enabled ? kPanelWidth : 0),
+                s_height * kScale };
+  AdjustWindowRect(&rect, kWindowedStyle, TRUE);
+  SetWindowPos(s_window, NULL, 0, 0, rect.right - rect.left,
+               rect.bottom - rect.top,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  InvalidateRect(s_window, NULL, FALSE);
+}
+
+static void SetFullscreen(int enable) {
+  if (!s_window || enable == s_fullscreen) return;
+  s_fullscreen = enable;
+  if (enable) {
+    s_windowed_placement.length = sizeof s_windowed_placement;
+    GetWindowPlacement(s_window, &s_windowed_placement);
+    SetMenu(s_window, NULL);
+    SetWindowLongA(s_window, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+    HMONITOR monitor = MonitorFromWindow(s_window, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info;
+    info.cbSize = sizeof info;
+    GetMonitorInfoA(monitor, &info);
+    SetWindowPos(s_window, HWND_TOP, info.rcMonitor.left, info.rcMonitor.top,
+                 info.rcMonitor.right - info.rcMonitor.left,
+                 info.rcMonitor.bottom - info.rcMonitor.top,
+                 SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+  } else {
+    SetWindowLongA(s_window, GWL_STYLE, kWindowedStyle | WS_VISIBLE);
+    SetMenu(s_window, s_menu);
+    SetWindowPlacement(s_window, &s_windowed_placement);
+    SetWindowPos(s_window, NULL, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    ApplyWindowedSize();  /* panel may have been toggled while fullscreen */
+  }
+  InvalidateRect(s_window, NULL, FALSE);
+  UpdateDebugTitle();
+}
+
+/* File dialog for Save State As / Load State From. The snapshot itself is
+ * taken at the next frame boundary in the main loop, same as F11/F12. */
+static void PromptStatePath(int save_mode) {
+  char path[1024] = "";
+  OPENFILENAMEA ofn;
+  memset(&ofn, 0, sizeof ofn);
+  ofn.lStructSize = sizeof ofn;
+  ofn.hwndOwner = s_window;
+  ofn.lpstrFilter = "Save states (*.state)\0*.state\0All files (*.*)\0*.*\0";
+  ofn.lpstrFile = path;
+  ofn.nMaxFile = sizeof path;
+  ofn.lpstrDefExt = "state";
+  /* OFN_NOCHANGEDIR: the dialog must not move the process CWD, which
+   * relative evidence paths and quicksave.state depend on. */
+  ofn.Flags = OFN_NOCHANGEDIR |
+              (save_mode ? OFN_OVERWRITEPROMPT
+                         : OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST);
+  BOOL accepted = save_mode ? GetSaveFileNameA(&ofn) : GetOpenFileNameA(&ofn);
+  if (!accepted) return;
+  snprintf(s_pending_state_path, sizeof s_pending_state_path, "%s", path);
+  s_pending_state_op = save_mode ? 1 : 2;
+}
+
 static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_CLOSE:
@@ -239,11 +439,35 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       s_running = 0;
       PostQuitMessage(0);
       return 0;
-    case WM_KEYDOWN:
+    case WM_KILLFOCUS:
+      /* Never carry a held SNES button across a focus transition.  Global
+       * asynchronous polling could leave a button latched when the desktop
+       * shell or an automation window consumed the matching key-up. */
+      s_manual_input = 0;
+      s_last_input = 0;
+      return 0;
+    case WM_KEYUP: {
+      uint32_t bit = InputBitForVirtualKey(wp);
+      if (bit) {
+        s_manual_input &= ~bit;
+        return 0;
+      }
+      break;
+    }
+    case WM_KEYDOWN: {
+      uint32_t bit = InputBitForVirtualKey(wp);
+      if (bit) {
+        s_manual_input |= bit;
+        return 0;
+      }
       if (lp & (1u << 30)) return 0;  /* ignore key-repeat toggles */
       if (wp == VK_ESCAPE) {
-        s_running = 0;
-        PostQuitMessage(0);
+        if (s_fullscreen) {
+          SetFullscreen(0);
+        } else {
+          s_running = 0;
+          PostQuitMessage(0);
+        }
       } else if (wp == VK_F1) {
         Dkc1DebugSetProvenanceOverlay(!Dkc1DebugProvenanceOverlay());
         UpdateDebugTitle();
@@ -279,6 +503,77 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
+    }
+    case WM_SYSKEYDOWN:
+      if (wp == VK_RETURN) {  /* Alt+Enter toggles fullscreen */
+        if (!(lp & (1u << 30))) SetFullscreen(!s_fullscreen);
+        return 0;
+      }
+      break;
+    case WM_SYSCHAR:
+      if (wp == VK_RETURN) return 0;  /* no menu beep for Alt+Enter */
+      break;
+    case WM_COMMAND:
+      switch (LOWORD(wp)) {
+        case kMenuQuickSave:
+          s_quicksave_requested = 1;
+          snprintf(s_host_status, sizeof s_host_status,
+                   "quick save requested");
+          break;
+        case kMenuQuickLoad:
+          s_quickload_requested = 1;
+          snprintf(s_host_status, sizeof s_host_status,
+                   "quick load requested");
+          break;
+        case kMenuSaveStateAs:
+          PromptStatePath(1);
+          break;
+        case kMenuLoadStateFrom:
+          PromptStatePath(0);
+          break;
+        case kMenuExportRepro:
+          s_export_requested = 1;
+          snprintf(s_host_status, sizeof s_host_status,
+                   "repro bundle export requested");
+          break;
+        case kMenuExit:
+          s_running = 0;
+          PostQuitMessage(0);
+          break;
+        case kMenuPauseResume:
+          s_paused = !s_paused;
+          s_step_once = 0;
+          snprintf(s_host_status, sizeof s_host_status,
+                   "%s by user", s_paused ? "paused" : "resumed");
+          break;
+        case kMenuSingleStep:
+          if (s_paused) {
+            s_step_once = 1;
+            snprintf(s_host_status, sizeof s_host_status,
+                     "single frame requested");
+          }
+          break;
+        case kMenuFullscreen:
+          SetFullscreen(!s_fullscreen);
+          break;
+        case kMenuTogglePanel:
+          s_panel_enabled = !s_panel_enabled;
+          ApplyWindowedSize();
+          break;
+        case kMenuProvenance:
+          Dkc1DebugSetProvenanceOverlay(!Dkc1DebugProvenanceOverlay());
+          break;
+        case kMenuLayerComposite: Dkc1DebugSetLayerMask(0xff); break;
+        case kMenuLayerBg1: Dkc1DebugSetLayerMask(0x01); break;
+        case kMenuLayerBg2: Dkc1DebugSetLayerMask(0x02); break;
+        case kMenuLayerBg3: Dkc1DebugSetLayerMask(0x04); break;
+        case kMenuLayerObj: Dkc1DebugSetLayerMask(0x10); break;
+        default:
+          return DefWindowProc(hwnd, msg, wp, lp);
+      }
+      UpdateDebugTitle();
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
     case WM_PAINT: {
       PAINTSTRUCT ps;
       HDC dc = BeginPaint(hwnd, &ps);
@@ -291,22 +586,31 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 static uint32_t PollInput(void) {
-  if (GetForegroundWindow() != s_window)
+  if (GetForegroundWindow() != s_window) {
+    s_manual_input = 0;
     return 0;
-  uint32_t inputs = 0;
-  if (GetAsyncKeyState('Z') & 0x8000) inputs |= 0x001;      /* B */
-  if (GetAsyncKeyState('X') & 0x8000) inputs |= 0x002;      /* Y */
-  if (GetAsyncKeyState(VK_RSHIFT) & 0x8000) inputs |= 0x004;/* Select */
-  if (GetAsyncKeyState(VK_RETURN) & 0x8000) inputs |= 0x008;/* Start */
-  if (GetAsyncKeyState(VK_UP) & 0x8000) inputs |= 0x010;
-  if (GetAsyncKeyState(VK_DOWN) & 0x8000) inputs |= 0x020;
-  if (GetAsyncKeyState(VK_LEFT) & 0x8000) inputs |= 0x040;
-  if (GetAsyncKeyState(VK_RIGHT) & 0x8000) inputs |= 0x080;
-  if (GetAsyncKeyState('S') & 0x8000) inputs |= 0x100;      /* A */
-  if (GetAsyncKeyState('A') & 0x8000) inputs |= 0x200;      /* X */
-  if (GetAsyncKeyState('Q') & 0x8000) inputs |= 0x400;      /* L */
-  if (GetAsyncKeyState('W') & 0x8000) inputs |= 0x800;      /* R */
-  return inputs;
+  }
+
+  /* WM_KEYUP can be lost around focus/desktop transitions.  Treat the
+   * physical high bit as authoritative on every frame so a missed message
+   * can never turn a short tap into a permanently held SNES button.  Keep
+   * the message-owned copy for immediate UI bookkeeping, but reconcile it
+   * here before the controller snapshot is handed to the guest. */
+  uint32_t physical = 0;
+  if (GetAsyncKeyState('Z') & 0x8000) physical |= 0x001;
+  if (GetAsyncKeyState('X') & 0x8000) physical |= 0x002;
+  if (GetAsyncKeyState(VK_RSHIFT) & 0x8000) physical |= 0x004;
+  if (GetAsyncKeyState(VK_RETURN) & 0x8000) physical |= 0x008;
+  if (GetAsyncKeyState(VK_UP) & 0x8000) physical |= 0x010;
+  if (GetAsyncKeyState(VK_DOWN) & 0x8000) physical |= 0x020;
+  if (GetAsyncKeyState(VK_LEFT) & 0x8000) physical |= 0x040;
+  if (GetAsyncKeyState(VK_RIGHT) & 0x8000) physical |= 0x080;
+  if (GetAsyncKeyState('S') & 0x8000) physical |= 0x100;
+  if (GetAsyncKeyState('A') & 0x8000) physical |= 0x200;
+  if (GetAsyncKeyState('Q') & 0x8000) physical |= 0x400;
+  if (GetAsyncKeyState('W') & 0x8000) physical |= 0x800;
+  s_manual_input = physical;
+  return physical;
 }
 
 static void AudioInit(void) {
@@ -408,6 +712,30 @@ int main(int argc, char **argv) {
     }
   }
   {
+    const char *bundle = getenv("DKC1_SUPERZSNES_STATE");
+    const char *snapshot = getenv("DKC1_SAVESTATE_INPUT");
+    if (bundle && *bundle) {
+      char import_error[256];
+      if ((snapshot && *snapshot) ||
+          !Dkc1ImportSuperZsnesState(bundle, import_error,
+                                     sizeof import_error)) {
+        char message[768];
+        snprintf(message, sizeof message,
+                 "Unable to import SuperZSNES state:\n%s\n\n%s",
+                 bundle,
+                 (snapshot && *snapshot)
+                     ? "DKC1_SAVESTATE_INPUT and DKC1_SUPERZSNES_STATE are mutually exclusive"
+                     : import_error);
+        MessageBoxA(NULL, message, "DKC1Recomp", MB_ICONERROR);
+        free(rom);
+        return 20;
+      }
+      snprintf(s_host_status, sizeof s_host_status,
+               "imported SuperZSNES frame %d; audio history reconstructed",
+               snes_frame_counter);
+    }
+  }
+  {
     const char *playback_path = getenv("SNESRECOMP_INPUT_PLAY");
     if (playback_path && *playback_path) {
       char error[256];
@@ -491,17 +819,18 @@ int main(int argc, char **argv) {
   wc.lpszClassName = "DKC1RecompWindow";
   RegisterClassA(&wc);
 
+  s_menu = BuildMenuBar();
   RECT rect = { 0, 0,
                 s_width * kScale + (s_panel_enabled ? kPanelWidth : 0),
                 s_height * kScale };
-  AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME, FALSE);
+  AdjustWindowRect(&rect, kWindowedStyle, TRUE);
   s_window = CreateWindowA(
       wc.lpszClassName,
       "DKC1Recomp — Z=B  X=Y  S=A  A=X  Q/W=L/R  Enter=Start  Esc=quit",
-      (WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX) | WS_VISIBLE,
+      kWindowedStyle | WS_VISIBLE,
       CW_USEDEFAULT, CW_USEDEFAULT,
       rect.right - rect.left, rect.bottom - rect.top,
-      NULL, NULL, wc.hInstance, NULL);
+      NULL, s_menu, wc.hInstance, NULL);
   UpdateDebugTitle();
 
   memset(&s_bmi, 0, sizeof s_bmi);
@@ -558,6 +887,17 @@ int main(int argc, char **argv) {
                RtlLoadSnapshot("quicksave.state")
                    ? "quick load <- quicksave.state"
                    : "quick load FAILED (no quicksave.state?)");
+      UpdateDebugTitle();
+    }
+    if (s_pending_state_op) {
+      const int save_op = s_pending_state_op == 1;
+      s_pending_state_op = 0;
+      const int accepted = save_op ? RtlSaveSnapshot(s_pending_state_path)
+                                   : RtlLoadSnapshot(s_pending_state_path);
+      snprintf(s_host_status, sizeof s_host_status, "state %s %s %.400s",
+               save_op ? "save" : "load",
+               accepted ? (save_op ? "->" : "<-") : "FAILED:",
+               s_pending_state_path);
       UpdateDebugTitle();
     }
 
