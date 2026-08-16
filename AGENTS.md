@@ -45,6 +45,39 @@ is incomplete when interaction or gameplay coordinates still disagree.
   tuple may be used as a narrow containment guard, but it is not the long-term
   architecture.
 
+## Authoritative source and decompile library
+
+Use `reference/` for all decompile, disassembly, IDA, pseudocode, RAM-map, and
+historical widescreen research. Check it before searching external paths or
+starting a new decompilation.
+
+- `reference/disassembly/` is the primary byte-exact DKC1 source oracle. It
+  contains the labeled disassembly, RAM and define maps, mechanical pseudocode,
+  lossless listing, instruction index, seeded IDA database, curated rename map,
+  reverse-engineering notes, and byte-identical assembly inputs.
+- `reference/legacy-widescreen/` is historical evidence from the retired
+  emulator/asar effort. Use its worklogs and tools to recognize bug classes,
+  but never treat its patched ROM behavior as stock or copy its ROM-patch
+  architecture into the recomp without new evidence.
+- `reference/dkc-recomp-seed/` is the older bring-up seed. Use it for historical
+  comparison only.
+- Start an address or symbol investigation with
+  `python tools/atlas.py <address|wram:address|name:term>`. The atlas joins the
+  reference disassembly, pseudocode, IDA annotations, recomp variant, dispatch
+  contracts, WRAM labels, and known issues.
+- Ground every symbolic claim in the clean-ROM bytes or byte-exact reference.
+  Names and decompiler output are navigation aids, not proof of semantics.
+- Treat `reference/` as read-only. Most of its contents are intentionally
+  ignored because they are large, generated, externally versioned, or contain
+  build inputs that must not be committed. Fixes land in `runner/`, `recomp/`,
+  `tools/`, `recipes/`, `contracts/`, or documentation as appropriate.
+- Never hand-edit `generated/`. Recompilation-correctness fixes belong in
+  `recomp/*.cfg` followed by regeneration; presentation fixes belong in the
+  host/adapters or the pinned engine when explicitly scoped.
+
+Read `reference/README.md` before moving, regenerating, or updating any source
+oracle. Preserve the nested disassembly repository and its history.
+
 ## Before changing widescreen code
 
 1. Read `docs/WIDESCREEN.md`, `docs/WIDESCREEN_HANDOFF.md`,
@@ -96,6 +129,110 @@ to rewrite old serialized corruption.
   private save states, or generated game code.
 - Do not edit the `snesrecomp` submodule unless the task explicitly requires it.
   Preserve unrelated dirty worktree changes.
+
+## Debugging tool suite
+
+Do not build a duplicate diagnostic until the existing suite has been checked.
+Before debugging, read `.claude/skills/dkc1-tools/SKILL.md` and its complete
+`.claude/skills/dkc1-tools/TOOLS.md` catalog. `docs/WIDESCREEN_DEBUG_TOOLS.md`
+records implementation status, evidence contracts, schemas, commands, and known
+limitations. If a tool is added or its contract changes, update those catalogs
+in the same change.
+
+### Runtime hosts and evidence taps
+
+- `build/dkc1_desktop_tools.exe` is the visible interactive debugger. Its panel,
+  pixel click report, F1 provenance overlay, F2-F6 plane isolation, F7 pause,
+  F8 exact step, F9 flight export, and F11/F12 quick save/load should be the
+  first choice when a user needs to see the repro.
+- `build/dkc1_headless_tools.exe` is the deterministic batch runner for A/B,
+  minimization, regression, and sweeps.
+- `build/dkc1_layer_capture.exe` reloads one exact state per mask and exports
+  backdrop, composite, BG1/BG2/BG3/OBJ, and occupancy masks without silently
+  substituting surfaces.
+- `DKC1_WS_TRACE` records per-frame presentation decisions and region/input
+  hashes; analyze it with `tools/analyze_ws_trace.py`.
+- `DKC1_WRAM_DUMP`, `DKC1_WRAM_HASH_LOG`, final WRAM/VRAM outputs, and
+  `tools/verify_wram_dump.py` provide atomic byte evidence.
+- `DKC1_OAM_LOG` plus `tools/oam_inspect.py` compares WRAM shadow and PPU OAM,
+  respects the normal VBlank delay, and detects lost 9-bit X.
+- `DKC1_LIFECYCLE_TRACE` plus `tools/lifecycle_by_source.py` follows actors by
+  authored source record rather than mutable pool slot.
+- `DKC1_BLANK_SCAN`, invariant monitoring, cache logs, retrodiction logs,
+  write attribution, provenance, margin-proxy logs, prefetch guards, stream/PC
+  traces, and forced cold/fallback controls are integrity diagnostics. They are
+  default-off and must remain emulation-inert while disabled.
+- `DKC1_FLIGHT_RECORDER` keeps rolling inputs and snapshot anchors; F9 or
+  `DKC1_AUTO_EXPORT` produces a hashed repro bundle with raw memories and layer
+  captures. Validate it with `tools/verify_flight_bundle.py` before analysis.
+
+### Reproduction, routing, regression, and sweeps
+
+| Tool | Required use |
+| --- | --- |
+| `run_route_recipe.py` | Validate/compile/run predicate-driven JSON routes and named atomic checkpoints. |
+| `run_regression.py` | Enforce closure contracts, integrity budgets, and three byte-identical repeats. |
+| `macro_minimize.py` | Delta-debug resolved input while preserving deterministic predicates and input transitions. |
+| `minimize_bundle.py` | Turn an F9 flight bundle into the shortest stable repro from its anchor. |
+| `world_map_fresh_entry_sweep.py` | Discover authentic controller-only entrances and archive clean pre-entry anchors. |
+| `fresh_entry_stress_sweep.py` | Stress scrolling, private object windows, OAM margins, and later streaming from each clean entry. |
+| `grade_fresh_entry_sweep.py` | Apply terrain, fallback, blank, and continuation release rules to fresh-entry evidence. |
+| `snapshot_widescreen_stress.py` | Stress an arbitrary supplied snapshot without touching the visible process. |
+| `level_sweep.py` | Sweep the route library and grade calibration, fallback, pillarbox, margin, cache, and OAM health. |
+| `run_imported_state_suite.py` | Replay imported SuperZSNES states through native and wide hosts with deterministic evidence. |
+| `SuperZSNESStateExporter/` | Safely convert allowlisted v0.230 `.szst` data into a hashed portable bundle. |
+| `triage_stress_lifecycle.py` | Rank lifecycle differences from stress runs by authored source and episode. |
+
+### First-difference, transition, and visual localization
+
+| Tool | Required use |
+| --- | --- |
+| `first_divergence.py` | Locate the first ordered stock-vs-wide WRAM difference, including transient divergence that later reconverges. |
+| `compare_widescreen_regions.py` | Hash and compare left margin, native center, and right margin independently. |
+| `detect_legacy_width_cull.py` | Detect old-256 clipping, edge repetition, and seam-shaped plane failures. |
+| `bisect_transition_contamination.py` | Bisect retained-history versus cold-render contamination while holding machine state exact. |
+| `transition_contamination_sentinel.py` | Run the retained/cold comparison across every hard route transition. |
+| `capture_process_window.ps1` | Capture the actual application window rather than an incomplete internal surface. |
+| `launch_visible_snapshot.ps1` | Open a named immutable snapshot in the visible debugger with optional trace. |
+| `capture_visible_snapshot_library.ps1` | Produce the maintained visible snapshot library. |
+| `validate_visible_snapshot_library.ps1` | Replay and verify that visible library against current builds. |
+| `export_timeline.py` | Correlate camera, lifecycle, scanner, and widescreen events in one HTML timeline. |
+
+### Object lifecycle, prefetch, and margin analysis
+
+| Tool | Required use |
+| --- | --- |
+| `analyze_persists.py` | Classify actors that wide mode retains after stock culls from raw WRAM episodes. |
+| `audit_prefetch_phases.py` | Compare stock/wide allocation episodes at the exact stock allocation frame. |
+| `audit_prefetch_wram.py` | Provide the raw-byte companion to the semantic prefetch audit. |
+| `audit_prefetch_transaction.py` | Prove that a simulation-neutral prefetch transaction does not leak writes. |
+| `analyze_prefetch_write_sets.py` | Determine whether observed early updates are confined enough for a presentation proxy. |
+| `build_margin_proxy_manifest.py` | Compile only byte-grounded, fail-closed proxy candidates into runtime data. |
+| `verify_margin_proxy_ab.py` | Separate allowed presentation changes from forbidden gameplay-owned WRAM changes. |
+| `verify_prefetch_soft_fallback.py` | Prove held prefetched actors release correctly across centered fallback. |
+| `analyze_retrodiction.py` | Cluster margin pixels later contradicted by the cartridge stream. |
+| `verify_shadow_localization.py` | Validate high-world shadow localization and world-key behavior. |
+| `verify_vertical_rope_margins.py` | Validate rope culling and 9-bit OAM placement at both margins. |
+| `verify_widescreen_savestate.py` | Compare split save/load execution with uninterrupted execution, including host margin history. |
+| `verify_blank_scan_detector.bat` | Build and execute the blank-margin detector model oracle. |
+
+### Source, dispatch, and reporting tools
+
+| Tool | Required use |
+| --- | --- |
+| `atlas.py` | First stop for code, WRAM, symbol, caller, and evidence lookup. |
+| `audit_animation_dispatch.py` | Prove animation callback coverage from byte-exact source. |
+| `audit_indirect_tables.py` | Compare cfg dispatch allowlists with source-backed pointer tables. |
+| `audit_dispatch_contracts.ps1` | Run the complete dispatch-contract audit against the disassembly. |
+| `resolve_dispatch.py` | Convert observed RAM-pointer targets into explicit cfg contracts. |
+| `export_ida_dispatch.py` | Add proven runtime dispatch xrefs/comments to the seeded IDA database. |
+| `ingest_dkc1_disasm.py` | Regenerate per-bank cfg inputs from the authoritative disassembly pipeline. |
+| `make_dashboard.py` | Regenerate the Markdown/HTML regression dashboard from results and known issues. |
+
+The inventory above is a routing summary; `.claude/skills/dkc1-tools/TOOLS.md`
+is the canonical command and environment-variable reference. Keep every tool
+default-off unless actively requested, preserve raw evidence, and stop at the
+narrowest tool that can answer the question.
 
 ## Required promotion gates
 
