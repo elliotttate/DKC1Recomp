@@ -149,6 +149,10 @@ def main() -> int:
     writers = summarize.writers_of(summaries, addr)
     print(f"=== static writers covering ${addr:04X} "
           f"({len(writers)} sites) ===")
+    print("(indexed sites are matched with the actor-slot span 0x33; an "
+          "indexed store whose runtime index reaches further — e.g. a "
+          "table copy — is NOT listed. reverse_watch remains the "
+          "runtime-complete answer.)")
     for function, access in sorted(writers,
                                    key=lambda h: h[1].op_addr):
         summary = summaries[function]

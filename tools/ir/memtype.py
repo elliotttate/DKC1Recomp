@@ -30,7 +30,10 @@ from ir import isa  # noqa: E402
 from ir.decode import IROp  # noqa: E402
 
 DEFINE_RE = re.compile(r"^!(\S+)\s*=\s*([^;\r\n]+)", re.M)
-STRUCT_RE = re.compile(r"^struct\s+(\S+)\s+(\S+)", re.M)
+STRUCT_RE = re.compile(
+    r"^struct\s+(\S+)\s+(\S+)\s*$(.*?)^endstruct(?:\s+align\s+(\S+))?",
+    re.M | re.S)
+STRUCT_MEMBER_RE = re.compile(r"^\s*\.(\w+):\s*skip\s+(\S+)", re.M)
 
 MEM_MODES = {"dp", "dpx", "dpy", "abs", "absx", "absy", "long", "longx"}
 IND_MODES = {"ind", "indy", "indx", "indl", "indly"}
@@ -87,7 +90,10 @@ class Resolver:
                     raw.setdefault(match.group(1),
                                    match.group(2).strip())
                 for match in STRUCT_RE.finditer(text):
-                    raw_structs.setdefault(match.group(1), match.group(2))
+                    raw_structs.setdefault(
+                        match.group(1),
+                        (match.group(2), match.group(3),
+                         match.group(4)))
         # defines chain to other defines: resolve to a fixpoint
         changed = True
         while changed:
@@ -99,26 +105,47 @@ class Resolver:
                 if value is not None:
                     self.defines[name] = value
                     changed = True
-        for name, text in raw_structs.items():
-            base = self.eval_expr(text)
-            if base is not None:
-                self.structs[name] = base
+        # struct layouts: member offsets from ordered `skip` sizes,
+        # array stride = size rounded up to `endstruct align`
+        for name, (base_text, body, align_text) in raw_structs.items():
+            base = self.eval_expr(base_text)
+            if base is None:
+                continue
+            fields: dict[str, int] = {}
+            offset = 0
+            for member in STRUCT_MEMBER_RE.finditer(body):
+                fields[member.group(1)] = offset
+                skip = self.eval_expr(member.group(2))
+                offset += skip if skip is not None else 1
+            align = self.eval_expr(align_text) if align_text else None
+            stride = offset
+            if align:
+                stride = ((offset + align - 1) // align) * align
+            self.structs[name] = {"base": base, "stride": stride or 1,
+                                  "fields": fields}
 
     def eval_expr(self, expr: str) -> int | None:
         """Whitelisted-AST evaluation of an Asar operand expression."""
         text = expr.strip()
         if not text:
             return None
-        # struct member: resolve base, drop the field (offset unknown)
-        struct = re.fullmatch(
-            r"([A-Za-z_][A-Za-z0-9_]*)\[(\$?[0-9A-Fa-f]+)\]\.\w+"
-            r"(.*)", text)
-        if struct:
-            base = self.structs.get(struct.group(1))
-            if base is None:
-                return None
-            # keep the array index; the field offset stays symbolic
-            return base
+
+        # struct members resolve EXACTLY (base + index*stride + field
+        # offset) as a pre-substitution, so masks/arithmetic around them
+        # (e.g. `Buf[$00].XDisp&$0000FF`) evaluate correctly
+        def sub_struct(match: re.Match) -> str:
+            struct = self.structs.get(match.group(1))
+            if not isinstance(struct, dict):
+                return " None "
+            index = self.eval_expr(match.group(2))
+            field = struct["fields"].get(match.group(3))
+            if index is None or field is None:
+                return " None "
+            return f" {struct['base'] + index * struct['stride'] + field} "
+
+        text = re.sub(
+            r"([A-Za-z_][A-Za-z0-9_]*)\[([^\]]+)\]\.(\w+)",
+            sub_struct, text)
         # token substitution: $hex, %bin, !defines, CODE_/DATA_, symbols
         def sub(match: re.Match) -> str:
             token = match.group(0)
@@ -132,7 +159,11 @@ class Resolver:
             named = re.fullmatch(r"(CODE|DATA)_([0-9A-Fa-f]{6})", token)
             if named:
                 return f" 0x{named.group(2)} "
-            value = self.defines.get(token, self.structs.get(token))
+            value = self.defines.get(token)
+            if value is None:
+                struct = self.structs.get(token)
+                if isinstance(struct, dict):
+                    value = struct["base"]
             return f" {value} " if value is not None else " None "
 
         substituted = re.sub(

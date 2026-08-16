@@ -58,8 +58,7 @@ def spec_for(name: str, summaries: dict) -> dict:
                         "(order-sensitive; needs write-log compare)")
     return {
         "function": name,
-        "entry": summaries[name].function if hasattr(
-            summaries[name], "function") else name,
+        "entry": f"0x{summaries[name].entry:06X}",
         "closure_functions": effects["functions_visited"],
         "capture": {
             "registers": ["A", "X", "Y", "S", "D", "DB", "P", "PB"],

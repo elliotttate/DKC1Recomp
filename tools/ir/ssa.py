@@ -41,6 +41,9 @@ def op_def_use(op: IROp) -> tuple[set[str], set[str]]:
             writes |= {"C", "Z", "N", "V", "I", "Dflag"}
         else:
             writes |= {flag for bit, flag in REP_FLAG_BITS if mask & bit}
+    if op.mnemonic == "BIT" and op.mode == "imm":
+        # BIT #imm affects ONLY Z on the 65816 (no N/V transfer)
+        writes -= {"N", "V"}
 
     # accumulator forms of RMW ops operate on A
     if op.mode == "acc":

@@ -286,8 +286,25 @@ def render_view(function: str, ops: list[IROp],
         for op in block.ops:
             text = render_op(op, ssa, labels, code_names)
             asm = f"{op.mnemonic}" + (f".{op.suffix}" if op.suffix else "")
+            # reconstruct the operand's original spelling per mode so
+            # the cross-link column stays faithful (indirection wrappers
+            # are part of the instruction, not decoration)
             operand = op.expr
-            if op.expr2:
+            if op.mode in ("ind", "absind"):
+                operand = f"({operand})"
+            elif op.mode in ("indx", "absindx"):
+                operand = f"({operand},x)"
+            elif op.mode == "indy":
+                operand = f"({operand}),y"
+            elif op.mode == "sr" and op.index == "s":
+                operand = f"{operand},s"
+            elif op.mode == "sriy":
+                operand = f"({operand},s),y"
+            elif op.mode in ("indl", "absindl"):
+                operand = f"[{operand}]"
+            elif op.mode == "indly":
+                operand = f"[{operand}],y"
+            elif op.expr2:
                 operand += f",{op.expr2}"
             elif op.index and op.mode not in ("imp", "acc"):
                 operand += f",{op.index}"

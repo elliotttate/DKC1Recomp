@@ -105,6 +105,7 @@ def stage2() -> bool:
         stats["width_proven"] += graph.width_proven
         stats["width_assumed"] += graph.width_assumed
         stats["width_unknown"] += graph.width_unknown
+        stats["width_unreachable"] += graph.width_unreachable
         for conflict in graph.width_conflicts:
             if conflict.split()[0] in known_conflicts:
                 stats["known_discrepancies"] += 1
@@ -122,10 +123,13 @@ def stage2() -> bool:
           f"blocks, {stats['phis']} phis")
     total_w = (stats["width_proven"] + stats["width_assumed"] +
                stats["width_unknown"]) or 1
-    print(f"  width facts: {stats['width_proven']} proven, "
+    print(f"  width facts (per op, reachable): "
+          f"{stats['width_proven']} proven, "
           f"{stats['width_assumed']} call-assumed, "
           f"{stats['width_unknown']} unknown "
-          f"({100.0 * stats['width_unknown'] / total_w:.2f}% unknown)")
+          f"({100.0 * stats['width_unknown'] / total_w:.2f}% unknown); "
+          f"{stats['width_unreachable']} more sit in never-executed "
+          f"listing islands (no width claim)")
     print(f"  immediate-suffix width conflicts: {len(width_conflict)} "
           f"(+{stats['known_discrepancies']} documented listing "
           f"discrepancies, see tools/ir/known_discrepancies.json)")

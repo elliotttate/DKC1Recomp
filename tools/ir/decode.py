@@ -205,8 +205,6 @@ def decode_row(row: dict) -> IROp:
         match = re.fullmatch(r"CODE_([0-9A-Fa-f]{6})", op.expr)
         if match:
             op.target = int(match.group(1), 16)
-        elif mnemonic == "JSR" and op.mode == "abs":
-            pass  # e.g. JSR.w ($0508,x) handled as absindx already
     return op
 
 

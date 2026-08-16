@@ -46,7 +46,8 @@ class Access:
         if self.indexed:
             return self.ea <= addr <= self.ea + (
                 SOA_SPAN if self.region == "wram" else 0xFF)
-        span = 2 if self.width == 16 else 1
+        # unknown width covers 2 bytes (conservative)
+        span = 1 if self.width == 8 else 2
         return self.ea <= addr < self.ea + span
 
 

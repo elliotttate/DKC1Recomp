@@ -44,10 +44,13 @@ class Graph:
     external_targets: list[int] = field(default_factory=list)
     unreachable: list[int] = field(default_factory=list)
     indirect_unresolved: int = 0
-    # width accounting
+    # width accounting (filled by a post-fixpoint pass, per op — never
+    # per visit, which both double-counts revisited blocks and misses
+    # never-visited unreachable islands entirely)
     width_proven: int = 0
     width_assumed: int = 0
     width_unknown: int = 0
+    width_unreachable: int = 0
     width_conflicts: list[str] = field(default_factory=list)
 
     def order(self) -> list[Block]:
@@ -204,6 +207,28 @@ def propagate_widths(graph: Graph, facts: dict[int, dict]) -> None:
                     in_state[target] = merged
                     worklist.append(target)
 
+    # per-op accounting AFTER the fixpoint: annotations are final here.
+    unreachable = set(graph.unreachable)
+    for block_addr, block in graph.blocks.items():
+        dead = block_addr in unreachable and block_addr not in visited_out
+        for op in block.ops:
+            imm_class = isa.IMM_WIDTH_CLASS.get(op.mnemonic)
+            if not ((op.mode == "imm" and imm_class) or
+                    (op.mnemonic in isa.MEM_WIDTH_CLASS and
+                     op.mode != "imm")):
+                continue
+            klass = imm_class or isa.MEM_WIDTH_CLASS[op.mnemonic]
+            width = op.mw if klass == "m" else op.xw
+            if dead:
+                graph.width_unreachable += 1
+            elif width is None:
+                graph.width_unknown += 1
+            elif op.width_assumed:
+                graph.width_assumed += 1
+            else:
+                graph.width_proven += 1
+    graph.width_conflicts = sorted(set(graph.width_conflicts))
+
 
 def _merge(a: tuple, b: tuple) -> tuple:
     return (a[0] if a[0] == b[0] else None,
@@ -233,18 +258,6 @@ def _transfer(graph: Graph, op: IROp, state: tuple,
                 f"{op.addr:06X} {op.mnemonic}.{op.suffix} #imm but "
                 f"{imm_class.upper()}={current}"
                 + (" (call-assumed)" if assumed else ""))
-
-    # accounting over width-sensitive ops only
-    if (op.mode == "imm" and imm_class) or \
-            (op.mnemonic in isa.MEM_WIDTH_CLASS and op.mode != "imm"):
-        klass = imm_class or isa.MEM_WIDTH_CLASS[op.mnemonic]
-        width = op.mw if klass == "m" else op.xw
-        if width is None:
-            graph.width_unknown += 1
-        elif op.width_assumed:
-            graph.width_assumed += 1
-        else:
-            graph.width_proven += 1
 
     if op.mnemonic == "REP":
         mask = _const(op.expr)

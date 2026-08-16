@@ -259,8 +259,9 @@ def show_wram(address: int, out: dict):
                     if access["region"] != "wram":
                         continue
                     ea = int(access["ea"], 16)
+                    # unknown width covers 2 bytes (conservative)
                     span = 0x33 if access["indexed"] else \
-                        (2 if access["width"] == 16 else 1)
+                        (1 if access["width"] == 8 else 2)
                     if ea <= address < ea + span:
                         bucket.append(f"{label}@{access['at']}"
                                       + ("[idx]" if access["indexed"]
