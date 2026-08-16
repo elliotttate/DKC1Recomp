@@ -1181,6 +1181,28 @@ and VRAM `80476dd3f2661027fd19d37c2119e05b72904733a3f299ea88f3d24d30ec5793`.
 The equivalent Jungle entry is also clean and exact across three runs, and the
 six-transition/37-sample retained-versus-cold sentinel passes.
 
+## Split map and metatile-definition banks
+
+The host ROM decoder must treat the level-map bank and the metatile-definition
+bank as independent cartridge state. `Level_SetTilemapPointers` at `$81:8C66`
+publishes them in `$D5` and `$D6`, respectively. Most early test scenes happened
+to make a one-bank assumption look valid; underwater level `$0061`, entrance
+`$80BF`, does not: its map is `$E9:0000` while its metatile definitions are
+`$D0:0000`.
+
+Using `$D5` for both reads decoded plausible but wrong tiles. The safety gate
+then measured only 50 of 224 native viewport entries matching the live rolling
+tilemap and correctly selected centered fallback, making the whole scene appear
+4:3. Passing `$D5` to the map-cell read and `$D6` to the definition read raises
+the exact same state's vertical score to 212/224 and enables real two-sided
+extension. Both banks are now part of the hard source identity and per-frame
+trace; a change in either invalidates retained margins.
+
+Acceptance evidence is external under `build/current-level-live/` and is not
+committed. Three independent 120-frame replays from the exact state produced
+identical frame, WRAM, and VRAM hashes. This is a decoder-contract fix, not a
+level allowlist or relaxed calibration threshold.
+
 ## Release gates
 
 Widescreen is not release-ready until all of the following are true:

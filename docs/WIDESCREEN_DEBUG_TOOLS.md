@@ -219,7 +219,8 @@ Cross-cutting rules adopted from the emulator worklog:
 **Status: implemented (schema v1).**
 The record the handoff already specifies, as default-off JSONL from the
 headless host, one object per frame: host+SNES frame; mode/entrance/fade;
-source-signature fields (map bank/base, metatile base, stream VRAM base);
+source-signature fields (map bank/base, metatile-definition bank/base, stream
+VRAM base);
 BGMODE/BGSC/main/sub/wide-layer mask/terrain layer; camera + all four scroll
 pairs; per-layout `matches/decodable` calibration scores; selected layout,
 grace/miss counters; which of {WsShadowReset, cold init, WsShadowFrame,

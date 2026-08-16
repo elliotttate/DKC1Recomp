@@ -1,6 +1,6 @@
 # DKC1Recomp regression dashboard
 
-Generated 2026-08-16 14:22 UTC at commit `1aa8bbc-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
+Generated 2026-08-16 16:17 UTC at commit `70ef68e-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
 
 ## Contracts
 
@@ -40,5 +40,6 @@ _9 routes swept; levels without a route are NOT covered — absence here is not 
 | wide-seven-tile-stream-guard-gap | fixed | The host renderer sampled seven complete margin tiles at arbitrary sub-tile scroll phases, but the cartridge initializer and moving-row sweep prepared only six. The uninitialized seventh physical BG1 ring column could later rotate into the native center as one 8-pixel vertical strip of stale terrain. | `build/visible-rowfix-flight-20260816/capture-f00005014-20260816-084158-p69336` |
 | jungle-bonus1-widened-initializer-corruption | fixed | Jungle Hijinxs Bonus 1 lost its purple floor and showed checkerboard cave columns because a shared fixed-layout initializer was incorrectly treated as a rolling-terrain widescreen capability and wrote widened columns into the native VRAM ring. | `build/visible-margin7-flight-20260816/capture-f00158989-20260816-094934-p70536` |
 | ropey-rampage-widened-initializer-corruption | fixed | Ropey Rampage could start with terrain sliced into displaced horizontal and vertical bands because the shared widened cartridge initializer generated invalid native-ring data for this layout. | `build/visible-bonusguard-flight-20260816/capture-f00009082-20260816-101211-p61340` |
+| underwater-split-map-metatile-bank-pillarbox | fixed | Underwater level $0061/$80BF stayed entirely 4:3 because the host decoded both level-map cells and metatile definitions from the map bank. This scene publishes map bank $E9 in $D5 and metatile-definition bank $D0 in $D6, so the one-bank decode failed calibration and correctly fell back to pillarbox. | `build/current-level-live/level0061-entrance80BF-20260816-120545.state (external evidence; not committed)` |
 
 Issue lifecycle: edit `docs/KNOWN_ISSUES.json` (set status `fixed` with the fixing commit) and regenerate. A fixed issue regressing shows up here as its contract/sweep line failing.
