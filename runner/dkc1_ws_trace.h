@@ -24,6 +24,7 @@ typedef struct Dkc1WsTraceFrame {
   int selected_layout;
   int layout_grace;
   int margin_tiles;
+  int boundary_continuation_tiles;
   uint64_t identity_hash;
   uint32_t identity_change_mask;
   int calibration_matches[2];

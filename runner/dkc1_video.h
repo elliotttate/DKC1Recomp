@@ -182,4 +182,22 @@ bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
                               uint32_t world_tile_y,
                               uint16_t *tile_entry);
 
+/* Classify one 32x32 level-map metatile against the currently loaded 4bpp
+ * character data. `empty` means all sixteen 8x8 characters are transparent;
+ * `full` means every character contains at least one opaque pixel. This is a
+ * deliberately conservative presentation diagnostic: neither result implies
+ * collision solidity. */
+bool Dkc1VideoClassifyLevelMetatile(Dkc1LevelLayout layout,
+                                    uint8_t map_bank,
+                                    uint8_t metatile_bank,
+                                    uint16_t map_base,
+                                    uint16_t metatile_base,
+                                    uint32_t metatile_x,
+                                    uint32_t metatile_y,
+                                    const uint16_t *vram,
+                                    size_t word_count,
+                                    uint16_t character_base,
+                                    bool *empty,
+                                    bool *full);
+
 #endif

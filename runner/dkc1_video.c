@@ -1171,3 +1171,54 @@ bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
   *tile_entry = (uint16_t)(source ^ flips);
   return true;
 }
+
+static bool Dkc1VideoTileHasPixels(const uint16_t *vram,
+                                   size_t word_count,
+                                   uint16_t character_base,
+                                   uint16_t tile_entry) {
+  if (!vram || word_count < 0x8000u)
+    return false;
+  const uint16_t tile = (uint16_t)(tile_entry & 0x03ffu);
+  const uint16_t address =
+      (uint16_t)(character_base + (uint16_t)(tile * 16u));
+  for (unsigned word = 0; word < 16u; word++) {
+    if (vram[(address + word) & 0x7fffu] != 0)
+      return true;
+  }
+  return false;
+}
+
+bool Dkc1VideoClassifyLevelMetatile(Dkc1LevelLayout layout,
+                                    uint8_t map_bank,
+                                    uint8_t metatile_bank,
+                                    uint16_t map_base,
+                                    uint16_t metatile_base,
+                                    uint32_t metatile_x,
+                                    uint32_t metatile_y,
+                                    const uint16_t *vram,
+                                    size_t word_count,
+                                    uint16_t character_base,
+                                    bool *empty,
+                                    bool *full) {
+  if (!empty || !full || !vram || word_count < 0x8000u ||
+      layout == kDkc1LayoutUnknown)
+    return false;
+  bool any_pixels = false;
+  bool all_have_pixels = true;
+  for (uint32_t sub_y = 0; sub_y < 4u; sub_y++) {
+    for (uint32_t sub_x = 0; sub_x < 4u; sub_x++) {
+      uint16_t entry;
+      if (!Dkc1VideoDecodeLevelTile(
+              layout, map_bank, metatile_bank, map_base, metatile_base,
+              metatile_x * 4u + sub_x, metatile_y * 4u + sub_y, &entry))
+        return false;
+      const bool has_pixels = Dkc1VideoTileHasPixels(
+          vram, word_count, character_base, entry);
+      any_pixels |= has_pixels;
+      all_have_pixels &= has_pixels;
+    }
+  }
+  *empty = !any_pixels;
+  *full = all_have_pixels;
+  return true;
+}

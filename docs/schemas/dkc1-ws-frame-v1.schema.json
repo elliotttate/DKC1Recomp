@@ -49,6 +49,7 @@
       "maxItems": 2
     },
     "margin_tiles": {"type": "integer", "minimum": 0},
+    "boundary_continuation_tiles": {"type": "integer", "minimum": 0},
     "shadow_delta": {
       "type": "array",
       "minItems": 2,

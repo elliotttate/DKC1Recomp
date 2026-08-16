@@ -339,6 +339,42 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         # scores 212/224 and safely clears the 70% acceptance threshold.
         self.assertGreaterEqual(212 * 10, 224 * 7)
 
+    def test_underwater_right_boundary_continuation_is_margin_only(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        video = (ROOT / "runner" / "dkc1_video.c").read_text(
+            encoding="utf-8")
+        trace = (ROOT / "runner" / "dkc1_ws_trace.c").read_text(
+            encoding="utf-8")
+        body = game.split(
+            "static bool Dkc1PrepareWidescreenShadow", 1)[1].split(
+                "void Dkc1DrawPpuFrame", 1)[0]
+
+        # The continuation is deliberately inside the ROM margin prefill,
+        # after the native calibration/commit boundary. It is gated to the
+        # exact mode/level and split-bank source proven by the repro.
+        prefill = body.index("/* Prefill the margin columns")
+        continuation = body.index("allow_underwater_right_boundary")
+        self.assertLess(prefill, continuation)
+        self.assertIn("Dkc1ReadWram16(0x0030) == 0x0061u", body)
+        self.assertIn("map_bank == 0xe9u && metatile_bank == 0xd0u", body)
+        self.assertIn("side == 1", body[continuation:])
+
+        # Empty targets are filled only from a completely populated adjacent
+        # boundary metatile. Partial openings therefore cannot be painted.
+        self.assertIn("Dkc1VideoClassifyLevelMetatile", video)
+        self.assertIn("target_empty &&", body[continuation:])
+        self.assertIn("&& edge_full", body[continuation:])
+        self.assertIn("tile_entry & 0x03ffu", video)
+        self.assertIn("boundary_continuation_tiles", trace)
+
+        # Exact repro geometry: world X 1343 has native pixels through 1598,
+        # so metatile 49 is the boundary and metatile 50 is margin-only.
+        world_x = 1343
+        native_edge_metatile = ((world_x + 256 - 1) >> 3) >> 2
+        self.assertEqual(native_edge_metatile, 49)
+        self.assertGreater(200 >> 2, native_edge_metatile)
+
     def test_wide_layers_use_physical_width_not_terrain_mask_for_repeat(self):
         game = (ROOT / "runner" / "dkc1_game.c").read_text(
             encoding="utf-8")

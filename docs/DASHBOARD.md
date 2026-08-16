@@ -1,6 +1,6 @@
 # DKC1Recomp regression dashboard
 
-Generated 2026-08-16 16:17 UTC at commit `70ef68e-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
+Generated 2026-08-16 16:45 UTC at commit `8391369-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
 
 ## Contracts
 
@@ -41,5 +41,6 @@ _9 routes swept; levels without a route are NOT covered — absence here is not 
 | jungle-bonus1-widened-initializer-corruption | fixed | Jungle Hijinxs Bonus 1 lost its purple floor and showed checkerboard cave columns because a shared fixed-layout initializer was incorrectly treated as a rolling-terrain widescreen capability and wrote widened columns into the native VRAM ring. | `build/visible-margin7-flight-20260816/capture-f00158989-20260816-094934-p70536` |
 | ropey-rampage-widened-initializer-corruption | fixed | Ropey Rampage could start with terrain sliced into displaced horizontal and vertical bands because the shared widened cartridge initializer generated invalid native-ring data for this layout. | `build/visible-bonusguard-flight-20260816/capture-f00009082-20260816-101211-p61340` |
 | underwater-split-map-metatile-bank-pillarbox | fixed | Underwater level $0061/$80BF stayed entirely 4:3 because the host decoded both level-map cells and metatile definitions from the map bank. This scene publishes map bank $E9 in $D5 and metatile-definition bank $D0 in $D6, so the one-bank decode failed calibration and correctly fell back to pillarbox. | `build/current-level-live/level0061-entrance80BF-20260816-120545.state (external evidence; not committed)` |
+| croctopus-authored-right-boundary-gap | fixed | Croctopus Chase level $0061/$00BF widened correctly, but its lower-right rock wall stopped at the native edge and exposed BG2 water in the right margin. The ROM map itself switches from a fully populated wall metatile at world X $0620-$063F to wholly transparent metatiles at X $0640 because those cells were never visible on stock hardware. | `build/current-underwater-rightgap-20260816/level0061-rightgap.state (external evidence; not committed)` |
 
 Issue lifecycle: edit `docs/KNOWN_ISSUES.json` (set status `fixed` with the fixing commit) and regenerate. A fixed issue regressing shows up here as its contract/sweep line failing.

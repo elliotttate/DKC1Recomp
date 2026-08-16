@@ -200,7 +200,8 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"shadow_x\":%u,\"shadow_y\":%u}],"
       "\"shadow_origin\":[{\"valid\":%u,\"x\":%u,\"y\":%u},"
       "{\"valid\":%u,\"x\":%u,\"y\":%u}],"
-      "\"margin_tiles\":%d,\"shadow_delta\":[",
+      "\"margin_tiles\":%d,\"boundary_continuation_tiles\":%d,"
+      "\"shadow_delta\":[",
       frame->frame, (unsigned)ReadWram16(0x0032),
       (unsigned)ReadWram16(0x0030), (unsigned)ReadWram16(0x003e),
       (unsigned)ReadWram16(0x1df1),
@@ -277,7 +278,7 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       frame->shadow_origin_x[0], frame->shadow_origin_y[0],
       frame->shadow_origin_valid[1] ? 1u : 0u,
       frame->shadow_origin_x[1], frame->shadow_origin_y[1],
-      frame->margin_tiles);
+      frame->margin_tiles, frame->boundary_continuation_tiles);
   PrintShadow(s_trace_file, &frame->shadow_before[0],
               &frame->shadow_after[0]);
   fputc(',', s_trace_file);

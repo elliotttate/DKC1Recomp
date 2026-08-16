@@ -1203,6 +1203,36 @@ committed. Three independent 120-frame replays from the exact state produced
 identical frame, WRAM, and VRAM hashes. This is a decoder-contract fix, not a
 level allowlist or relaxed calibration threshold.
 
+## Authored transparent cells beyond the native underwater boundary
+
+Successful ROM decoding does not guarantee that the cartridge contains useful
+art outside the stock viewport. In Croctopus Chase level `$0061`, entrance
+`$00BF`, the exact world position X `$053F`, Y `$2900` calibrates the vertical
+layout at 224/224 entries. BG1 nevertheless stopped at world X `$0640` in the
+lower-right margin. Offline ROM inspection proved that the adjacent native-edge
+metatile at X `$0620-$063F` contains wall art in all sixteen 8x8 characters,
+while the following map cells are wholly transparent. BG2 correctly continued
+the water behind them, so blank-frame and shadow-hit counters could not detect
+the terrain hole.
+
+The repair is intentionally not a global repeat mode. During ROM margin prefill
+only, and only for this exact gameplay level/source signature (mode `$0003`,
+level `$0061`, vertical layout, map bank `$E9`, definition bank `$D0`), a right-
+margin metatile may reuse the nearest native-edge metatile when the target is
+wholly transparent and the source has pixels in all sixteen characters. Any
+partial target, partial source, left margin, native pixel, or other scene is
+unchanged. `boundary_continuation_tiles` in the widescreen trace records this
+separately from ordinary authored ROM hits.
+
+The exact save-state frame continued 96 transparent margin tiles and changed
+only right-margin pixels. WRAM, VRAM, CGRAM, PPU OAM, and WRAM OAM remained
+byte-identical. All 57,344 native-center pixels match the native oracle. Three
+zero-frame captures are byte-identical (SHA-256
+`AAB0EF0B8351CA15FB278450AA4ED369797A1BE92D07CDD8F98201D1106AC0D4`),
+and three replays of the preserved 3,551-frame visible input history end at the
+manifested WRAM SHA-256
+`F5BCA064C4E89CB7BE63E194927D95A6487A8CD32109B9BEFF76C0F923CBAEFC`.
+
 ## Release gates
 
 Widescreen is not release-ready until all of the following are true:

@@ -105,6 +105,15 @@
       "expected": "ROM level decoding reads map cells from $D5 and metatile definitions from $D6, includes both banks in source identity/trace evidence, and widens only after the native rolling tilemap calibration passes.",
       "first_seen": "2026-08-16",
       "fixed_note": "fixed 2026-08-16 by splitting the decoder inputs. The exact state improved vertical calibration from 50/224 to 212/224, selected the vertical layout, and rendered real terrain on both sides. Three independent 120-frame candidate replays are byte-identical (frame 54d5958e..., WRAM abf22673..., VRAM 24481010...)."
+    },
+    {
+      "id": "croctopus-authored-right-boundary-gap",
+      "status": "fixed",
+      "summary": "Croctopus Chase level $0061/$00BF widened correctly, but its lower-right rock wall stopped at the native edge and exposed BG2 water in the right margin. The ROM map itself switches from a fully populated wall metatile at world X $0620-$063F to wholly transparent metatiles at X $0640 because those cells were never visible on stock hardware.",
+      "repro": "build/current-underwater-rightgap-20260816/level0061-rightgap.state (external evidence; not committed)",
+      "expected": "Only wholly transparent 32x32 metatiles beyond the native right edge continue the nearest fully populated wall boundary. Native pixels, cartridge memory, partial openings, and every other level remain unchanged.",
+      "first_seen": "2026-08-16",
+      "fixed_note": "fixed 2026-08-16 with a scene-locked, presentation-only vertical-boundary continuation. The exact frame replaces 96 transparent margin tiles; WRAM, VRAM, CGRAM, and both OAM copies remain byte-identical. The 256px native center matches its oracle at all 57,344 pixels, three frame captures are byte-identical (SHA-256 AAB0EF0B...), and three 3,551-frame input-history replays end at exact WRAM F5BCA064...."
     }
   ]
 }
