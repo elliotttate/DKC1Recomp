@@ -1108,7 +1108,7 @@ Evidence:
   proving the defect is guest BG1 state rather than shadow provenance;
 - three 3,559-frame margin-7 replays are byte-identical and retain the accepted
   framebuffer SHA-256
-  `7aaeed6679d9d09dbba9934bfc9733fcf2d87cffb15abb21855f395ad9d1080f`;
+  `5786377682795be94746fc42dcb5c358a17b7d6e9fd9353bf7da4ecaef39686e`;
 - their WRAM and VRAM hashes are respectively
   `b52f79bae703e5470daaa90663212a3e18d4d349dd2a426f277d13e78059389b`
   and
@@ -1120,6 +1120,66 @@ Evidence:
 Loading the original post-corruption snapshot is intentionally not accepted as
 proof of the initializer fix: save states serialize the already-bad VRAM. Use a
 fresh-entry route or a repaired later checkpoint for visual QA.
+
+## Fixed-layout bonus cave initializer containment (2026-08-16)
+
+Jungle Hijinxs Bonus 1 (`$0032=$0001`, level `$0030=$0009`, entrance
+`$003E=$0006`) exposed a separate guest-VRAM regression: the entire purple
+floor under Donkey/Rambi disappeared and the right cave wall became a
+checkerboard of unrelated columns.  Isolated BG1/BG2 and native-width renders
+of the same snapshot reproduced it, proving cartridge state corruption rather
+than host margin history or composition.
+
+The shared initial backstep/count hooks introduced by `6bf8981` treated every
+call to the two rolling-map initializer bodies as proof that cartridge
+widening was safe.  This fixed cave calls the same machinery, but its authored
+layout is not a rolling terrain capability boundary.  The widened pass wrote
+unrelated cave columns into the native VRAM ring; a later identity reset could
+reject the coverage claim but could not undo those writes.  The later
+seven-tile and double-row changes made ordinary scrolling coverage complete,
+but were not the root cause: archived 05:44, 07:44, 07:56, and pre-rowfix 08:11
+binaries all reproduce the missing floor from the same fresh-entry route.
+
+`Dkc1VideoCartridgeWideningSceneEligible` now fails closed for this exact
+scene.  It keeps the stock backstep/count and bypasses widened stream selection
+and both row-builder passes; only host-side side presentation remains eligible.
+The already-corrupt bonus snapshot remains historical evidence and is not a
+valid fix test.
+
+The subsequent Ropey Rampage fresh-entry A/B showed that the same broad
+assumption also corrupted an ordinary scrolling level.  Default policy is
+therefore now stock cartridge initialization/row streaming for every scene,
+with host-side ROM prefill supplying the 16:9 margins.  The old widened
+initializer/row experiment is available only with
+`DKC1_ENABLE_EXPERIMENTAL_CARTRIDGE_WIDENING=1`; it is not a release mode.
+This is a global containment of the bad 8:21 policy, not a growing room
+denylist.  The exact Bonus 1 rejection remains as defense in depth even under
+the experimental switch.
+
+Evidence:
+
+- fresh anchor/input bundle:
+  `build/visible-margin7-flight-20260816/capture-f00158989-20260816-094934-p70536`;
+- three independent 3,589-frame guarded replays are byte-identical: frame
+  `2007b0bfe5bf8e367ca94d647882922a6621aff07b331017d8754ef6849e9e2b`,
+  WRAM `905023a7e93db616e875d20d52fcbee0a35949f87be813231419cd4eab8f65c1`,
+  and VRAM `cd4582c0015bf3f77af452eacb23bfaff8b7a1dd76442fd80aac6dccc32145b2`;
+- the guarded isolated composite restores the complete floor at
+  `build/bonus-replay-scene-guard-r1/layers-wide/composite.png`;
+- the ordinary 809-frame and 3,559-frame terrain routes retain their accepted
+  framebuffer hashes.  Their offscreen WRAM/VRAM hashes intentionally differ
+  because the experimental cartridge writes no longer execute.
+
+Ropey Rampage supplied the cross-level decision gate.  From the preserved
+world-map node, the same 601 controller frames were replayed with only the
+cartridge initializer policy changed.  Experimental widening deterministically
+produced sliced/missing terrain; stock cartridge initialization produced the
+complete floor and background.  The stock-default route then repeated three
+times with exact frame `b894ba8bc5f8217cf86b4603649c464e307409c9cef89932a6d330921d80492f`,
+WRAM `5748eb983e4cb2b41df1089806c27479ea9c2c660c3cee97336efbf2c79dd259`,
+and VRAM `80476dd3f2661027fd19d37c2119e05b72904733a3f299ea88f3d24d30ec5793`.
+The equivalent Jungle entry is also clean and exact across three runs, and the
+six-transition/37-sample retained-versus-cold sentinel passes.
 
 ## Release gates
 

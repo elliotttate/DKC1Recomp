@@ -77,7 +77,25 @@
       "repro": "build/visible-rowfix-flight-20260816/capture-f00005014-20260816-084158-p69336",
       "expected": "Cartridge initialization and moving-row coverage include the same seven tile columns consumed by the renderer; post-corruption save states remain historical evidence and are not treated as fresh-entry proof.",
       "first_seen": "2026-08-16",
-      "fixed_note": "fixed 2026-08-16 by restoring the proven 56-pixel cartridge stream margin, $0170/$0178 initializer backsteps, and $002E/$002F column counts. The bad snapshot isolates BG1 physical ring column 59 with 29/32 wrong entries; rightward streaming repairs it. Three 3559-frame margin-7 replays are deterministic and preserve the accepted framebuffer hash, and the six-boundary/39-sample retained-vs-cold sentinel passes."
+      "fixed_note": "fixed 2026-08-16 first by restoring the 56-pixel experimental cartridge contract, then superseded by the safer stock-cartridge default after cross-level fresh-entry testing proved the widened initializer itself corrupts some layouts. Host ROM prefill plus stock streaming retains the accepted 809-frame and 3559-frame Jungle framebuffer hashes; the widened path is now research-only."
+    },
+    {
+      "id": "jungle-bonus1-widened-initializer-corruption",
+      "status": "fixed",
+      "summary": "Jungle Hijinxs Bonus 1 lost its purple floor and showed checkerboard cave columns because a shared fixed-layout initializer was incorrectly treated as a rolling-terrain widescreen capability and wrote widened columns into the native VRAM ring.",
+      "repro": "build/visible-margin7-flight-20260816/capture-f00158989-20260816-094934-p70536",
+      "expected": "Mode $0001, level $0009, entrance $0006 keeps the cartridge initializer stock; the host handles only the side presentation, and a fresh route renders the complete cave floor without changing ordinary scrolling terrain.",
+      "first_seen": "2026-08-16",
+      "fixed_note": "fixed 2026-08-16 by making stock cartridge initialization/row streaming the global fail-closed default; the old widening is research-only behind DKC1_ENABLE_EXPERIMENTAL_CARTRIDGE_WIDENING=1. Three 3589-frame fresh-entry replays restore the cave floor, while a separate authentic Ropey Rampage A/B proves the same containment restores its full terrain. Binaries from 05:44 through the pre-rowfix 08:11 build reproduce the old corruption, locating the broad policy to commit 6bf8981 rather than the later seven-tile change."
+    },
+    {
+      "id": "ropey-rampage-widened-initializer-corruption",
+      "status": "fixed",
+      "summary": "Ropey Rampage could start with terrain sliced into displaced horizontal and vertical bands because the shared widened cartridge initializer generated invalid native-ring data for this layout.",
+      "repro": "build/visible-bonusguard-flight-20260816/capture-f00009082-20260816-101211-p61340",
+      "expected": "An authentic Ropey Rampage entry uses stock cartridge initialization and renders a continuous floor/background across the 16:9 frame; center correctness is checked against raw/native evidence rather than margin availability alone.",
+      "first_seen": "2026-08-16",
+      "fixed_note": "fixed 2026-08-16 by globally failing closed to stock cartridge initialization/row streaming. The authentic 601-frame entry is clean and byte-identical across three runs (frame b894ba8b..., WRAM 5748eb98..., VRAM 80476dd3...). The widened A/B deterministically reproduces the sliced terrain."
     }
   ]
 }

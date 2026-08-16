@@ -223,6 +223,14 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("return 0x002eu", video)
         self.assertIn("return 0x002fu", video)
         self.assertIn("samples seven complete margin tiles", video)
+        self.assertIn("Dkc1VideoCartridgeWideningSceneEligible", video)
+        self.assertIn("DKC1_ENABLE_EXPERIMENTAL_CARTRIDGE_WIDENING", video)
+        self.assertIn("Fail closed", video)
+        self.assertIn(
+            "mode == 0x0001u && level == 0x0009u && entrance == 0x0006u",
+            video)
+        self.assertIn("Keep cartridge execution stock", video)
+        self.assertIn("scene_eligible=%u", video)
         self.assertIn("native_count == 0x0020u", video)
         self.assertIn("Dkc1VideoBeginStreamCoverage(cpu, 0x2eu)", video)
         self.assertIn("Dkc1VideoBeginStreamCoverage(cpu, 0x2fu)", video)

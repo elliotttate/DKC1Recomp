@@ -1,6 +1,6 @@
 # DKC1Recomp regression dashboard
 
-Generated 2026-08-16 12:54 UTC at commit `33787fd-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
+Generated 2026-08-16 14:22 UTC at commit `1aa8bbc-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
 
 ## Contracts
 
@@ -37,5 +37,8 @@ _9 routes swept; levels without a route are NOT covered — absence here is not 
 | standstill-pillarbox | open | Standing still at level start pillarboxes for 4000+ frames (layout never selected, source bank 0) until the camera moves; seen on route_death.dks stand-still segment. | `recipes/route_death.dks via tools/level_sweep.py` |
 | post-bonus-bg1-transition-contamination | fixed | Leaving a bonus room could seed BG1 widescreen margins from a transitional VRAM ring, producing repeated vertical strips on both outer edges while the native center and cartridge state remained valid. | `build/bonus-safe-control-repros-20260816/capture-f00000464-20260816-075932-p28476` |
 | wide-vertical-row-staging-corruption | fixed | Wide simultaneous horizontal/vertical motion could expose black or mixed-color rectangular blocks in BG1 because the stock vertical row builder refreshed only 36 entries before publishing a full 64-entry ring row. | `build/visible-flight-recorder-20260816/capture-f00004159-20260816-083801-p60144` |
+| wide-seven-tile-stream-guard-gap | fixed | The host renderer sampled seven complete margin tiles at arbitrary sub-tile scroll phases, but the cartridge initializer and moving-row sweep prepared only six. The uninitialized seventh physical BG1 ring column could later rotate into the native center as one 8-pixel vertical strip of stale terrain. | `build/visible-rowfix-flight-20260816/capture-f00005014-20260816-084158-p69336` |
+| jungle-bonus1-widened-initializer-corruption | fixed | Jungle Hijinxs Bonus 1 lost its purple floor and showed checkerboard cave columns because a shared fixed-layout initializer was incorrectly treated as a rolling-terrain widescreen capability and wrote widened columns into the native VRAM ring. | `build/visible-margin7-flight-20260816/capture-f00158989-20260816-094934-p70536` |
+| ropey-rampage-widened-initializer-corruption | fixed | Ropey Rampage could start with terrain sliced into displaced horizontal and vertical bands because the shared widened cartridge initializer generated invalid native-ring data for this layout. | `build/visible-bonusguard-flight-20260816/capture-f00009082-20260816-101211-p61340` |
 
 Issue lifecycle: edit `docs/KNOWN_ISSUES.json` (set status `fixed` with the fixing commit) and regenerate. A fixed issue regressing shows up here as its contract/sweep line failing.

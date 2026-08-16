@@ -320,8 +320,42 @@ enum {
   kDkc1WideRowPassSeparation = 18 * 8,
 };
 
-static bool Dkc1VideoStreamWideningEligible(const struct CpuState *cpu) {
+static bool Dkc1VideoCartridgeWideningSceneEligible(
+    const struct CpuState *cpu) {
   if (!cpu || !Dkc1VideoIsWidescreen())
+    return false;
+
+  /* Fail closed.  The shared stock initializer is not itself proof that its
+   * map decoder can safely synthesize extra columns: fresh-entry A/B tests
+   * proved native-ring corruption in both a fixed bonus cave and ordinary
+   * Ropey Rampage.  Host-side ROM prefill plus the stock cartridge stream
+   * produce clean 16:9 output for Jungle and Ropey.  Keep the old rewrite
+   * available only as an explicit research switch until a per-layout
+   * capability oracle replaces this assumption.  A post-entry save state may
+   * already contain damaged VRAM and is never valid evidence for this switch. */
+  const char *experimental =
+      getenv("DKC1_ENABLE_EXPERIMENTAL_CARTRIDGE_WIDENING");
+  if (!experimental || !*experimental || *experimental == '0')
+    return false;
+
+  const uint16_t mode = Dkc1ReadWram16(cpu->ram, 0x0032u);
+  const uint16_t level = Dkc1ReadWram16(cpu->ram, 0x0030u);
+  const uint16_t entrance = Dkc1ReadWram16(cpu->ram, 0x003eu);
+
+  /* Jungle Hijinxs Bonus 1 uses a fixed cave tilemap whose stock initializer
+   * is not a rolling-map capability boundary.  Widening its backstep/count
+   * writes unrelated cave columns into the native ring; later identity reset
+   * correctly rejects the alleged coverage, but cannot undo those VRAM
+   * writes.  Keep cartridge execution stock and let the fail-closed host
+   * presentation supply/blank the side margins for this exact scene. */
+  if (mode == 0x0001u && level == 0x0009u && entrance == 0x0006u)
+    return false;
+
+  return true;
+}
+
+static bool Dkc1VideoStreamWideningEligible(const struct CpuState *cpu) {
+  if (!Dkc1VideoCartridgeWideningSceneEligible(cpu))
     return false;
   const uint16_t lower = Dkc1ReadWram16(cpu->ram, 0x1b23u);
   const uint16_t upper = Dkc1ReadWram16(cpu->ram, 0x1b25u);
@@ -526,14 +560,20 @@ static int Dkc1VideoAlignedStreamBias(const struct CpuState *cpu,
 
 uint16_t Dkc1VideoInitialBackstep(struct CpuState *cpu,
                                   uint16_t native_backstep) {
+  const bool scene_eligible =
+      Dkc1VideoCartridgeWideningSceneEligible(cpu);
   if (Dkc1StreamDebugEnabled())
-    fprintf(stderr, "stream: backstep native=%04x wide=%u\n",
-            native_backstep, Dkc1VideoIsWidescreen() ? 1u : 0u);
-  /* These helpers are injected only into DKC's two complete rolling-map
-   * initializers. Underwater entrances reach them before final camera bounds
-   * are published, so the initializer itself is the capability boundary.
-   * Presentation stays centered until SelectStreamX proves every column. */
-  if (!cpu || !Dkc1VideoIsWidescreen())
+    fprintf(stderr,
+            "stream: backstep native=%04x wide=%u scene_eligible=%u\n",
+            native_backstep, Dkc1VideoIsWidescreen() ? 1u : 0u,
+            scene_eligible ? 1u : 0u);
+  /* These helpers are injected into DKC's two shared initializer bodies, but
+   * reaching one of those bodies does not prove that a particular layout can
+   * accept wider cartridge writes.  Underwater entrances may also reach them
+   * before final camera bounds are published.  The explicit policy above is
+   * therefore the capability boundary; presentation stays centered until
+   * SelectStreamX proves every column. */
+  if (!scene_eligible)
     return native_backstep;
   if (native_backstep == 0x0100u)
     return 0x0170u; /* 46 columns * 8 pixels. */
@@ -544,11 +584,15 @@ uint16_t Dkc1VideoInitialBackstep(struct CpuState *cpu,
 
 uint16_t Dkc1VideoInitialColumnCount(struct CpuState *cpu,
                                      uint16_t native_count) {
+  const bool scene_eligible =
+      Dkc1VideoCartridgeWideningSceneEligible(cpu);
   if (Dkc1StreamDebugEnabled())
-    fprintf(stderr, "stream: count native=%04x wide=%u\n",
-            native_count, Dkc1VideoIsWidescreen() ? 1u : 0u);
+    fprintf(stderr,
+            "stream: count native=%04x wide=%u scene_eligible=%u\n",
+            native_count, Dkc1VideoIsWidescreen() ? 1u : 0u,
+            scene_eligible ? 1u : 0u);
   s_stream_coverage.initial_count_calls++;
-  if (!cpu || !Dkc1VideoIsWidescreen()) {
+  if (!scene_eligible) {
     s_stream_coverage.initial_count_rejected++;
     return native_count;
   }
