@@ -1,0 +1,13 @@
+{
+  "schema": "dkc1.ir.discrepancies.v1",
+  "note": "Places where the reference listing's chosen instruction decoding provably disagrees with runtime execution. Width conflicts at these addresses are expected and documented; any OTHER conflict still fails stage2. Each entry must carry proof.",
+  "width_conflicts": [
+    {
+      "addr": "B8BAB9",
+      "listing": "LDA.w #$8580 / STZ.b $FA (M=0 view of bytes A9 80 85 64 FA)",
+      "runtime": "LDA #$80 / STA.b $64 / PLX (M=1), then REP #$20",
+      "proof": "generated/snesrecomp/bankb8_part39b_v2.c L_BAB9_M1X1 decodes the M=1 stream (uint8 _v177 = 0x80; cpu_write8 D+0x64; PLX); reached from L_BAAF_M1X1 after SEP #$21 at B8BA6D with no intervening REP. The recomp cfg entry facts agree.",
+      "consequence": "instruction_index rows at B8:BAB9 and B8:BABC carry the M=0 instruction boundaries; IR consumers see the listing's view of this one run of bytes, which never executes in that form at runtime."
+    }
+  ]
+}

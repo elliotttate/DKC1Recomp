@@ -242,6 +242,36 @@ def show_wram(address: int, out: dict):
     out["accessed_by"] = named
     out["known_issues"] = known_issue_mentions(f"{address:04X}")
 
+    # IR-proven read/write split (build/ir/summaries.json, stage 4).
+    # Unlike the text search above this distinguishes writers from
+    # readers and covers indexed SoA accesses whose operand text names
+    # only the array base.
+    summaries_path = REPO / "build" / "ir" / "summaries.json"
+    try:
+        summaries = json.loads(summaries_path.read_text())["functions"]
+    except OSError:
+        summaries = None
+    if summaries:
+        writers, readers = [], []
+        for label, s in summaries.items():
+            for kind, bucket in (("writes", writers), ("reads", readers)):
+                for access in s[kind]:
+                    if access["region"] != "wram":
+                        continue
+                    ea = int(access["ea"], 16)
+                    span = 0x33 if access["indexed"] else \
+                        (2 if access["width"] == 16 else 1)
+                    if ea <= address < ea + span:
+                        bucket.append(f"{label}@{access['at']}"
+                                      + ("[idx]" if access["indexed"]
+                                         else ""))
+        out["ir_writers"] = writers[:20]
+        out["ir_readers_count"] = len(readers)
+        if len(writers) > 20:
+            out["ir_writers_note"] = f"{len(writers)} total; " \
+                "full list: python tools/slice.py --store " \
+                f"{address:04X}"
+
 
 def search_names(term: str, out: dict):
     code_names, ram_names = load_rename_map()
@@ -309,6 +339,13 @@ def print_report(out: dict):
         line("accessed by:")
         for a in out["accessed_by"]:
             line(f"  {a}")
+    if out.get("ir_writers") is not None:
+        line(f"IR-proven writers ({len(out['ir_writers'])} shown, "
+             f"{out.get('ir_readers_count', 0)} reader sites):")
+        for w in out["ir_writers"]:
+            line(f"  {w}")
+        if out.get("ir_writers_note"):
+            line(f"  {out['ir_writers_note']}")
     if out.get("known_issues"):
         line(f"known issues mentioning this: "
              f"{', '.join(out['known_issues'])}")

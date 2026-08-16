@@ -1,10 +1,24 @@
-# 65816 SSA IR — design spec (pre-implementation)
+# 65816 SSA IR — design and implementation status
 
 Goal: a correct intermediate representation of the byte-exact program
 that structured pseudocode, backward slicing, constant propagation, and
-the function differential oracle can all be built on. Until it exists,
-`tools/structure.py` deliberately stays a display-only symbolizer —
-transforming semantics without this layer produces attractive lies.
+the function differential oracle can all be built on. Until the relevant IR
+stage and consumer are validated, `tools/structure.py` deliberately stays a
+flat, display-only symbolizer. Its
+local labels are cross-references rather than reconstructed block indentation,
+and numeric define annotations are emitted only when nearby operand context
+selects one ID namespace.  Transforming semantics without this layer produces
+attractive lies.
+
+Stages 1–3 now have an initial implementation under `tools/ir/`, gated by
+`tools/ir_validate.py`; stages 4–5 remain design work. `tools/irview.py` is
+the first read-only consumer. Its input `function` column contains mechanical
+seed groups, which are not necessarily closed routines: a group may tail-fall
+through into the next seed. The viewer therefore does not silently concatenate
+groups. It reports the exact external continuation as a `TAIL-FALLTHROUGH`,
+labels the view partial, and also surfaces unresolved indirect successors,
+CFG/SSA problems, width conflicts, and blocks unreachable from the selected
+entry.
 
 ## Requirements (the model must capture)
 
@@ -66,3 +80,41 @@ transforming semantics without this layer produces attractive lies.
 
 Non-goals: whole-program optimization, decompiled-source authorship,
 anything that severs the 1:1 link back to exact assembly and ROM bytes.
+
+## Status (implemented in tools/ir/, gates in tools/ir_validate.py)
+
+- **Stage 1 PASS** — 53,539/53,539 rows decode structurally; computed
+  length == listing size column on every row; computed opcode byte ==
+  actual ROM byte through the HiROM mirror fold on every row. (The
+  ROM-byte gate is strictly stronger than text round-trip: it proves the
+  addressing-mode classifier against silicon truth.)
+- **Stage 2 PASS** — 2,557 functions, 11,401 blocks, 9,773 phis, zero
+  CFG/SSA invariant failures. M/X widths: 99.84% of width-sensitive ops
+  proven from the cfg entry facts (REP/SEP flow + immediate-suffix
+  anchors + variant-relative callee exit facts), 0.16% unknown, zero
+  conflicts outside `tools/ir/known_discrepancies.json` — which
+  documents ONE real find: the listing decodes B8:BAB9 in its M=0 view,
+  while the recomp's proven M1X1 variant executes those bytes as
+  different instructions.
+- **Stage 3 PASS** — 100% of 19,949 memory operands resolved and
+  classified (17,378 wram / 1,498 mmio / 738 rom / 332 indirect);
+  defines resolved to fixpoint across DKC1/ + Global/ asm sources;
+  NorSpr SoA accesses typed as `NorSpr[slot].Field` with curated-name
+  overlay.
+- **Stage 4 DONE** — `build/ir/summaries.json` (10,361 reads / 9,186
+  writes, honest indirect counts); `tools/slice.py --store 1595`
+  reproduces the entire damage-event chain statically (76 write sites:
+  CODE_BFC745 `#$0001`, SteelKeg BFD005 `#$0040`, the `$20` raisers,
+  42 clears) — cross-validated against the runtime reverse_watch
+  result. Wired into `tools/atlas.py` (IR-proven writers on WRAM view)
+  and `tools/impact.py` (write set + data-coupled readers).
+- **Stage 5 host side DONE** — `tools/oracle_spec.py` emits per-function
+  capture/compare manifests from call-closed effects (2,080
+  oracle-ready by state diff; 477 need an LLE shadow due to indirect
+  writes / MMIO order / deep calls). Engine-side remainder: entry-state
+  snapshot in the SNESRECOMP_FUNC_ENTRY_HOOK path, interpreter
+  re-execution, exit diff.
+
+Consumer #1 is `tools/irview.py`: structured pseudocode with proven
+widths, typed operands, and recovered branch conditions, 1:1 asm links
+kept per line.

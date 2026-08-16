@@ -81,9 +81,15 @@ in `build/tier2/` (hosts set `SNESRECOMP_TIER2_DIR` automatically);
 lean `SNESRECOMP_FUNC_ENTRY_HOOK` mode): `SNESRECOMP_FUNC_PROFILE`=jsonl
 per-function call counts/frames/contexts (+`SNESRECOMP_PROFILE_CONTEXT_ADDR`,
 DKC1 uses 0032); `SNESRECOMP_WATCH`=addr:len[,...] +
-`SNESRECOMP_WATCH_LOG` — WRAM watchpoints attributing every change to the
-traced function that executed it (solves same-frame set/consume
-blindness; instruction-level via force_lle escalation).
+`SNESRECOMP_WATCH_LOG` — bounded WRAM watchpoints reporting net byte changes
+at matched generated-function entry/exit boundaries. Parent tails after a
+callee return remain attributed to the parent; changes observed with no AOT
+window active (including top-level interpreter execution) are explicitly
+`host/outside-function-window`, never assigned to the stale previous entry.
+Multiple writes that cancel inside one function
+window are below this lean mode's resolution; use force_lle + `DKC1_TRACE_PC`
+for instruction/store-level attribution. Invalid/overlapping/out-of-WRAM specs
+fail closed, and `reverse_watch.py` refuses conclusions from truncated logs.
 
 **Engine diagnostics:** `SNESRECOMP_DSPOUT`, `SNESRECOMP_*_TRACE_FILE`,
 `SNESRECOMP_OFFRAILS_STDERR`, `SNESRECOMP_APU_TOUCH_CYCLES`.
@@ -110,25 +116,57 @@ optional `quickload` leg seeded by a state the entry route itself saves.
 - `reverse_watch.py --rom R --route S --address HEX[:len] --before-frame F`
   — who last changed this address before frame F, function-attributed,
   with context and escalation hints (one deterministic forward pass).
-- `impact.py ADDR|NAME` — change blast radius: static callers, dispatch
-  membership, routes that executed it (profile corpus), required
-  regression gates.
-- `build_profile_corpus.py --rom R` — per-route function profiles into
-  build/profiles/ (feeds impact/profile_diff).
+- `impact.py ADDR|NAME` — change blast radius: structured callers from the
+  exported IDA call graph (exact instruction operands if unavailable),
+  dispatch membership, routes that executed it, and required regression
+  gates. Pseudocode substring matches are not caller evidence.
+- `build_profile_corpus.py --rom R` — all-or-nothing per-route function
+  profiles into build/profiles/ (feeds impact/profile_diff). Existing profiles
+  are removed before rebuilding; any failed route or missing/invalid profile
+  returns nonzero and publishes no partial corpus.
 - `capability_manifest.py` — docs/CAPABILITIES.json: per-scene
   host-widescreen status (proven/degraded/centered/unproven), strictly
-  evidence-based from the sweep.
-- SSA IR: not built yet BY DESIGN — see docs/SSA_IR_DESIGN.md before
-  attempting semantic transforms.
-- `structure.py ADDR|NAME` — symbolized 1:1 listing (curated RAM names,
-  define annotations, local labels); display aid, no semantic claims.
+  evidence-based from successful sweep routes. `proven` requires complete
+  calibration and zero raw fallback, aggregate blank serves, gameplay
+  pillarbox frames, or unstable margins; blockers are emitted explicitly.
+- `ir_validate.py --stage1|--stage2|--stage3|--all` — validation gates for
+  the staged 65816 IR (lossless decode, CFG/SSA/width facts, typed-memory
+  coverage). A ROM is required only for the stage-1 opcode-byte oracle.
+- `irview.py ADDR|NAME [--ssa]` — structured view from the validated IR.
+  Instruction-index function labels are seed boundaries, so the renderer
+  explicitly marks external tail fallthroughs, unresolved indirect successors,
+  CFG/SSA problems, width conflicts, and unreachable blocks. It never silently
+  splices a neighboring seed into the selected routine.
+- `slice.py --store HEX [--callers --readers]` — static complement of
+  reverse_watch: every IR-proven write site covering a WRAM address,
+  each with the SSA backward slice of the stored value (constants,
+  loads, merges, entry params). `--value-of OPADDR` slices A at one op.
+  Validated: `--store 1595` reproduces the damage chain (BFC745 #$0001,
+  SteelKeg BFD005 #$0040) that reverse_watch proved at runtime.
+- `oracle_spec.py NAME | --emit-all` — per-function differential-oracle
+  capture/compare manifests from call-closed IR effects
+  (build/ir/oracle_specs.json). Honest eligibility: indirect writes,
+  MMIO ordering, or deep calls mark a function needs-lle-shadow instead
+  of pretending state-diff suffices.
+- `ir/summarize.py` (run as module) — build/ir/summaries.json:
+  per-function proven read/write sets with widths, indexed-ness and op
+  sites; feeds atlas ("IR-proven writers" on WRAM view), impact.py
+  (write set + data-coupled readers), slice.py, oracle_spec.py.
+  Regenerate after any disassembly/rename_map update.
+- `structure.py ADDR|NAME` — flat symbolized 1:1 listing (curated RAM
+  names, context-qualified define annotations, local cross-reference
+  labels); display aid, no reconstructed blocks or semantic claims.
 - `sync_names.py` — derive `<Base>_StateN` names for dispatch-contract
-  targets (provenance-tagged, curated map always wins) ->
-  derived_names.json consumed by atlas.
+  targets in literal table-ordinal order (provenance-tagged, curated map
+  always wins) -> safe generated `docs/derived_names.json`, consumed by
+  the state catalog and structure display tools; never writes `reference/`.
 - `state_catalog.py` — docs/STATE_MACHINES.md: per state machine, each
-  state's anims/sounds/$1595 events/$1029 transitions (static mining).
+  state in literal dispatch order, with conservative static refs/immediate
+  stores; `--lifecycle` marks matching observed NorSpr actor states.
 - `profile_diff.py A [B]` — coverage + "functions exclusive to run A"
-  behavioral isolation from trace-build profiles.
+  behavioral isolation from trace-build profiles. Its coverage denominator is
+  the exact address-bearing `CpuState` alias declaration set in `funcs.h`, not
+  M/X variants or handwritten helpers.
 - `poke_test.py --state S --set ADDR=HEX --run N --expect EXPR` — WRAM
   fault injection (proves downstream reaction, not natural production).
 
