@@ -1,5 +1,10 @@
 # Widescreen debug tooling plan
 
+> **This is the historical build-out plan and session chronicle.** For
+> the current symptom-to-fix workflow with the finished tool suite,
+> start at **`docs/WIDESCREEN_PLAYBOOK.md`**; the tool reference is
+> `.claude/skills/dkc1-tools/TOOLS.md`.
+
 Distilled 2026-08-15 from three sources:
 
 - `docs/WIDESCREEN_HANDOFF.md` — the seven open issues and release gates;

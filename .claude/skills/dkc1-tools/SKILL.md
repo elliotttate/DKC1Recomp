@@ -79,6 +79,15 @@ not mean legacy; `358x224` always does.)
 
 ## Typical workflows
 
+**Widescreen bug of ANY kind:** start at
+**`docs/WIDESCREEN_PLAYBOOK.md`** — the symptom-first decision guide:
+five entry points, the eight-rung localization ladder (pixel →
+provenance → layers → policy → stock-vs-wide → reverse_watch →
+atlas/irview/slice → oracle), the verdict/detector → owner table for
+every invariant-monitor verdict, fix-ownership routing incl.
+DKC1_REPLACE, the full verification ladder, and worked examples from
+docs/KNOWN_ISSUES.json.
+
 **"Something looks wrong on screen" (visible host):** click the pixel —
 the panel reports world coord, tile, provenance, last writer, OAM entries,
 nearest actor. F9 exports a repro bundle (rolling inputs + states + memory
