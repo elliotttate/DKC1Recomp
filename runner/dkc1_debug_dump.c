@@ -334,10 +334,13 @@ void Dkc1DebugDumpFrame(int frame) {
     fprintf(s_oam_index,
         "{\"schema\":\"dkc1.oam.frame.v1\",\"frame\":%d,"
         "\"inidisp\":%u,\"forced_blank\":%s,\"gameplay\":%s,"
+        "\"obj_range_over\":%s,\"obj_time_over\":%s,"
         "\"shadow\":\"%s\",\"ppu\":\"%s\"}\n",
         frame, (unsigned)g_ppu->inidisp,
         PPU_forcedBlank(g_ppu) ? "true" : "false",
         GameplayGate() ? "true" : "false",
+        g_ppu->rangeOver ? "true" : "false",
+        g_ppu->timeOver ? "true" : "false",
         shadow_hash, ppu_hash);
   }
 
@@ -371,8 +374,11 @@ bool Dkc1DebugCheckpoint(const char *name, int frame) {
   HashHex(oam[1], kOamBytes, ppu_hash);
   fprintf(s_checkpoint_index,
       "{\"name\":\"%s\",\"frame\":%d,\"wram\":\"%s\",\"vram\":\"%s\","
-      "\"oam_shadow\":\"%s\",\"oam_ppu\":\"%s\"}\n",
-      name, frame, wram_hash, vram_hash, shadow_hash, ppu_hash);
+      "\"oam_shadow\":\"%s\",\"oam_ppu\":\"%s\","
+      "\"obj_range_over\":%s,\"obj_time_over\":%s}\n",
+      name, frame, wram_hash, vram_hash, shadow_hash, ppu_hash,
+      g_ppu->rangeOver ? "true" : "false",
+      g_ppu->timeOver ? "true" : "false");
   fflush(s_checkpoint_index);
   return true;
 }

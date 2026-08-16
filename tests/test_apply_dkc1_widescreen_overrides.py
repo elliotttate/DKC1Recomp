@@ -92,8 +92,29 @@ class WidescreenOverrideTests(unittest.TestCase):
             ("L_A878_M0X0:",
              "uint16 mask = cpu_read16(cpu, "
              "(uint8)((((uint32)0x80a545 + (uint32)cpu->X)) >> 16), "
-             "(uint16)(((uint32)0x80a545 + (uint32)cpu->X)));"),
+             "(uint16)(((uint32)0x80a545 + (uint32)cpu->X))); "
+             "uint16 existing = cpu_read16(cpu, cpu->DB, cpu->Y); "
+             "uint16 merged = (uint16)(mask | existing);"),
             ("L_A877_M0X0:", "cpu_trace_block(cpu, 0x80A877);"),
+        ])
+        self.write_function(generated, "actor_dispatch.c", "CODE_BF8087_M0X0", [
+            ("L_8087_M0X0:",
+             "cpu->coprocessor_master_cycles = cpu->master_cycles;"),
+            ("L_808A_M0X0:", "cpu_trace_block(cpu, 0xBF808A);"),
+        ])
+        self.write_function(generated, "actor_loop_a.c", "CODE_BF8000_M0X0", [
+            ("L_802D_M0X0:",
+             "cpu_write16(cpu, 0x00, (uint16)(cpu->D + 0x0082), _v17);\n"
+             "    { dispatch_actor_a(cpu); }\n"
+             "    goto L_8033_M0X0;"),
+            ("L_8033_M0X0:", "cpu_trace_block(cpu, 0xBF8033);"),
+        ])
+        self.write_function(generated, "actor_loop_b.c", "CODE_BF804B_M0X0", [
+            ("L_8067_M0X0:",
+             "cpu_write16(cpu, 0x00, (uint16)(cpu->D + 0x0082), _v12);\n"
+             "    { dispatch_actor_b(cpu); }\n"
+             "    goto L_806D_M0X0;"),
+            ("L_806D_M0X0:", "cpu_trace_block(cpu, 0xBF806D);"),
         ])
 
         # A duplicate bank-local label in another function must not attract
@@ -129,9 +150,19 @@ class WidescreenOverrideTests(unittest.TestCase):
             self.assertEqual(
                 first["banana_draw.c"].count("Dkc1VideoPromoteOamXHigh"), 2)
             self.assertIn("Dkc1VideoBiasCullX", first["rope.c"])
+            self.assertIn("uint16 _ws_rope_x", first["rope.c"])
             self.assertIn("Dkc1VideoPromoteOamSizeMask", first["rope.c"])
+            self.assertIn(
+                "Dkc1VideoMergeOamSizeAndXHigh(existing, mask, _ws_rope_x)",
+                first["rope.c"])
             self.assertEqual(
                 combined.count("Dkc1VideoPrepareType5ChildRetry(cpu)"), 1)
+            self.assertEqual(
+                combined.count("Dkc1VideoBeginPlacedActorDispatch(cpu)"), 2)
+            self.assertEqual(
+                combined.count("Dkc1VideoEndPlacedActorDispatch(cpu)"), 2)
+            self.assertNotIn("cpu_write_a_m(cpu, 0)",
+                             first["actor_dispatch.c"])
             self.assertNotIn(MODULE.INCLUDE, first["duplicate.c"])
 
     def test_fails_closed_when_a_known_constant_changes(self):

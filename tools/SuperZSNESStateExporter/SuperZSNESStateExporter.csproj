@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>SuperZSNESStateExporter</AssemblyName>
+    <RootNamespace>SuperZSNESStateExporter</RootNamespace>
+    <Version>0.1.0</Version>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

@@ -14,3 +14,7 @@ tier2_dkc1_*.jsonl
 *.szst*
 captures/
 artifacts/
+*.state
+session/
+tools/SuperZSNESStateExporter/bin/
+tools/SuperZSNESStateExporter/obj/

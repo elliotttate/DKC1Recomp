@@ -15,7 +15,7 @@
 
 #include "cpu_state.h"
 
-/* 2557 functions across all banks (5 decls each). */
+/* 2558 functions across all banks (5 decls each). */
 
 void Reset_Entry(CpuState *cpu);  /* $80:8000 alias */
 RecompReturn Reset_Entry_M0X0(CpuState *cpu);
@@ -1287,6 +1287,11 @@ RecompReturn CODE_80E6B1_M0X0(CpuState *cpu);
 RecompReturn CODE_80E6B1_M0X1(CpuState *cpu);
 RecompReturn CODE_80E6B1_M1X0(CpuState *cpu);
 RecompReturn CODE_80E6B1_M1X1(CpuState *cpu);
+void CODE_80E90D(CpuState *cpu);  /* $80:E90D alias */
+RecompReturn CODE_80E90D_M0X0(CpuState *cpu);
+RecompReturn CODE_80E90D_M0X1(CpuState *cpu);
+RecompReturn CODE_80E90D_M1X0(CpuState *cpu);
+RecompReturn CODE_80E90D_M1X1(CpuState *cpu);
 void CODE_80E910(CpuState *cpu);  /* $80:E910 alias */
 RecompReturn CODE_80E910_M0X0(CpuState *cpu);
 RecompReturn CODE_80E910_M0X1(CpuState *cpu);

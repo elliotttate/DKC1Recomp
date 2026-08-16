@@ -30,6 +30,9 @@ import sys
 from pathlib import Path
 
 WRAM_SIZE = 0x20000
+SEMANTIC_DUMP_RANGES = (
+    "00020-00100,00500-00600,00880-008a0,00ae5-01e0d"
+)
 
 NAMED_FIELDS = {
     "game_mode": (0x0032, 2),
@@ -95,6 +98,7 @@ def run_host(exe: Path, rom: Path, frames: int, widescreen: bool,
     env.pop("DKC1_WRAM_HASH_LOG", None)
     env.pop("DKC1_WRAM_DUMP", None)
     env.pop("DKC1_WRAM_DUMP_PATH", None)
+    env.pop("DKC1_WRAM_DUMP_RANGES", None)
     env.pop("DKC1_FRAME_PPM", None)
     env.pop("DKC1_ROUTE_RESULT", None)
     env.pop("DKC1_ROUTE_FRAME_LIMIT", None)
@@ -161,8 +165,20 @@ def load_wram_frames(prefix: Path) -> dict[int, bytes]:
     if not index_path.exists() or not raw_path.exists():
         return frames
     raw = raw_path.read_bytes()
+    ranges = [(0, WRAM_SIZE - 1)]
     for line in index_path.read_text().splitlines():
         record = json.loads(line)
+        if record.get("type") == "manifest":
+            declared = record.get("ranges")
+            if declared:
+                ranges = [(int(first, 16), int(last, 16))
+                          for first, last in declared]
+                expected_size = sum(last - first + 1
+                                    for first, last in ranges)
+                if expected_size != int(record.get("payload_size", -1)):
+                    raise RuntimeError(
+                        "wram dump manifest range/payload mismatch")
+            continue
         if record.get("type") != "frame":
             continue
         frame = record.get("relative_frame", record.get("frame"))
@@ -175,7 +191,16 @@ def load_wram_frames(prefix: Path) -> dict[int, bytes]:
         if digest and hashlib.sha256(payload).hexdigest() != digest:
             raise RuntimeError(
                 f"wram dump index/sha mismatch at frame {frame}")
-        frames[int(frame)] = payload
+        expanded = bytearray(WRAM_SIZE)
+        cursor = 0
+        for first, last in ranges:
+            range_length = last - first + 1
+            expanded[first:last + 1] = payload[cursor:cursor + range_length]
+            cursor += range_length
+        if cursor != len(payload):
+            raise RuntimeError(
+                f"wram dump payload/range mismatch at frame {frame}")
+        frames[int(frame)] = bytes(expanded)
     return frames
 
 
@@ -333,6 +358,14 @@ def main() -> int:
     parser.add_argument("--window", type=int, default=8,
                         help="raw-dump window radius around first divergence")
     parser.add_argument("--json-out", type=Path)
+    parser.add_argument(
+        "--skip-semantic-scan", action="store_true",
+        help="stop after classifying the first raw-difference window")
+    parser.add_argument(
+        "--reuse-existing-baseline", action="store_true",
+        help=("reuse hash/input/raw-window artifacts already present under "
+              "--work; every reused artifact is revalidated before the two "
+              "semantic passes run"))
     args = parser.parse_args()
 
     work = args.work
@@ -351,12 +384,13 @@ def main() -> int:
     # de-align the two runs.
     inputs_path = (work / "resolved_inputs.txt").resolve()
     if script is not None:
-        inputs_path.unlink(missing_ok=True)
-        run_host(exe, rom, args.frames, False, script,
-                 {"DKC1_INPUT_RECORD": str(inputs_path),
-                  "DKC1_SESSION_DIR": str((work / "stage0").resolve())},
-                 work, visible=args.visible, snapshot=snapshot,
-                 autoclose_ms=args.autoclose_ms)
+        if not (args.reuse_existing_baseline and inputs_path.exists()):
+            inputs_path.unlink(missing_ok=True)
+            run_host(exe, rom, args.frames, False, script,
+                     {"DKC1_INPUT_RECORD": str(inputs_path),
+                      "DKC1_SESSION_DIR": str((work / "stage0").resolve())},
+                     work, visible=args.visible, snapshot=snapshot,
+                     autoclose_ms=args.autoclose_ms)
         if not inputs_path.exists():
             raise RuntimeError("input recording did not appear")
     elif not inputs_path.exists():
@@ -371,11 +405,14 @@ def main() -> int:
     logs = {}
     for mode, wide in (("stock", False), ("wide", True)):
         log_path = (work / f"{mode}_hash.log").resolve()
-        run_host(exe, rom, args.frames, wide, None,
-                 playback_env({"DKC1_WRAM_HASH_LOG": str(log_path)}),
-                 work, visible=args.visible, snapshot=snapshot,
-                 autoclose_ms=args.autoclose_ms)
+        if not (args.reuse_existing_baseline and log_path.exists()):
+            run_host(exe, rom, args.frames, wide, None,
+                     playback_env({"DKC1_WRAM_HASH_LOG": str(log_path)}),
+                     work, visible=args.visible, snapshot=snapshot,
+                     autoclose_ms=args.autoclose_ms)
         logs[mode] = load_hash_log(log_path)
+        if not logs[mode]:
+            raise RuntimeError(f"empty baseline hash log: {log_path}")
 
     length = min(len(logs["stock"]), len(logs["wide"]))
     first = None
@@ -400,22 +437,28 @@ def main() -> int:
     dumps = {}
     for mode, wide in (("stock", False), ("wide", True)):
         prefix = (work / f"{mode}_wram").resolve()
-        for stale in (prefix.with_suffix(".bin"),
-                      Path(str(prefix.with_suffix(".bin")) + ".jsonl")):
-            if stale.exists():
-                stale.unlink()
-        run_host(
-            exe, rom, hi, wide, None,
-            playback_env({
-                "DKC1_WRAM_DUMP": f"{lo}-{hi}",
-                "DKC1_WRAM_DUMP_PATH": str(prefix.with_suffix(".bin")),
-                "DKC1_WRAM_HASH_LOG":
-                    str((work / f"{mode}_hash2.log").resolve())}),
-            work, visible=args.visible, snapshot=snapshot,
-            autoclose_ms=args.autoclose_ms)
-        dumps[mode] = load_wram_frames(prefix)
+        hash2_path = (work / f"{mode}_hash2.log").resolve()
+        reused_dump = False
+        if args.reuse_existing_baseline:
+            dumps[mode] = load_wram_frames(prefix)
+            reused_dump = (
+                all(frame in dumps[mode] for frame in range(lo, hi + 1)) and
+                hash2_path.exists())
+        if not reused_dump:
+            for stale in (prefix.with_suffix(".bin"),
+                          Path(str(prefix.with_suffix(".bin")) + ".jsonl")):
+                stale.unlink(missing_ok=True)
+            run_host(
+                exe, rom, hi, wide, None,
+                playback_env({
+                    "DKC1_WRAM_DUMP": f"{lo}-{hi}",
+                    "DKC1_WRAM_DUMP_PATH": str(prefix.with_suffix(".bin")),
+                    "DKC1_WRAM_HASH_LOG": str(hash2_path)}),
+                work, visible=args.visible, snapshot=snapshot,
+                autoclose_ms=args.autoclose_ms)
+            dumps[mode] = load_wram_frames(prefix)
         # confirmation: pass-2 fingerprints must reproduce pass 1
-        confirm = load_hash_log(work / f"{mode}_hash2.log")
+        confirm = load_hash_log(hash2_path)
         for i in range(min(len(confirm), hi)):
             if confirm[i] != logs[mode][i]:
                 report["result"] = "nondeterministic_route"
@@ -449,6 +492,73 @@ def main() -> int:
             break
     else:
         report["first_gameplay_critical_frame_in_window"] = None
+
+    # pass 3: a sparse whole-route replay that excludes framebuffer/OAM bulk
+    # but retains every actor, bookmark, section, logical-camera and core
+    # gameplay field. This finds the first semantically important difference
+    # even when the first raw divergence is only a widened draw-cache refresh.
+    if not args.skip_semantic_scan:
+        semantic_dumps = {}
+        report["semantic_scan"] = {
+            "frames": [1, length],
+            "ranges": SEMANTIC_DUMP_RANGES,
+        }
+        for mode, wide in (("stock", False), ("wide", True)):
+            prefix = (work / f"{mode}_semantic_wram").resolve()
+            for stale in (prefix.with_suffix(".bin"),
+                          Path(str(prefix.with_suffix(".bin")) + ".jsonl")):
+                stale.unlink(missing_ok=True)
+            semantic_hash = (work / f"{mode}_semantic_hash.log").resolve()
+            run_host(
+                exe, rom, length, wide, None,
+                playback_env({
+                    "DKC1_WRAM_DUMP": f"1-{length}",
+                    "DKC1_WRAM_DUMP_PATH": str(prefix.with_suffix(".bin")),
+                    "DKC1_WRAM_DUMP_RANGES": SEMANTIC_DUMP_RANGES,
+                    "DKC1_WRAM_HASH_LOG": str(semantic_hash),
+                }),
+                work, visible=args.visible, snapshot=snapshot,
+                autoclose_ms=args.autoclose_ms)
+            semantic_dumps[mode] = load_wram_frames(prefix)
+            confirm = load_hash_log(semantic_hash)
+            if len(confirm) != len(logs[mode]):
+                report["result"] = "nondeterministic_semantic_replay"
+                report["mode"] = mode
+                report["reason"] = "frame_count"
+                report["expected_frames"] = len(logs[mode])
+                report["actual_frames"] = len(confirm)
+                print(json.dumps(report, indent=1))
+                if args.json_out:
+                    args.json_out.write_text(json.dumps(report, indent=1))
+                return 3
+            for i, row in enumerate(confirm):
+                if row != logs[mode][i]:
+                    report["result"] = "nondeterministic_semantic_replay"
+                    report["mode"] = mode
+                    report["disagrees_at_frame"] = row[0]
+                    print(json.dumps(report, indent=1))
+                    if args.json_out:
+                        args.json_out.write_text(json.dumps(report, indent=1))
+                    return 3
+
+        first_semantic = None
+        first_semantic_classification = None
+        for frame in range(1, length + 1):
+            if (frame not in semantic_dumps["stock"] or
+                    frame not in semantic_dumps["wide"]):
+                continue
+            classification = classify(
+                semantic_dumps["stock"][frame],
+                semantic_dumps["wide"][frame])
+            if classification["gameplay_critical"]:
+                first_semantic = frame
+                first_semantic_classification = classification
+                break
+        report["semantic_scan"]["first_gameplay_critical_frame"] = (
+            first_semantic)
+        if first_semantic_classification is not None:
+            report["semantic_scan"]["first_gameplay_critical"] = (
+                first_semantic_classification)
 
     text = json.dumps(report, indent=1)
     print(text)

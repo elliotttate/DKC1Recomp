@@ -69,6 +69,9 @@ static const DWORD kWindowedStyle =
 #define DKC1_DARK_TEXT_DIM RGB(128, 134, 142)
 
 static uint8_t s_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
+static uint8_t s_aspect_wide_pixels[
+    kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
+static long s_aspect_wide_frame = -1;
 static BITMAPINFO s_bmi;
 static HWND s_window;
 static int s_running = 1;
@@ -582,6 +585,56 @@ static void ApplyWindowedSize(void) {
   InvalidateRect(s_window, NULL, FALSE);
 }
 
+/* Switch the presentation aspect without touching SNES state.  The renderer
+ * owns separate native/wide presentation history, while the host must update
+ * both its source pitch and DIB width before the next frame is drawn. */
+static void SetAspectMode(int widescreen) {
+  int requested = widescreen != 0;
+  if (Dkc1VideoIsWidescreen() == requested) return;
+
+  const int old_width = s_width;
+  if (old_width == kDkc1VideoWidescreenWidth) {
+    memcpy(s_aspect_wide_pixels, s_pixels, sizeof s_aspect_wide_pixels);
+    s_aspect_wide_frame = s_host_frame;
+  }
+  Dkc1VideoSetWidescreen(requested);
+  s_width = Dkc1VideoWidth();
+  s_bmi.bmiHeader.biWidth = s_width;
+
+  /* Keep a paused frame intelligible without running an extra emulation or
+   * PPU frame. Wide -> native crops the authentic center. Native -> wide
+   * centers that same frame over black until the next ordinary frame builds
+   * fresh margins. A temporary buffer avoids overlapping row-stride moves. */
+  if (s_width == kDkc1VideoWidescreenWidth &&
+      s_aspect_wide_frame == s_host_frame) {
+    /* A paused wide -> native -> wide comparison can restore the exact wide
+     * frame because no cartridge frame has elapsed in between. */
+    memcpy(s_pixels, s_aspect_wide_pixels, sizeof s_aspect_wide_pixels);
+  } else {
+    static uint8_t remapped[kDkc1VideoWidescreenWidth *
+                            kDkc1VideoHeight * 4];
+    const int copy_width = old_width < s_width ? old_width : s_width;
+    const int source_x = old_width > s_width ? (old_width - s_width) / 2 : 0;
+    const int dest_x = s_width > old_width ? (s_width - old_width) / 2 : 0;
+    memset(remapped, 0, sizeof remapped);
+    for (int y = 0; y < s_height; y++) {
+      memcpy(remapped + ((size_t)y * s_width + dest_x) * 4,
+             s_pixels + ((size_t)y * old_width + source_x) * 4,
+             (size_t)copy_width * 4);
+    }
+    memcpy(s_pixels, remapped,
+           (size_t)s_width * (size_t)s_height * 4);
+  }
+  Dkc1BeginDrawing(s_pixels, (size_t)s_width * 4);
+  ApplyWindowedSize();
+  snprintf(s_host_status, sizeof s_host_status,
+           "aspect changed to %s (%dx%d)",
+           requested ? "widescreen 16:9" : "native 4:3",
+           s_width, s_height);
+  UpdateDebugTitle();
+  InvalidateRect(s_window, NULL, FALSE);
+}
+
 static void SetFullscreen(int enable) {
   if (!s_window || enable == s_fullscreen) return;
   s_fullscreen = enable;
@@ -778,6 +831,12 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           break;
         case kMenuFpsCounter:
           s_show_fps = !s_show_fps;
+          break;
+        case kMenuAspectNative:
+          SetAspectMode(0);
+          break;
+        case kMenuAspectWidescreen:
+          SetAspectMode(1);
           break;
         case kMenuLayerComposite: Dkc1DebugSetLayerMask(0xff); break;
         case kMenuLayerBg1: Dkc1DebugSetLayerMask(0x01); break;

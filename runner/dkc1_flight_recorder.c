@@ -264,6 +264,8 @@ int Dkc1FlightRecorderExport(long completed_frame,
       "  \"replay_frames\": %ld,\n"
       "  \"scene\": {\"mode\": %u, \"level\": %u, "
       "\"entrance\": %u},\n"
+      "  \"ppu\": {\"obj_range_over\": %s, "
+      "\"obj_time_over\": %s},\n"
       "  \"rom_sha256\": "
       "\"fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15\",\n"
       "  \"files\": {\n"
@@ -281,6 +283,8 @@ int Dkc1FlightRecorderExport(long completed_frame,
       (unsigned)(g_ram[0x0032] | ((uint16_t)g_ram[0x0033] << 8)),
       (unsigned)(g_ram[0x0030] | ((uint16_t)g_ram[0x0031] << 8)),
       (unsigned)(g_ram[0x003e] | ((uint16_t)g_ram[0x003f] << 8)),
+      g_ppu->rangeOver ? "true" : "false",
+      g_ppu->timeOver ? "true" : "false",
       anchor_hash, current_hash, input_hash, wram_hash, vram_hash,
       cgram_hash, wram_oam_hash, ppu_oam_hash);
   if (manifest_length <= 0 || (size_t)manifest_length >= sizeof manifest) {

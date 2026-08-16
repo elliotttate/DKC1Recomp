@@ -35,7 +35,22 @@ $env:DKC1_SAVESTATE_INPUT = (Resolve-Path -LiteralPath $snapshot).Path
 $env:DKC1_WIDESCREEN = '1'
 $env:DKC1_FLIGHT_RECORDER = '1'
 $env:DKC1_FLIGHT_RECORDER_DIR = Join-Path $repo 'build\visible-flight'
-$env:DKC1_SCRIPT = $null
+
+# This launcher is intentionally manual-only.  A parent terminal may still
+# carry variables from a deterministic route/differential run; leaving even
+# one of these set makes a visible play window silently replay old input or
+# stop at an old frame limit.
+foreach ($name in @(
+    'DKC1_SCRIPT',
+    'SNESRECOMP_INPUT_PLAY',
+    'DKC1_ROUTE_FRAME_LIMIT',
+    'DKC1_ROUTE_AUTOCLOSE_MS',
+    'DKC1_WRAM_DUMP',
+    'DKC1_WRAM_DUMP_DIR',
+    'DKC1_INPUT_RECORD',
+    'DKC1_SAVESTATE_OUTPUT')) {
+    [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+}
 if ($Trace) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $env:DKC1_WS_TRACE = Join-Path $repo "build\snapshot-$Anchor-$stamp.jsonl"

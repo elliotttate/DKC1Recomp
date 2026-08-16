@@ -1,5 +1,8 @@
 #include "dkc1_video.h"
 
+#include <stdlib.h>
+#include <string.h>
+
 #include "cpu_state.h"
 
 bool g_ws_active;
@@ -7,10 +10,53 @@ int g_ws_extra;
 static bool s_terrain_ready;
 static int s_presentation_bias;
 
+typedef struct Dkc1PlacedActorPhase {
+  uint16_t id;
+  uint16_t source;
+  bool stock_started;
+} Dkc1PlacedActorPhase;
+
+/* Normal actor indexes are the even values $02..$32.  This is host-only
+ * lifecycle state: no cartridge WRAM word is repurposed. */
+static Dkc1PlacedActorPhase s_placed_actor_phases[0x1a];
+static bool s_placed_actor_phases_seeded;
+
+typedef struct Dkc1PlacedActorContext {
+  uint16_t mode;
+  uint16_t level;
+  uint16_t entrance;
+} Dkc1PlacedActorContext;
+
+static Dkc1PlacedActorContext s_placed_actor_context;
+static bool s_placed_actor_context_valid;
+
+enum { kDkc1WramSize = 0x20000 };
+
+static uint8_t s_prefetch_wram[kDkc1WramSize];
+static bool s_prefetch_dispatch_active;
+
+static bool Dkc1PrefetchPhaseGuardEnabled(void) {
+  const char *value = getenv("DKC1_PREFETCH_PHASE_GUARD");
+  return value && value[0] == '1' && value[1] == '\0';
+}
+
+static void Dkc1VideoClearPlacedActorPhases(void) {
+  memset(s_placed_actor_phases, 0, sizeof s_placed_actor_phases);
+  s_placed_actor_phases_seeded = false;
+  s_prefetch_dispatch_active = false;
+}
+
+void Dkc1VideoResetPlacedActorPhases(void) {
+  Dkc1VideoClearPlacedActorPhases();
+  memset(&s_placed_actor_context, 0, sizeof s_placed_actor_context);
+  s_placed_actor_context_valid = false;
+}
+
 void Dkc1VideoSetWidescreen(bool enabled) {
   if (g_ws_active != enabled) {
     s_terrain_ready = false;
     s_presentation_bias = 0;
+    Dkc1VideoResetPlacedActorPhases();
   }
   g_ws_active = enabled;
   g_ws_extra = enabled ? kDkc1VideoWidescreenExtra : 0;
@@ -21,6 +67,10 @@ bool Dkc1VideoIsWidescreen(void) {
 }
 
 void Dkc1VideoSetTerrainReady(bool ready) {
+  /* Presentation calibration can reject one frame without changing the
+   * cartridge's object context.  Keep placed-actor lifecycle history across
+   * that soft fallback; otherwise an already-prefetched actor is reseeded as
+   * stock-started and advances before the native scanner reaches it. */
   s_terrain_ready = g_ws_active && ready;
 }
 
@@ -87,6 +137,201 @@ uint16_t Dkc1VideoPromoteOamSizeMask(uint16_t size_mask,
   if (Dkc1VideoTerrainReady() && (screen_x & 0x0100u))
     return (uint16_t)(size_mask | (size_mask >> 1));
   return size_mask;
+}
+
+uint16_t Dkc1VideoMergeOamSizeAndXHigh(uint16_t existing_word,
+                                      uint16_t size_mask,
+                                      uint16_t screen_x) {
+  if (!Dkc1VideoTerrainReady())
+    return (uint16_t)(existing_word | size_mask);
+
+  /* DATA_80A545 supplies one of the odd bits in 0xAAAA (the large-size
+   * member of an OAM pair). PromoteOamSizeMask may already have mirrored it
+   * into the neighboring even X-high bit, so first recover size bits only.
+   * Clearing before setting is essential: a prior same-frame OAM user can
+   * leave X-high=1 even though this rope's true 9-bit X is below 256. */
+  const uint16_t size_bits = (uint16_t)(size_mask & 0xaaaau);
+  const uint16_t x_high_bits = (uint16_t)(size_bits >> 1);
+  uint16_t merged = (uint16_t)((existing_word & ~x_high_bits) | size_bits);
+  if (screen_x & 0x0100u)
+    merged = (uint16_t)(merged | x_high_bits);
+  return merged;
+}
+
+static bool Dkc1UnsignedInside(uint16_t value, uint16_t left,
+                               uint16_t right) {
+  return left <= right ? value >= left && value <= right
+                       : value >= left || value <= right;
+}
+
+static uint16_t Dkc1ReadWram16(const uint8_t *wram, uint16_t address) {
+  return (uint16_t)(wram[address] |
+                    ((uint16_t)wram[(uint16_t)(address + 1u)] << 8));
+}
+
+static void Dkc1VideoObservePlacedActorContext(const uint8_t *wram) {
+  if (!wram)
+    return;
+
+  Dkc1PlacedActorContext current;
+  current.mode = Dkc1ReadWram16(wram, 0x0032u);
+  current.level = Dkc1ReadWram16(wram, 0x0030u);
+  current.entrance = Dkc1ReadWram16(wram, 0x003eu);
+  if (s_placed_actor_context_valid &&
+      current.mode == s_placed_actor_context.mode &&
+      current.level == s_placed_actor_context.level &&
+      current.entrance == s_placed_actor_context.entrance)
+    return;
+
+  /* A real gameplay-context change starts a new allocation history.  This is
+   * deliberately independent of PPU/BG calibration identity: BGMODE, BGSC,
+   * screen-mask, or soft tile-agreement changes must not reseed actors. */
+  Dkc1VideoClearPlacedActorPhases();
+  s_placed_actor_context = current;
+  s_placed_actor_context_valid = true;
+}
+
+void Dkc1VideoObserveActorPool(const uint8_t *wram) {
+  Dkc1VideoObservePlacedActorContext(wram);
+  if (!wram || !s_placed_actor_phases_seeded)
+    return;
+
+  /* Observe the completed previous frame before this frame's scanner can
+   * allocate anything. Dispatch-only tracking cannot see a free slot because
+   * empty actors are not dispatched; without this boundary pass, reuse of the
+   * same slot for the same ID/source pair inherits stock_started=true and
+   * advances the new actor during the widened-only prefetch interval. */
+  for (uint16_t actor_index = 0x0002u; actor_index <= 0x0032u;
+       actor_index = (uint16_t)(actor_index + 2u)) {
+    const uint16_t id = (uint16_t)(wram[0x0d45u + actor_index] |
+        ((uint16_t)wram[0x0d46u + actor_index] << 8));
+    if (id != 0)
+      continue;
+    Dkc1PlacedActorPhase *phase =
+        &s_placed_actor_phases[(actor_index - 2u) >> 1];
+    phase->id = 0;
+    phase->source = 0;
+    phase->stock_started = false;
+  }
+}
+
+bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu) {
+  if (!cpu || !Dkc1VideoIsWidescreen())
+    return true;
+
+  Dkc1VideoObservePlacedActorContext(cpu->ram);
+
+  /* A loaded snapshot is left-censored: actors already present may have run
+   * for hundreds of frames before host-only phase tracking existed.  Seed
+   * the whole normal pool on the first dispatch after a reset and treat
+   * those identities as started.  Only identities allocated afterwards are
+   * eligible for the widened-prefetch delay. */
+  if (!s_placed_actor_phases_seeded) {
+    for (uint16_t seeded_index = 0x0002u; seeded_index <= 0x0032u;
+         seeded_index = (uint16_t)(seeded_index + 2u)) {
+      const unsigned seeded_ordinal =
+          (unsigned)((seeded_index - 2u) >> 1);
+      Dkc1PlacedActorPhase *seeded =
+          &s_placed_actor_phases[seeded_ordinal];
+      seeded->id = cpu_read16(
+          cpu, 0x7e, (uint16_t)(0x0d45u + seeded_index));
+      seeded->source = cpu_read16(
+          cpu, 0x7e, (uint16_t)(0x15fdu + seeded_index));
+      seeded->stock_started = seeded->id != 0;
+    }
+    s_placed_actor_phases_seeded = true;
+  }
+
+  const uint16_t actor_index = cpu_read16(
+      cpu, 0x00, (uint16_t)(cpu->D + 0x0082u));
+  if (actor_index < 0x0002u || actor_index > 0x0032u ||
+      (actor_index & 1u) != 0)
+    return true;
+
+  const unsigned ordinal = (unsigned)((actor_index - 2u) >> 1);
+  Dkc1PlacedActorPhase *phase = &s_placed_actor_phases[ordinal];
+  const uint16_t id = cpu_read16(
+      cpu, 0x7e, (uint16_t)(0x0d45u + actor_index));
+  const uint16_t source = cpu_read16(
+      cpu, 0x7e, (uint16_t)(0x15fdu + actor_index));
+  if (phase->id != id || phase->source != source) {
+    phase->id = id;
+    phase->source = source;
+    /* A new identity allocated while widening is inactive came from the
+     * authentic stock scanner and is immediately safe to run.  A new
+     * identity allocated while widening is active may be margin-prefetched
+     * and must pass the reconstructed stock interval below. */
+    phase->stock_started = !Dkc1VideoTerrainReady();
+  }
+
+  /* Kongs, generated effects, grouped children, and non-authored actor slots
+   * do not use the ordinary eight-byte source-record window. */
+  if (id == 0 || source >= 0x0100u) {
+    phase->stock_started = true;
+    return true;
+  }
+
+  const uint16_t entrance = cpu_read16(cpu, 0x7e, 0x003eu);
+  if (entrance >= 0x00e6u) {
+    phase->stock_started = true;
+    return true;
+  }
+  const uint16_t table = cpu_read16(
+      cpu, 0xbd, (uint16_t)(0x8000u + entrance * 2u));
+  const uint16_t record = (uint16_t)(table + source * 8u);
+  const uint16_t record_type = cpu_read16(cpu, 0xbd, record);
+  if (record_type != 0x0001u) {
+    phase->stock_started = true;
+    return true;
+  }
+
+  const uint16_t current_left = cpu_read16(
+      cpu, 0x00, (uint16_t)(cpu->D + 0x00efu));
+  const uint16_t current_right = cpu_read16(
+      cpu, 0x00, (uint16_t)(cpu->D + 0x00f1u));
+  uint16_t stock_left = current_left;
+  uint16_t stock_right = current_right;
+  if (Dkc1VideoTerrainReady()) {
+    const int extra = g_ws_extra;
+    const int bias = s_presentation_bias;
+    if (extra <= 0 || bias < -extra || bias > extra) {
+      phase->stock_started = true;
+      return true;
+    }
+    stock_left = (uint16_t)(current_left + extra - bias);
+    stock_right = (uint16_t)(current_right - extra - bias);
+  }
+  const uint16_t source_x = cpu_read16(
+      cpu, 0xbd, (uint16_t)(record + 2u));
+
+  if (!phase->stock_started &&
+      Dkc1UnsignedInside(source_x, stock_left, stock_right))
+    phase->stock_started = true;
+  return phase->stock_started;
+}
+
+bool Dkc1VideoBeginPlacedActorDispatch(struct CpuState *cpu) {
+  /* A prefetched actor is allowed to execute its authentic routine so the
+   * later cartridge presentation pass can observe its authored pose. The
+   * matching end hook restores the complete 128 KiB WRAM image, preventing
+   * movement, collision, spawns, sound-command staging, scratch values, and
+   * object bookkeeping from escaping before stock eligibility. This is a
+   * transaction around one dispatch, not an alternate actor implementation. */
+  s_prefetch_dispatch_active = false;
+  if (!Dkc1PrefetchPhaseGuardEnabled() || !cpu ||
+      Dkc1VideoShouldRunPlacedActor(cpu))
+    return false;
+
+  memcpy(s_prefetch_wram, cpu->ram, kDkc1WramSize);
+  s_prefetch_dispatch_active = true;
+  return true;
+}
+
+void Dkc1VideoEndPlacedActorDispatch(struct CpuState *cpu) {
+  if (!cpu || !s_prefetch_dispatch_active)
+    return;
+  memcpy(cpu->ram, s_prefetch_wram, kDkc1WramSize);
+  s_prefetch_dispatch_active = false;
 }
 
 bool Dkc1VideoPrepareType5ChildRetry(struct CpuState *cpu) {

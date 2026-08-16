@@ -106,6 +106,7 @@ static void PrintShadow(FILE *out, const WsShadowMarginStat *before,
       "\"prefill_seed\":%llu,\"prefill_refresh\":%llu,"
       "\"west_fold\":%llu,\"east_fold\":%llu,"
       "\"west_blank\":%llu,\"east_blank\":%llu,"
+      "\"west_continuation\":%llu,\"east_continuation\":%llu,"
       "\"west_raw\":%llu,\"east_raw\":%llu}",
       (unsigned long long)Delta(before->westHit, after->westHit),
       (unsigned long long)Delta(before->westMiss, after->westMiss),
@@ -117,6 +118,10 @@ static void PrintShadow(FILE *out, const WsShadowMarginStat *before,
       (unsigned long long)Delta(before->eastFold, after->eastFold),
       (unsigned long long)Delta(before->westBlank, after->westBlank),
       (unsigned long long)Delta(before->eastBlank, after->eastBlank),
+      (unsigned long long)Delta(before->westRawContinuation,
+                                after->westRawContinuation),
+      (unsigned long long)Delta(before->eastRawContinuation,
+                                after->eastRawContinuation),
       (unsigned long long)Delta(before->westRawFallback,
                                 after->westRawFallback),
       (unsigned long long)Delta(before->eastRawFallback,
@@ -137,6 +142,9 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
   const uint64_t bg2_right = HashShadowMargin(frame, 1, 1);
   const uint64_t vram_hash = Fnv1a(
       g_ppu->vram, sizeof g_ppu->vram, UINT64_C(1469598103934665603));
+  const uint64_t cgram_hash = Fnv1a(
+      g_ppu->cgram, sizeof g_ppu->cgram,
+      UINT64_C(1469598103934665603));
   uint64_t ppu_oam_hash = Fnv1a(
       g_ppu->oam, sizeof g_ppu->oam, UINT64_C(1469598103934665603));
   ppu_oam_hash = Fnv1a(g_ppu->highOam, sizeof g_ppu->highOam,
@@ -156,7 +164,7 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"ppu\":{\"mode\":%u,\"bgmode\":%u,\"inidisp\":%u,"
       "\"main\":%u,\"sub\":%u,\"bgsc\":[%u,%u,%u,%u],"
       "\"h\":[%u,%u,%u,%u],\"v\":[%u,%u,%u,%u],"
-      "\"wide_mask\":%u,\"repeat_mask\":%u,"
+      "\"wide_mask\":%u,\"render_mask\":%u,\"repeat_mask\":%u,"
       "\"terrain_layer\":%d},"
       "\"calibration\":{\"horizontal\":[%d,%d],"
       "\"vertical\":[%d,%d],\"selected\":%d,\"grace\":%d},"
@@ -189,6 +197,7 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       (unsigned)g_ppu->vScroll[0], (unsigned)g_ppu->vScroll[1],
       (unsigned)g_ppu->vScroll[2], (unsigned)g_ppu->vScroll[3],
       (unsigned)frame->wide_layer_mask,
+      (unsigned)frame->render_layer_mask,
       (unsigned)frame->repeat_layer_mask, frame->terrain_layer,
       frame->calibration_matches[0], frame->calibration_decodable[0],
       frame->calibration_matches[1], frame->calibration_decodable[1],
@@ -215,12 +224,14 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"center\":\"%016llx\",\"right\":\"%016llx\","
       "\"bg1_left\":\"%016llx\",\"bg1_right\":\"%016llx\","
       "\"bg2_left\":\"%016llx\",\"bg2_right\":\"%016llx\","
-      "\"vram\":\"%016llx\",\"ppu_oam\":\"%016llx\","
+      "\"vram\":\"%016llx\",\"cgram\":\"%016llx\","
+      "\"ppu_oam\":\"%016llx\","
       "\"wram_oam\":\"%016llx\"}}\n",
       (unsigned long long)left_hash, (unsigned long long)center_hash,
       (unsigned long long)right_hash, (unsigned long long)bg1_left,
       (unsigned long long)bg1_right, (unsigned long long)bg2_left,
       (unsigned long long)bg2_right, (unsigned long long)vram_hash,
+      (unsigned long long)cgram_hash,
       (unsigned long long)ppu_oam_hash, (unsigned long long)wram_oam_hash);
   fflush(s_trace_file);
 }

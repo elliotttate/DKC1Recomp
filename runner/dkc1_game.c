@@ -13,6 +13,7 @@
 #include "snes/ws_shadow.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -50,6 +51,10 @@ enum {
 
 static void Dkc1RunOneFrame(void) {
   bool first_frame = !s_cpu_initialized;
+  /* This must precede the cartridge scanner/allocation pass. It records free
+   * actor slots left by the completed prior frame so same-ID/source reuse is
+   * recognized as a new placed-object generation. */
+  Dkc1VideoObserveActorPool(g_ram);
   if (s_next_frame_master == 0) {
     s_next_frame_master =
         g_cpu.master_cycles + kDkc1NtscFrameMasterClocks;
@@ -132,6 +137,7 @@ static void Dkc1OnStateLoaded(uint32_t version) {
   g_snes->beamMasterLast = g_cpu.master_cycles;
   interp_bridge_set_master_deadline(0);
   Dkc1ResetWidescreenShadow();
+  Dkc1VideoResetPlacedActorPhases();
 }
 
 static const RtlGameInfo kDkc1GameInfo = {
@@ -150,7 +156,9 @@ const RtlGameInfo *Dkc1GameInfo(void) {
 }
 
 void Dkc1BeginDrawing(uint8_t *pixels, size_t pitch) {
-  PpuBeginDrawing(g_ppu, pixels, pitch, kPpuRenderFlags_NewRenderer);
+  PpuBeginDrawing(g_ppu, pixels, pitch,
+                  kPpuRenderFlags_NewRenderer |
+                      kPpuRenderFlags_WidescreenSpriteBudget);
   const char *provenance = getenv("DKC1_WS_PROVENANCE");
   WsShadowDebugSetProvenanceEnabled(
       provenance && *provenance && *provenance != '0');
@@ -170,6 +178,485 @@ void Dkc1DebugSetProvenanceOverlay(int enabled) {
 
 int Dkc1DebugProvenanceOverlay(void) {
   return WsShadowDebugProvenanceEnabled() ? 1 : 0;
+}
+
+/* ---- SuperZSNES v0.230 portable-state bridge --------------------------
+ *
+ * BinaryFormatter is kept out of the native runtime.  The companion exporter
+ * turns the source state into exact-size raw memories plus small scalar JSON
+ * objects.  This reader accepts only the exporter format, only a frame-boundary
+ * state with inactive general DMA, and only a PC present in the recomp dispatch
+ * table.  A rejected bundle never silently falls back to a partial import. */
+
+static int Dkc1ExternalError(char *error, size_t size, const char *message) {
+  if (error && size) snprintf(error, size, "%s", message ? message : "error");
+  return 0;
+}
+
+static int Dkc1ReadExternalFile(const char *directory, const char *name,
+                                uint8_t *data, size_t size) {
+  char path[1024];
+  if (!directory || !name ||
+      snprintf(path, sizeof path, "%s\\%s", directory, name) < 0)
+    return 0;
+  FILE *stream = fopen(path, "rb");
+  if (!stream) return 0;
+  int ok = fread(data, 1, size, stream) == size && fgetc(stream) == EOF;
+  fclose(stream);
+  return ok;
+}
+
+static char *Dkc1ReadExternalText(const char *directory, const char *name,
+                                  size_t maximum) {
+  char path[1024];
+  if (!directory || !name ||
+      snprintf(path, sizeof path, "%s\\%s", directory, name) < 0)
+    return NULL;
+  FILE *stream = fopen(path, "rb");
+  if (!stream) return NULL;
+  if (fseek(stream, 0, SEEK_END) != 0) { fclose(stream); return NULL; }
+  long length = ftell(stream);
+  if (length < 0 || (size_t)length > maximum ||
+      fseek(stream, 0, SEEK_SET) != 0) {
+    fclose(stream);
+    return NULL;
+  }
+  char *text = (char *)malloc((size_t)length + 1);
+  if (!text) { fclose(stream); return NULL; }
+  int ok = fread(text, 1, (size_t)length, stream) == (size_t)length &&
+           fgetc(stream) == EOF;
+  fclose(stream);
+  if (!ok) { free(text); return NULL; }
+  text[length] = '\0';
+  return text;
+}
+
+static int Dkc1JsonI64(const char *json, const char *field, int64_t *value) {
+  char pattern[128];
+  if (!json || !field || !value ||
+      snprintf(pattern, sizeof pattern, "\"%s\":", field) < 0)
+    return 0;
+  const char *at = strstr(json, pattern);
+  if (!at || strstr(at + strlen(pattern), pattern)) return 0;
+  at += strlen(pattern);
+  char *end = NULL;
+  long long parsed = strtoll(at, &end, 10);
+  if (end == at || (*end != ',' && *end != '}')) return 0;
+  *value = (int64_t)parsed;
+  return 1;
+}
+
+static int Dkc1JsonBool(const char *json, const char *field, int *value) {
+  char pattern[128];
+  if (!json || !field || !value ||
+      snprintf(pattern, sizeof pattern, "\"%s\":", field) < 0)
+    return 0;
+  const char *at = strstr(json, pattern);
+  if (!at || strstr(at + strlen(pattern), pattern)) return 0;
+  at += strlen(pattern);
+  if (!strncmp(at, "true", 4)) { *value = 1; return 1; }
+  if (!strncmp(at, "false", 5)) { *value = 0; return 1; }
+  return 0;
+}
+
+static int Dkc1JsonByteArray(const char *json, const char *field,
+                             uint8_t *values, size_t count) {
+  char pattern[128];
+  if (!json || !field || !values ||
+      snprintf(pattern, sizeof pattern, "\"%s\":[", field) < 0)
+    return 0;
+  const char *at = strstr(json, pattern);
+  if (!at || strstr(at + strlen(pattern), pattern)) return 0;
+  at += strlen(pattern);
+  for (size_t i = 0; i < count; i++) {
+    char *end = NULL;
+    unsigned long parsed = strtoul(at, &end, 10);
+    if (end == at || parsed > 255) return 0;
+    values[i] = (uint8_t)parsed;
+    if (i + 1 < count) {
+      if (*end != ',') return 0;
+      at = end + 1;
+    } else if (*end != ']') {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static uint16_t Dkc1ExternalLe16(const uint8_t *p) {
+  return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+}
+
+static int Dkc1ExternalGetI64(const char *json, const char *field,
+                              int64_t *value, char *error, size_t size) {
+  if (Dkc1JsonI64(json, field, value)) return 1;
+  char message[256];
+  snprintf(message, sizeof message, "missing or ambiguous JSON integer: %s",
+           field);
+  return Dkc1ExternalError(error, size, message);
+}
+
+static uint8_t Dkc1ExternalCpuFlags(const char *cpu_json, int *ok) {
+  static const char *names[8] = {
+    "flagC", "flagZ", "flagI", "flagD", "flagX", "flagM", "flagV", "flagN"
+  };
+  uint8_t p = 0;
+  *ok = 1;
+  for (int bit = 0; bit < 8; bit++) {
+    int value = 0;
+    if (!Dkc1JsonBool(cpu_json, names[bit], &value)) { *ok = 0; return 0; }
+    if (value) p |= (uint8_t)(1u << bit);
+  }
+  return p;
+}
+
+static int Dkc1ApplyExternalPpu(const uint8_t *io, const uint8_t *cgram,
+                                const uint8_t *oam, const uint8_t *vram,
+                                const char *ppu_json, int frame,
+                                char *error, size_t error_size) {
+  Ppu *ppu = g_snes->ppu;
+  int64_t value = 0;
+  int64_t dma_active = 0;
+  if (!Dkc1ExternalGetI64(ppu_json, "_dmaActive", &dma_active,
+                          error, error_size)) return 0;
+  if (dma_active != 0)
+    return Dkc1ExternalError(error, error_size,
+                             "active general DMA is not importable safely");
+
+  ppu_reset(ppu);
+  ppu->inidisp = io[0x100];
+  ppu->obsel = io[0x101];
+  ppu->oamaddl = io[0x102];
+  ppu->oamaddh = io[0x103];
+  ppu->bgmode = io[0x105];
+  ppu->mosaic = io[0x106];
+  memcpy(ppu->bgXsc, io + 0x107, 4);
+  ppu->bgTileAdr = Dkc1ExternalLe16(io + 0x10b);
+  ppu->m7sel = io[0x11a];
+  ppu->setini = io[0x133];
+  ppu->windowsel = (uint32_t)io[0x123] |
+                   ((uint32_t)io[0x124] << 8) |
+                   ((uint32_t)io[0x125] << 16);
+  ppu->window1left = io[0x126];
+  ppu->window1right = io[0x127];
+  ppu->window2left = io[0x128];
+  ppu->window2right = io[0x129];
+  ppu->wbgobjlog = Dkc1ExternalLe16(io + 0x12a);
+  ppu->screenEnabled[0] = io[0x12c];
+  ppu->screenEnabled[1] = io[0x12d];
+  ppu->screenWindowed[0] = io[0x12e];
+  ppu->screenWindowed[1] = io[0x12f];
+  ppu->cgwsel = io[0x130];
+  ppu->cgadsub = io[0x131];
+
+#define DKC1_IMPORT_PPU_I64(name, target)                                    \
+  do {                                                                        \
+    if (!Dkc1ExternalGetI64(ppu_json, name, &value, error, error_size))       \
+      return 0;                                                               \
+    target = value;                                                           \
+  } while (0)
+  DKC1_IMPORT_PPU_I64("_scroll1X", ppu->hScroll[0]);
+  DKC1_IMPORT_PPU_I64("_scroll1Y", ppu->vScroll[0]);
+  DKC1_IMPORT_PPU_I64("_scroll2X", ppu->hScroll[1]);
+  DKC1_IMPORT_PPU_I64("_scroll2Y", ppu->vScroll[1]);
+  DKC1_IMPORT_PPU_I64("_scroll3X", ppu->hScroll[2]);
+  DKC1_IMPORT_PPU_I64("_scroll3Y", ppu->vScroll[2]);
+  DKC1_IMPORT_PPU_I64("_scroll4X", ppu->hScroll[3]);
+  DKC1_IMPORT_PPU_I64("_scroll4Y", ppu->vScroll[3]);
+  DKC1_IMPORT_PPU_I64("_m7A", ppu->m7matrix[0]);
+  DKC1_IMPORT_PPU_I64("_m7B", ppu->m7matrix[1]);
+  DKC1_IMPORT_PPU_I64("_m7C", ppu->m7matrix[2]);
+  DKC1_IMPORT_PPU_I64("_m7D", ppu->m7matrix[3]);
+  DKC1_IMPORT_PPU_I64("_m7X", ppu->m7matrix[4]);
+  DKC1_IMPORT_PPU_I64("_m7Y", ppu->m7matrix[5]);
+  DKC1_IMPORT_PPU_I64("_fixedColor", ppu->fixedColor);
+  DKC1_IMPORT_PPU_I64("_vramReadLatch", ppu->vramReadBuffer);
+  DKC1_IMPORT_PPU_I64("_ophct", ppu->hCount);
+  DKC1_IMPORT_PPU_I64("_opvct", ppu->vCount);
+  DKC1_IMPORT_PPU_I64("_bgofs_latch", ppu->scrollPrev);
+  DKC1_IMPORT_PPU_I64("_bghofs_latch", ppu->scrollPrev2);
+#undef DKC1_IMPORT_PPU_I64
+
+  ppu->vramPointer = Dkc1ExternalLe16(io + 0x116);
+  ppu->vramIncrementOnHigh = (io[0x115] & 0x80) != 0;
+  ppu->vramRemapMode = (io[0x115] >> 2) & 3;
+  ppu->vramIncrement = (io[0x115] & 3) == 0 ? 1 :
+                       (io[0x115] & 3) == 1 ? 32 : 128;
+  ppu->cgramPointer = io[0x121];
+  ppu->cgramSecondWrite = false;
+  ppu->oamAdr = ppu->oamaddl;
+  ppu->oamInHigh = (ppu->oamaddh & 1) != 0;
+  ppu->oamSecondWrite = false;
+  ppu->m7prev = ppu->scrollPrev;
+  ppu->evenFrame = (frame & 1) == 0;
+  ppu->frameOverscan = (ppu->setini & 4) != 0;
+  ppu->frameInterlace = (ppu->setini & 1) != 0;
+  memcpy(ppu->cgram, cgram, 512);
+  memcpy(ppu->oam, oam, 512);
+  memcpy(ppu->highOam, oam + 512, 32);
+  memcpy(ppu->vram, vram, 65536);
+  return 1;
+}
+
+static int Dkc1ApplyExternalApu(const uint8_t *spc_ram,
+                                const char *cpu_json,
+                                const char *spc_json,
+                                const char *dsp_json,
+                                char *error, size_t error_size) {
+  Apu *apu = g_snes->apu;
+  int64_t value = 0;
+  memcpy(apu->ram, spc_ram, 65536);
+
+#define DKC1_IMPORT_SPC_I64(name, target)                                    \
+  do {                                                                        \
+    if (!Dkc1ExternalGetI64(spc_json, name, &value, error, error_size))       \
+      return 0;                                                               \
+    target = value;                                                           \
+  } while (0)
+  DKC1_IMPORT_SPC_I64("regA", apu->spc->a);
+  DKC1_IMPORT_SPC_I64("regX", apu->spc->x);
+  DKC1_IMPORT_SPC_I64("regY", apu->spc->y);
+  DKC1_IMPORT_SPC_I64("regS", apu->spc->sp);
+  DKC1_IMPORT_SPC_I64("regPC", apu->spc->pc);
+  DKC1_IMPORT_SPC_I64("dspRegister", apu->dspAdr);
+  DKC1_IMPORT_SPC_I64("spc700TotalCycleCounter", value);
+  uint64_t spc_cycles = (uint64_t)value;
+  int64_t control = 0;
+  DKC1_IMPORT_SPC_I64("controlPort", control);
+  apu->romReadable = (control & 0x80) != 0;
+  for (int i = 0; i < 3; i++) {
+    char target_name[32], divider_name[32], counter_name[32];
+    snprintf(target_name, sizeof target_name, "timer%dtarget", i);
+    snprintf(divider_name, sizeof divider_name, "timer%dstage2", i);
+    snprintf(counter_name, sizeof counter_name, "timer%dstage3", i);
+    DKC1_IMPORT_SPC_I64(target_name, value);
+    apu->timer[i].target = value == 256 ? 0 : (uint8_t)value;
+    DKC1_IMPORT_SPC_I64(divider_name, value);
+    apu->timer[i].divider = (uint8_t)value;
+    DKC1_IMPORT_SPC_I64(counter_name, value);
+    apu->timer[i].counter = (uint8_t)value & 0x0f;
+    apu->timer[i].enabled = (control & (1 << i)) != 0;
+    apu->timer[i].cycles = (uint8_t)((i == 2 ? 15 : 127) -
+        (spc_cycles & (uint64_t)(i == 2 ? 15 : 127)));
+  }
+#undef DKC1_IMPORT_SPC_I64
+
+  static const char *spc_flags[8] = {
+    "flagC", "flagZ", "flagI", "flagH", "flagB", "flagP", "flagV", "flagN"
+  };
+  bool *spc_targets[8] = {
+    &apu->spc->c, &apu->spc->z, &apu->spc->i, &apu->spc->h,
+    &apu->spc->b, &apu->spc->p, &apu->spc->v, &apu->spc->n
+  };
+  for (int i = 0; i < 8; i++) {
+    int flag = 0;
+    if (!Dkc1JsonBool(spc_json, spc_flags[i], &flag))
+      return Dkc1ExternalError(error, error_size, "missing SPC flag");
+    *spc_targets[i] = flag != 0;
+  }
+  apu->spc->stopped = false;
+  apu->cpuCyclesLeft = 0;
+  apu->cycles = (uint32_t)spc_cycles;
+  apu->portClock = spc_cycles;
+  apu_clearPortQueue(apu);
+
+  static const char *in_names[4] = {
+    "spcPort2140", "spcPort2141", "spcPort2142", "spcPort2143"
+  };
+  static const char *out_names[4] = {
+    "spcPortf4", "spcPortf5", "spcPortf6", "spcPortf7"
+  };
+  for (int i = 0; i < 4; i++) {
+    if (!Dkc1ExternalGetI64(cpu_json, in_names[i], &value, error, error_size))
+      return 0;
+    apu->inPorts[i] = (uint8_t)value;
+    if (!Dkc1ExternalGetI64(cpu_json, out_names[i], &value, error, error_size))
+      return 0;
+    apu->outPorts[i] = (uint8_t)value;
+  }
+
+  uint8_t dsp_values[128];
+  if (!Dkc1JsonByteArray(dsp_json, "dspValues", dsp_values,
+                         sizeof dsp_values))
+    return Dkc1ExternalError(error, error_size,
+                             "invalid DSP register array");
+  dsp_reset(apu->dsp);
+  for (int i = 0; i < 128; i++) dsp_write(apu->dsp, (uint8_t)i, dsp_values[i]);
+  return 1;
+}
+
+int Dkc1ImportSuperZsnesState(const char *directory,
+                              char *error, size_t error_size) {
+  enum { kIoSize = 16384, kWramSize = 131072 };
+  uint8_t *wram = (uint8_t *)malloc(kWramSize);
+  uint8_t *spc = (uint8_t *)malloc(65536);
+  uint8_t *vram = (uint8_t *)malloc(65536);
+  uint8_t *io = (uint8_t *)malloc(kIoSize);
+  uint8_t cgram[512], oam[544];
+  char *manifest = NULL, *master = NULL, *cpu = NULL, *spc_json = NULL;
+  char *ppu = NULL, *dsp = NULL;
+  int ok = 0;
+  if (!wram || !spc || !vram || !io) {
+    Dkc1ExternalError(error, error_size, "out of memory importing state");
+    goto done;
+  }
+  manifest = Dkc1ReadExternalText(directory, "manifest.json", 65536);
+  master = Dkc1ReadExternalText(directory, "master.json", 65536);
+  cpu = Dkc1ReadExternalText(directory, "cpu65816.json", 65536);
+  spc_json = Dkc1ReadExternalText(directory, "spc700.json", 65536);
+  ppu = Dkc1ReadExternalText(directory, "ppu.json", 65536);
+  dsp = Dkc1ReadExternalText(directory, "dsp.json", 1024 * 1024);
+  if (!manifest || !master || !cpu || !spc_json || !ppu || !dsp ||
+      !strstr(manifest, "\"format\":\"superzsnes-v0230-portable-state\"") ||
+      !strstr(manifest, "\"version\":1") ||
+      !Dkc1ReadExternalFile(directory, "wram.bin", wram, kWramSize) ||
+      !Dkc1ReadExternalFile(directory, "spc-ram.bin", spc, 65536) ||
+      !Dkc1ReadExternalFile(directory, "vram.bin", vram, 65536) ||
+      !Dkc1ReadExternalFile(directory, "io-registers.bin", io, kIoSize) ||
+      !Dkc1ReadExternalFile(directory, "cgram.bin", cgram, sizeof cgram) ||
+      !Dkc1ReadExternalFile(directory, "oam.bin", oam, sizeof oam)) {
+    Dkc1ExternalError(error, error_size,
+                      "bundle is incomplete or has the wrong format");
+    goto done;
+  }
+
+  int64_t frame = 0, reg_a = 0, reg_x = 0, reg_y = 0, reg_s = 0;
+  int64_t reg_d = 0, reg_db = 0, reg_pb = 0, reg_pc = 0, total_cycles = 0;
+  if (!Dkc1ExternalGetI64(master, "_curFrameNo", &frame, error, error_size) ||
+      !Dkc1ExternalGetI64(cpu, "regA", &reg_a, error, error_size) ||
+      !Dkc1ExternalGetI64(cpu, "regX", &reg_x, error, error_size) ||
+      !Dkc1ExternalGetI64(cpu, "regY", &reg_y, error, error_size) ||
+      !Dkc1ExternalGetI64(cpu, "regS", &reg_s, error, error_size) ||
+      !Dkc1ExternalGetI64(cpu, "regD", &reg_d, error, error_size) ||
+      !Dkc1ExternalGetI64(cpu, "regDB", &reg_db, error, error_size) ||
+      !Dkc1ExternalGetI64(cpu, "regPB", &reg_pb, error, error_size) ||
+      !Dkc1ExternalGetI64(cpu, "regPC", &reg_pc, error, error_size) ||
+      !Dkc1ExternalGetI64(cpu, "totalCycles", &total_cycles,
+                          error, error_size)) goto done;
+  if (frame < 0 || reg_pc < 0 || reg_pc > 0xffff || total_cycles < 0) {
+    Dkc1ExternalError(error, error_size, "state contains invalid execution values");
+    goto done;
+  }
+  int flag_ok = 0;
+  uint8_t p = Dkc1ExternalCpuFlags(cpu, &flag_ok);
+  int e_flag = 0;
+  if (!flag_ok || !Dkc1JsonBool(cpu, "flagE", &e_flag)) {
+    Dkc1ExternalError(error, error_size, "state contains invalid CPU flags");
+    goto done;
+  }
+  uint32_t pc24 = (((uint32_t)reg_pb >> 16) & 0x7fu) << 16 |
+                  (uint16_t)reg_pc;
+
+  memcpy(g_ram, wram, kWramSize);
+  memset(&g_cpu, 0, sizeof g_cpu);
+  g_cpu.A = (uint16_t)reg_a;
+  g_cpu.X = (uint16_t)reg_x;
+  g_cpu.Y = (uint16_t)reg_y;
+  g_cpu.S = (uint16_t)reg_s;
+  g_cpu.D = (uint16_t)reg_d;
+  g_cpu.DB = (uint8_t)(reg_db >> 16);
+  g_cpu.PB = (uint8_t)(reg_pb >> 16);
+  g_cpu.P = p;
+  g_cpu.m_flag = (p >> 5) & 1;
+  g_cpu.x_flag = (p >> 4) & 1;
+  g_cpu.emulation = e_flag != 0;
+  cpu_p_to_mirrors(&g_cpu);
+  g_cpu.ram = g_ram;
+  g_cpu.master_cycles = (uint64_t)total_cycles;
+  g_cpu.cycles = g_cpu.master_cycles / 6;
+  g_cpu.coprocessor_master_cycles = g_cpu.master_cycles;
+  if (!cpu_dispatch_has_entry(&g_cpu, pc24)) {
+    Dkc1ExternalError(error, error_size,
+                      "saved CPU PC is absent from the recomp dispatch table");
+    goto done;
+  }
+
+  Cpu *mirror = g_snes->cpu;
+  mirror->a = g_cpu.A; mirror->x = g_cpu.X; mirror->y = g_cpu.Y;
+  mirror->sp = g_cpu.S; mirror->pc = (uint16_t)reg_pc;
+  mirror->dp = g_cpu.D; mirror->k = g_cpu.PB; mirror->db = g_cpu.DB;
+  mirror->c = (p & 1) != 0; mirror->z = (p & 2) != 0;
+  mirror->i = (p & 4) != 0; mirror->d = (p & 8) != 0;
+  mirror->xf = (p & 0x10) != 0; mirror->mf = (p & 0x20) != 0;
+  mirror->v = (p & 0x40) != 0; mirror->n = (p & 0x80) != 0;
+  mirror->e = e_flag != 0;
+
+  if (!Dkc1ApplyExternalApu(spc, cpu, spc_json, dsp, error, error_size) ||
+      !Dkc1ApplyExternalPpu(io, cgram, oam, vram, ppu, (int)frame,
+                            error, error_size)) goto done;
+
+  /* SuperZSNES stores the $2000-$5FFF I/O window at index
+   * (cpu_address - $2000).  PPU registers therefore begin at $0100,
+   * CPU control registers at $2200, and DMA registers at $2300.  Do not
+   * confuse this with the SNES register's low 12 bits: doing so silently
+   * reads the unused $2200 mirror for $4200 and leaves a WAI snapshot
+   * permanently parked because NMI appears disabled. */
+  enum {
+    kIoNmitimen = 0x2200,
+    kIoHtimeLo = 0x2207,
+    kIoHtimeHi = 0x2208,
+    kIoVtimeLo = 0x2209,
+    kIoVtimeHi = 0x220a,
+    kIoHdmaen = 0x220c,
+    kIoMemsel = 0x220d,
+    kIoDmaBase = 0x2300,
+  };
+
+  dma_reset(g_snes->dma);
+  for (int channel = 0; channel < 8; channel++) {
+    for (int reg = 0; reg < 16; reg++)
+      dma_write(g_snes->dma, (uint16_t)(channel * 16 + reg),
+                io[kIoDmaBase + channel * 16 + reg]);
+  }
+  int64_t hdma_transfer = 0, hdma_terminated = 0;
+  if (!Dkc1ExternalGetI64(ppu, "_doTransferHDMA", &hdma_transfer,
+                          error, error_size) ||
+      !Dkc1ExternalGetI64(ppu, "_terminatedHDMA", &hdma_terminated,
+                          error, error_size)) goto done;
+  for (int channel = 0; channel < 8; channel++) {
+    uint8_t bit = (uint8_t)(1u << channel);
+    g_snes->dma->channel[channel].hdmaActive =
+        (io[kIoHdmaen] & bit) != 0;
+    g_snes->dma->channel[channel].doTransfer = (hdma_transfer & bit) != 0;
+    g_snes->dma->channel[channel].terminated = (hdma_terminated & bit) != 0;
+  }
+  g_snesrecomp_last_hdmaen = io[kIoHdmaen];
+  g_memsel = io[kIoMemsel] & 1;
+
+  g_snes->hPos = 0;
+  g_snes->vPos = 0;
+  g_snes->nmiEnabled = (io[kIoNmitimen] & 0x80) != 0;
+  g_snes->vIrqEnabled = (io[kIoNmitimen] & 0x20) != 0;
+  g_snes->hIrqEnabled = (io[kIoNmitimen] & 0x10) != 0;
+  g_snes->autoJoyRead = (io[kIoNmitimen] & 1) != 0;
+  g_snes->hTimer =
+      (uint16_t)(io[kIoHtimeLo] | ((io[kIoHtimeHi] & 1) << 8));
+  g_snes->vTimer =
+      (uint16_t)(io[kIoVtimeLo] | ((io[kIoVtimeHi] & 1) << 8));
+  int64_t wram_address = 0;
+  if (!Dkc1ExternalGetI64(ppu, "_wramAddress", &wram_address,
+                          error, error_size)) goto done;
+  g_snes->ramAdr = (uint32_t)wram_address & 0x1ffffu;
+  g_snes->inVblank = true;
+  g_snes->inNmi = false;
+  g_snes->inIrq = false;
+
+  s_resume_pc = pc24;
+  s_cpu_initialized = true;
+  s_last_lle_result = 1;
+  s_next_frame_master = g_cpu.master_cycles + kDkc1NtscFrameMasterClocks;
+  snes_frame_counter = (int)frame;
+  g_apu_last_sync_master = g_cpu.master_cycles;
+  g_snes->beamMasterLast = g_cpu.master_cycles;
+  interp_bridge_set_master_deadline(0);
+  Dkc1ResetWidescreenShadow();
+  Dkc1VideoResetPlacedActorPhases();
+  ok = 1;
+
+done:
+  free(wram); free(spc); free(vram); free(io);
+  free(manifest); free(master); free(cpu); free(spc_json); free(ppu); free(dsp);
+  return ok;
 }
 
 /* ---- presentation-camera widescreen ------------------------------------
@@ -252,6 +739,7 @@ static void Dkc1ApplyProvenanceOverlay(uint8_t wide_layer_mask) {
       0x0000d8ffu, /* ROM prefill: cyan */
       0x00e000d0u, /* periodic fold: magenta */
       0x00707070u, /* verified blank: gray */
+      0x00ff8020u, /* valid 64-column raw continuation: blue */
       0x00ff2020u, /* raw circular-VRAM fallback: red */
       0x00ffd020u, /* native edge repeat: yellow */
   };
@@ -593,7 +1081,17 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       Dkc1VideoFindTransparent4bppTile(
           g_ppu->vram, 0x8000u,
           (uint16_t)PPU_bgTileAdr(g_ppu, layer), &blank_entry);
-    WsShadowSetBlankTile(layer, blank_entry);
+    const bool parallax_continuation =
+        layer == 1 && layer != terrain_layer &&
+        PPU_bgTilemapWider(g_ppu, layer) != 0;
+    /* BG2's second 32-column screen is authored parallax data. Keeping the
+     * terrain-plane blank fallback here discarded that valid continuation;
+     * the later edge-repeat policy then visibly copied the native left edge
+     * into the right gutter. Give this known-wide parallax plane its own
+     * explicit source class while terrain misses remain fail-visible. */
+    WsShadowSetRawContinuation(layer, parallax_continuation);
+    WsShadowSetBlankTile(layer,
+                         parallax_continuation ? -1 : (int)blank_entry);
     /* Parallax backdrops are horizontally periodic; fold their margins to
      * the congruent native column instead of exposing unwritten map. */
     if (layer == 1 && layer != terrain_layer)
@@ -682,30 +1180,45 @@ void Dkc1DrawPpuFrame(void) {
     trace.selected_layout = s_ws_layout;
     trace.layout_grace = s_ws_layout_grace;
   }
+  /* These PPU policies are host presentation state, not cartridge state.
+   * Reset them every frame so a prior 64-column BG3 scene cannot leak into a
+   * bounded BG3 HUD/logo scene. */
+  PpuSetWidescreenLayerMask(g_ppu, 0);
+  PpuSetWidescreenBg3Widen(g_ppu, 0);
   if (extend_world) {
     Dkc1VideoSetPresentationBias(presentation_bias);
     PpuSetExtraSpace(g_ppu, (uint8_t)Dkc1VideoExtra());
     PpuSetWidescreenPresentationXBias(g_ppu, presentation_bias);
-    PpuSetWidescreenLayerMask(g_ppu, wide_layer_mask);
-    /* Repeat the native edge scanline for enabled, bounded background
-     * planes. Jungle Hijinxs uses a 32-column BG3 sky behind independently
-     * widened 64-column BG1/BG2; clamping BG3 exposed black from the host
-     * margin up to the first fine-scroll tile boundary. This repeat is only
-     * armed after the terrain decoder validates a gameplay scene. */
+    /* Repeat only enabled background planes that cannot address a second
+     * tilemap screen.  The terrain-shadow mask intentionally covers only
+     * BG1/BG2, so using its inverse here incorrectly repeated a physically
+     * 64-column BG3 in Jungle Hijinxs Bonus 1.  Size each enabled plane from
+     * its own BGxSC register: bounded 32-column overlays still repeat, while
+     * 64-column BG2/BG3 expose their authored continuation. */
     uint8_t enabled = (uint8_t)((g_ppu->screenEnabled[0] |
                                  g_ppu->screenEnabled[1]) & 0x07u);
-    const int terrain_layer = Dkc1VideoTerrainLayer(
-        wide_layer_mask, g_ppu->bgXsc, Dkc1ReadWram16(0x1b13));
-    const uint8_t terrain_bit =
-        terrain_layer >= 0 ? (uint8_t)(1u << terrain_layer) : 0;
-    /* Only the stream-selected terrain plane has an exact ROM/world decoder.
-     * DKC1's other 64-column plane is parallax staging data, not a second
-     * copy of the level map. Rendering it through the world shadow produced
-     * 100% margin misses and transparent cutoffs. Match DKC2's proven policy:
-     * repeat every enabled non-terrain BG from its authentic native scanline. */
-    const uint8_t repeat_mask =
-        (uint8_t)(enabled & (uint8_t)~terrain_bit);
+    uint8_t repeat_mask = 0;
+    uint8_t physical_wide_mask = 0;
+    for (int layer = 0; layer < 3; layer++) {
+      const uint8_t bit = (uint8_t)(1u << layer);
+      if (!(enabled & bit))
+        continue;
+      if (PPU_bgTilemapWider(g_ppu, layer) != 0)
+        physical_wide_mask = (uint8_t)(physical_wide_mask | bit);
+      else
+        repeat_mask = (uint8_t)(repeat_mask | bit);
+    }
+    const uint8_t render_mask =
+        (uint8_t)(wide_layer_mask | physical_wide_mask);
+    PpuSetWidescreenLayerMask(g_ppu, render_mask);
+    /* The shared renderer normally clamps BG3 as a 256-pixel HUD plane.
+     * DKC1's cave foreground uses a real 64-column BG3 tilemap instead. A
+     * nonzero first line enables the PPU's existing whole-visible-frame BG3
+     * path without changing bounded 32-column BG3 scenes. */
+    PpuSetWidescreenBg3Widen(
+        g_ppu, (physical_wide_mask & 0x04u) != 0 ? 1u : 0u);
     PpuSetWidescreenLayerRepeat(g_ppu, repeat_mask);
+    trace.render_layer_mask = render_mask;
     trace.repeat_layer_mask = repeat_mask;
     trace.edge_extension = true;
     Dkc1VideoSetTerrainReady(true);

@@ -59,8 +59,14 @@ non-conclusion vocabulary, and 3x byte-identical repeat gates.
   runner, and supports fixed input, 1/2/4-byte `wait_wram` predicates,
   masks, shifts, signed comparisons, held input, timeouts, and named raw
   checkpoints. The route manifest hashes the recipe, verified ROM, runner,
-  and optional anchor. These snapshots use the recomp runtime's native
-  format; SuperZSNES `.szst` files cannot be loaded by the recomp.
+  and optional anchor. Native snapshots remain the preferred replay format.
+  SuperZSNES v0.230 `.szst` files can now be converted with
+  `tools/SuperZSNESStateExporter` and loaded through
+  `DKC1_SUPERZSNES_STATE=<bundle-directory>`. The bridge restores exact raw
+  machine memories and mapped CPU/PPU/APU state, then reconstructs DSP
+  interpolation history; the first audio buffer is therefore not an exact
+  cross-runtime oracle. `DKC1_SAVESTATE_INPUT` and
+  `DKC1_SUPERZSNES_STATE` are mutually exclusive.
 - **Tool 3 is implemented.** `tools/first_divergence.py` runs an identical
   native/wide route twice, fingerprints every full-WRAM frame in order, then
   captures and classifies raw windows around the first differing frame. A
@@ -76,7 +82,8 @@ non-conclusion vocabulary, and 3x byte-identical repeat gates.
 
 Provenance colors are: green = captured/authentic history, cyan = ROM
 prefill, magenta = proven periodic fold, gray = verified transparent blank,
-red = unsafe circular-VRAM fallback, yellow = native edge repeat. The wash is
+blue = explicit valid 64-column continuation, red = unsafe circular-VRAM
+fallback, yellow = native edge repeat. The wash is
 applied only to side margins; the native center remains byte-identical. The
 region report schema is `docs/schemas/dkc1-ws-regions-v1.schema.json`.
 
@@ -248,6 +255,11 @@ camera; automatic flag for entries whose art X sits in [256, 256+extra] but
 whose X-high bit is 0 (the wrap signature from emulator bugs 5–6), and for
 left-margin entries wrapping from negative X. Bakes in the two-VBlank rule:
 a one-frame PPU/shadow disagreement is lag, not a bug.
+Every OAM index row also records the PPU `rangeOver` (33rd sprite) and
+`timeOver` (35th fetched sliver) latches. Headless run summaries count frames
+with each latch, checkpoints retain both booleans, and an F9 bundle records
+their final-frame state. This distinguishes malformed OAM from valid OAM whose
+8x8 pieces were discarded by the scanline budget.
 **Serves:** margin sprite work (cull adapters, rope/banana private paths).
 **Cost:** ~1 day.
 
@@ -302,11 +314,32 @@ first-anomaly marker, clickable checkpoints) with schema adapters for the
 recomp's JSONL streams. The emulator team correlated these streams by hand
 for weeks before building it. **Cost:** ~1 day (mostly adaptation).
 
-### 12. Indirect-dispatch target logger (the `$BE8179` gap)
-Pre-opcode hook on unauthorized dispatch sites logging the actual computed
-targets seen at runtime, aggregated into proposed `indirect_dispatch`
-cfg contracts. Closes open issue 7 with evidence instead of guesswork, and
-generalizes to any future dispatch gap. **Cost:** ~half a day.
+### 12. Indirect-dispatch contract auditor and target logger
+Use source-backed static extraction when the pointer writer is expressed in
+the byte-exact disassembly, and retain the runtime logger for genuinely
+dynamic/unknown writers. `tools/audit_animation_dispatch.py` now parses every
+`%DKC1_AnS1_Op81(...)` use, resolves the callback symbols through the USA 1.0
+Asar symbol file, and requires `$BE8179`'s cfg contract to be an exact,
+canonical match. Runtime harvesting alone is not a completeness proof: the
+first route-based contract covered only 16 of the 197 legal callbacks and
+silently broke unvisited animations. The same static-first/runtime-second
+rule applies to future dispatch gaps.
+
+`tools/audit_indirect_tables.py` now applies that rule to every cfg contract.
+Of 119 indirect dispatches, 118 are proven exact from byte-exact `DATA_*`
+tables, explicit pointer-writer table links, or the 37 animation-record
+callback fields. This includes all 108 normal-sprite main handlers and the
+enemy, boss, barrel, rope, level, and section state tables. The only dispatch
+outside that audit is `$BE8179`; its separate macro-based auditor proves all
+503 uses/197 unique legal callbacks. Together the two reports leave zero
+route-harvest-only indirect allowlists. `build/indirect-table-audit.json` and
+`build/animation-dispatch-audit.json` are the current evidence.
+
+Run both proofs and enforce the expected split with:
+
+```powershell
+tools\audit_dispatch_contracts.ps1
+```
 
 ## Additional tools worth adding
 
@@ -373,11 +406,11 @@ Isolated tool build: build_host_tools.bat -> dkc1_headless_tools.exe.
 
 First real evidence produced:
 
-- **$BE8179 resolved** (open issue 7): the animation-callback
-  `JML [$007A]` behind `PHK/PEA $810D`. force_lle + DKC1_TRACE_PC harvested
-  12 targets; authorized as a ptrcall contract in bankbe.cfg. Routes now
-  complete with zero unresolved-abandon reports (2,599 AOT variants).
-  Re-harvest on pointer_match misses; coverage grows with routes.
+- **$BE8179 initially made executable** (open issue 7): the
+  animation-callback `JML [$007A]` behind `PHK/PEA $810D`. The first
+  `force_lle`/`DKC1_TRACE_PC` route harvest found 12 targets and removed the
+  immediate unresolved-abandon reports, but route harvesting was later proven
+  insufficient as a completeness method. See the static closure result below.
 - **First stock-vs-wide divergence located and classified** (open issue 4):
   frame 7332 is byte-identical end to end; frame 7333 (first level frame)
   differs in 31 bytes — widened scanner window right ($0140 -> $0196),
@@ -411,11 +444,13 @@ invalidators (issue 3) — the trace now provides the evidence they need.
   5a54239ccb9cfcfe; CGRAM unchanged (2f6ce319...). This is a correctness fix
   changing the oracle, not adapter leakage — but the wide-vs-native
   inertness statement needs re-proving against the new baseline.
-- **Transition margins are clean**: level->(Kong swap)->continue route under
-  DKC1_WS_TRACE shows every centered frame's margins hashing to one constant
-  (black); zero raw fallbacks. A true gameplay->map/title capture still
-  needs a route that exhausts both Kongs (single-hit routes just swap to
-  Diddy).
+- **Transition margins are clean**: the callback-complete
+  `recipes/route_death.dks` route now reaches the actual death/non-gameplay
+  transition. `contracts/jungle-death-transition.json` passes two checkpoints
+  across three byte-identical repeats. The trace contains 11,470 centered
+  frames whose left and right margins all equal the exact all-black FNV-1a
+  hash, with zero raw fallbacks and zero policy violations. Map/title, bonus,
+  save-select, and cross-level transitions still need independent routes.
 - **Two leads for the dkc1_game.c owner**: (1) WIDE<->CENTERED flapping at
   level entry (frames ~7304-7331) — the calibration flip-flop issue 2
   predicts; (2) the wide terrain world key unwraps to camX=$FFF0 (-16) on
@@ -432,7 +467,16 @@ DKC1_SAVESTATE_OUTPUT / DKC1_SAVESTATE_SAVE_AT, and the F9 repro bundle's
 embedded anchor. Loading resets the widescreen shadow by design
 (loaded-state vs fresh-entry evidence discipline). Interactive F11/F12 quick
 save/load is implemented in the desktop host.
-SuperZSNES .szst states remain forensic inputs only; they cannot load here.
+SuperZSNES v0.230 `.szst` states are now first-class repro inputs after
+conversion through `tools/SuperZSNESStateExporter`. The exporter uses an exact
+five-type deserialization allowlist, validates the 280,640-byte raw tail, and
+emits a versioned `complete-source-state` bundle. Both hosts accept the bundle
+directory through `DKC1_SUPERZSNES_STATE`. Imported state 5 has passed three
+byte-identical three-frame native replays. Raw WRAM/VRAM/CGRAM/OAM/I/O in its
+bundle also match an independently captured SuperZSNES frame byte-for-byte.
+The importer intentionally reports `audio_history=reconstructed`: saved DSP
+registers are restored but private interpolation history has no native field
+equivalent, so audio is excluded from the first-frame cross-runtime oracle.
 
 The visible host now has a reproducible Jungle snapshot library generated by
 `recipes/capture_jungle_snapshots.dks`: map-before-entry, first valid wide
@@ -495,20 +539,47 @@ an earlier draw-cache refresh into a false behavior-phase bug.
   byte-identical native frame/WRAM/VRAM/OAM hashes and audio FNV to the
   adapters-applied build at frame 7,600. The re-pinned baseline is backed
   by a real no-adapter oracle, not just determinism.
-- **$BE8179 contract extended to 15 targets** ($BE993E/$BE9945/$BE994C
-  observed via a temporary force_lle pass on a contact-heavy route);
-  2,602 AOT variants, zero unresolved-abandon.
+- **$BE8179 statically closed at 197 targets.** A deterministic one-frame
+  jump trace first recovered missing callback `$BEA778`, the jump animation's
+  final callback that switches to idle/ground movement. Omitting it made
+  `Op80` restart the jump script and reapply the `$0700` Y-speed impulse every
+  40 frames after the key was released, even though every controller mirror
+  was zero. That exposed the deeper defect: the disassembly contains 503
+  `%DKC1_AnS1_Op81(...)` uses naming 197 unique callbacks, all 197 resolve in
+  `DKC1_U1.sym`, while the route-harvested cfg listed only 16. The cfg now
+  contains the exact canonical 197-target set. The generated program has
+  2,691 exact AOT variants and zero LLE-only variants. The 240-frame regression
+  applies one jump input, records exactly one `$0700` impulse at frame 7586,
+  and observes animation `$10D3` return from jump `$0005` to ground movement
+  `$0001` at frame 7625. `build/animation-dispatch-audit.json` records 503
+  calls, 197 expected/actual targets, zero missing/extra/unresolved targets.
+- **Every recomp indirect dispatch now has a source-backed closure proof.**
+  `tools/audit_indirect_tables.py` matches 118 of 119 cfg contracts against
+  explicit disassembly tables/records with zero missing or extra targets; the
+  remaining `$BE8179` contract is the separately proven 197-target animation
+  callback set. This removes route coverage as a prerequisite for executing
+  an unvisited actor or state handler.
 - **F11/F12 quick save/load** added to the desktop host (native snapshots
   to quicksave.state beside the exe; loading intentionally resets the
   widescreen shadow so presentation state recalibrates).
-- **NEW LEAD -- contact damage does not land in the current build, in BOTH
-  native and wide modes.** Deterministic repro: recipes/route_death.dks
-  walks DK into the first Jungle Hijinxs Gnawty and stands in its patrol
-  path; DK/Diddy overlap it for thousands of frames unharmed, identically
-  at 4:3 and 342px, and identically with the callback dispatch executing
-  via forced LLE -- so it is NOT a widescreen or dispatch-contract defect.
-  Suspect surface: player-sprite collision path in the recomp runtime (or
-  an authentic-behavior misread -- verify the same stand-still against
-  real-hardware/emulator ground truth first). Evidence:
-  build/death_final.png (wide), build/death_native.png (native),
-  ws_death.jsonl.
+- **Contact damage/death is closed.** The earlier no-damage result belonged
+  to the incomplete animation-callback build. With all 197 legal `$BE8179`
+  targets present, `recipes/route_death.dks` clears both Kong actor slots and
+  reaches the expected non-gameplay transition. The three-repeat closure is
+  `contracts/jungle-death-transition.json`; trace evidence is under
+  `build/full-contract-death-wide/`.
+- **Stable-input margin diagnostics are now strict.** Frame hashes include
+  CGRAM as well as VRAM and both OAM copies. The analyzer also requires equal
+  selected PPU state, scrolls, camera/bounds/bias, world keys, and native
+  center pixels before calling a margin-only change nondeterministic. A fresh
+  932-frame snapshot-scroll trace (`build/current-cgram-trace/summary.json`)
+  reports zero stable-input margin changes, zero unproven changes, zero raw
+  fallbacks, and zero centered nonblack margins. Older alerts that omitted
+  palette/scroll/camera state were false positives and must not drive a patch.
+- **Both transition directions are trace-gated.** `contracts/jungle-entry.json`
+  covers the 7,645-frame fixed-screen/map-to-gameplay route (315 extended,
+  7,330 centered frames); `contracts/jungle-death-transition.json` covers the
+  11,972-frame gameplay-to-nongameplay route (502 extended, 11,470 centered).
+  Each passes three byte-identical WRAM/VRAM/OAM checkpoints and byte-identical
+  complete trace files. Both have zero raw fallbacks, policy violations,
+  nonblack centered margins, or stable-input margin changes.

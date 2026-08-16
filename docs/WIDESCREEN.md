@@ -4,6 +4,14 @@ The recomp displays a 342x224 source image: 43 extra SNES pixels on each side
 of the native 256x224 frame. With the SNES 7:6 pixel aspect, this is 1.78125,
 within one source pixel of 16:9.
 
+The visible desktop exposes both presentation modes under
+`View -> Aspect Ratio`: `Native 4:3 (256x224)` and
+`Widescreen 16:9 (342x224)`. Switching modes changes only the host framebuffer,
+source pitch, presentation history, and window size; it does not reload the
+ROM or alter cartridge WRAM, camera, collision, or level state. The desktop
+defaults to 16:9. For scripted/headless runs, `DKC1_WIDESCREEN=1` selects 16:9
+and `DKC1_WIDESCREEN=0` selects native 4:3.
+
 ## What came from DKC2Recomp
 
 DKC2Recomp supplied the useful architecture rather than game-specific
@@ -37,6 +45,7 @@ ports the parts that remain necessary when the logical camera stays stock:
 | bananas | widen its private coverage and preserve 9-bit OAM X | prevents late bananas and positive-X wraparound ghosts |
 | vertical ropes | widen the private renderer cull and pack OAM X-high | prevents left/right margin pop-in and wrapped rope segments |
 | type-$05 groups | retry only zero-bookmark children while the group remains visible | wider prefetch increases actor-pool pressure; the stock one-shot parent could otherwise permanently lose a target barrel or child actor |
+| OBJ scanline budget | add one sprite/sliver slot per live 8-pixel margin column | prevents extra-margin objects from consuming the native 32-sprite/34-sliver budget and cutting 8x8 pieces out of Kong poses |
 | diagnostics | BGSC, per-layer scroll, and terrain-ready telemetry | identifies whether a bad frame is unsupported, miscalibrated, or an object-domain failure |
 
 All transformations match exact generated labels and constants, fail if the
@@ -63,6 +72,30 @@ These remain cartridge-authentic in the recomp:
 This separation is the central rule: presentation may reveal more pixels;
 gameplay coordinates are not translated merely to make the picture wider.
 
+## Widescreen OBJ scanline capacity
+
+The hardware renderer accepts at most 32 sprites and fetches at most 34
+eight-pixel OBJ slivers on one 256-pixel scanline. Applying those same totals
+to a 342-pixel world view lets sprites in the 86 added columns consume the
+native viewport's budget. A dense two-Kong pose can then lose complete 8x8
+pieces even though WRAM OAM, PPU OAM, and OBJ graphics are valid; changing pose
+or moving can make the damage disappear again.
+
+DKC1 opts into a host render policy that adds one sprite and one sliver of
+capacity for every additional eight-pixel column actually visible. The policy
+uses `extraLeftCur + extraRightCur`, not the allocated framebuffer border.
+Consequently native-width play and centered logos, menus, and unsupported
+scenes retain the exact 32/34 limits. `NoSpriteLimits` is deliberately not
+used: removing the limits entirely could expose normally hidden overlap and
+flicker behavior in future scenes.
+
+The headless summary, per-frame OAM JSONL, checkpoints, and F9 flight-recorder
+manifest now record the PPU `rangeOver` and `timeOver` latches. The original
+reported bad frame predates those captures, so final acceptance still requires
+one exact recurrence/replay proving that the latch fires before this policy and
+does not fire after it. The focused synthetic PPU test already proves the
+native, centered, and live-margin boundary cases.
+
 ## Fail-closed scene policy
 
 `Dkc1DrawPpuFrame` first builds a hard scene identity from DKC mode, level,
@@ -88,6 +121,13 @@ calibration. Treating the parallax plane as terrain produced all-miss shadow
 lookups and transparent side cutoffs; repeating from register shape alone
 would instead repeat logos and transition art.
 
+This policy is selected per scene from the physical BGxSC width, not from the
+terrain classification. Jungle Hijinxs Bonus 1 uses a real 64-column BG3 cave
+foreground (`BG3SC=$5B`), so that BG3 is neither repeated nor clamped to 256
+pixels: it is added to the PPU render mask and uses the renderer's BG3-wide
+path. Bounded 32-column BG3 scenes continue to use native-scanline repetition.
+All BG3 presentation gates reset every frame to prevent scene leakage.
+
 ## Validation record
 
 - Override unit tests cover every category, exact-match failure, and applying
@@ -95,6 +135,9 @@ would instead repeat logos and transition art.
 - Runtime contract tests lock down the exact native-mode 16-bit stack push
   used by the type-$05 child retry and require the presentation camera to move
   BG scroll and OAM together without writing DKC1's logical camera or bounds.
+- The PPU sprite-limit test proves native and centered screens still reject
+  sprite 33/sliver 35, while a live 16-pixel extension admits exactly two
+  additional slots without enabling unlimited sprites.
 - The MSVC host builds successfully after regeneration.
 - Deterministic frame 7,600 stock-width output retains the known frame, WRAM,
   VRAM, CGRAM, OAM, and audio hashes.

@@ -1,7 +1,7 @@
 {
-  "name": "jungle-entry",
-  "script": "../recipes/route_jungle.dks",
-  "frames": 16000,
+  "name": "jungle-death-transition",
+  "script": "../recipes/route_death.dks",
+  "frames": 18000,
   "widescreen": true,
   "repeats": 3,
   "trace": {
@@ -23,13 +23,17 @@
     "level_entry": {
       "expect": [
         {"addr": "0x003E", "op": "==", "value": "0x0016"},
-        {"addr": "0x1B25", "op": ">=", "value": "0x0100"},
-        {"addr": "0x088B", "op": "<=", "value": "0x0100"}
+        {"addr": "0x1B25", "op": ">=", "value": "0x0100"}
       ]
     },
-    "camera_0200": {
+    "after_death": {
       "expect": [
-        {"addr": "0x088B", "op": ">=", "value": "0x0200"}
+        {"addr": "0x0032", "op": "==", "value": "0x0000"},
+        {"addr": "0x0028", "op": "!=", "value": "0x0000"},
+        {"addr": "0x1B23", "op": "==", "value": "0x0000"},
+        {"addr": "0x1B25", "op": "==", "value": "0x0000"},
+        {"addr": "0x0B6B", "op": "==", "value": "0x0000"},
+        {"addr": "0x0B9F", "op": "==", "value": "0x0000"}
       ]
     }
   }

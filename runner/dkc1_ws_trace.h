@@ -9,6 +9,7 @@
 typedef struct Dkc1WsTraceFrame {
   int frame;
   uint8_t wide_layer_mask;
+  uint8_t render_layer_mask;
   uint8_t repeat_layer_mask;
   int terrain_layer;
   int presentation_bias;

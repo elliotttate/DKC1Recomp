@@ -229,7 +229,8 @@ def adapt_vertical_rope(sources: dict[Path, str]) -> None:
                 f"expected one vertical-rope DP $76 store; found {len(stores)}")
         insertion = """
     /* Host-only cull key; DP $76 keeps the authentic OAM coordinate. */
-    uint16 _ws_cull_x = Dkc1VideoBiasCullX(cpu_read_a16(cpu));
+    uint16 _ws_rope_x = cpu_read_a16(cpu);
+    uint16 _ws_cull_x = Dkc1VideoBiasCullX(_ws_rope_x);
     cpu_write_a_m(cpu, (uint16)(_ws_cull_x));
     cpu->_flag_Z = (_ws_cull_x == 0) ? 1 : 0;
     cpu->_flag_N = ((_ws_cull_x & 0x8000) != 0) ? 1 : 0;
@@ -242,6 +243,17 @@ def adapt_vertical_rope(sources: dict[Path, str]) -> None:
         sources[path] = add_include(text)
     elif block.count(marker) != 1:
         raise ValueError("ambiguous vertical-rope cull adaptation")
+    elif "uint16 _ws_rope_x" not in block:
+        old = (
+            "uint16 _ws_cull_x = "
+            "Dkc1VideoBiasCullX(cpu_read_a16(cpu));")
+        new = (
+            "uint16 _ws_rope_x = cpu_read_a16(cpu);\n"
+            "    uint16 _ws_cull_x = Dkc1VideoBiasCullX(_ws_rope_x);")
+        if block.count(old) != 1:
+            raise ValueError("unexpected legacy vertical-rope cull adapter")
+        block = block.replace(old, new, 1)
+        sources[path] = add_include(text[:start] + block + text[end:])
 
     adapt_function_constant(
         sources, "CODE_80A7ED_M0X0", "L_A809_M0X0:",
@@ -269,6 +281,61 @@ def adapt_vertical_rope(sources: dict[Path, str]) -> None:
     elif block.count(helper) != 1:
         raise ValueError("ambiguous vertical-rope upper-OAM adaptation")
 
+    # The stock writer ORs the large-sprite bit into the current upper-OAM
+    # word.  That is safe only while its native cull guarantees X=0..255:
+    # after another writer used the same slot for a negative/right-margin
+    # object, the adjacent X-high bit can remain set and wrap a rope at X=252
+    # to signed X=-4.  In wide mode, replace that additive merge with an
+    # authoritative size/X-high merge for every emitted rope segment.
+    path, text, start, end = locate_function_block(
+        sources, "CODE_80A7ED_M0X0", "L_A878_M0X0:", "L_A877_M0X0:")
+    block = text[start:end]
+    merge_helper = "Dkc1VideoMergeOamSizeAndXHigh"
+    if merge_helper not in block:
+        mask_assignment = re.search(
+            r"uint16\s+(\w+)\s*=\s*[^;]*0x80a545[^;]*;", block)
+        if not mask_assignment:
+            raise ValueError("missing vertical-rope upper-OAM size mask")
+        existing_assignment = re.search(
+            r"uint16\s+(\w+)\s*=\s*cpu_read16\([^;]*cpu->Y[^;]*;",
+            block[mask_assignment.end():])
+        if not existing_assignment:
+            raise ValueError("missing vertical-rope upper-OAM existing word")
+        existing_variable = existing_assignment.group(1)
+        or_pattern = re.compile(
+            r"(uint16\s+(\w+)\s*=\s*\(uint16\)\()"
+            r"(\w+)\s*\|\s*(\w+)(\);)")
+        matches = []
+        for match in or_pattern.finditer(block, mask_assignment.end()):
+            if existing_variable in (match.group(3), match.group(4)):
+                matches.append(match)
+        if len(matches) != 1:
+            raise ValueError(
+                "expected one vertical-rope upper-OAM OR merge; "
+                f"found {len(matches)}")
+        match = matches[0]
+        mask_variable = (match.group(4)
+                         if match.group(3) == existing_variable
+                         else match.group(3))
+        replacement = (
+            f"uint16 {match.group(2)} = {merge_helper}("
+            f"{existing_variable}, {mask_variable}, "
+            "_ws_rope_x);")
+        block = block[:match.start()] + replacement + block[match.end():]
+        sources[path] = add_include(text[:start] + block + text[end:])
+    elif block.count(merge_helper) != 1:
+        raise ValueError("ambiguous vertical-rope upper-OAM merge adaptation")
+    else:
+        legacy_argument = re.compile(
+            r"(Dkc1VideoMergeOamSizeAndXHigh\(\w+,\s*\w+,\s*)"
+            r"cpu_read16\(cpu, 0x00, \(uint16\)\(cpu->D \+ 0x0076\)\)"
+            r"(\))")
+        block, count = legacy_argument.subn(r"\1_ws_rope_x\2", block)
+        if count == 1:
+            sources[path] = add_include(text[:start] + block + text[end:])
+        elif "_ws_rope_x" not in block:
+            raise ValueError("unexpected vertical-rope X source in OAM merge")
+
 
 def adapt_type5_child_retry(sources: dict[Path, str]) -> None:
     path, text, start, end = locate_function_block(
@@ -290,6 +357,60 @@ def adapt_type5_child_retry(sources: dict[Path, str]) -> None:
         "      goto L_FBF5_M0X0;")
     block = block.replace(marker, insertion, 1)
     sources[path] = add_include(text[:start] + block + text[end:])
+
+
+def adapt_placed_actor_phase_guard(sources: dict[Path, str]) -> None:
+    # Remove the first delay-only experiment if this generated tree was
+    # already adapted. It hid prefetched actors because ID zero dispatches no
+    # presentation path.
+    symbol = "CODE_BF8087_M0X0"
+    path, text = locate_function(sources, symbol)
+    start, end = function_span(text, symbol)
+    block = text[start:end]
+    legacy = (
+        "    /* Keep widened prefetch presentational until stock eligibility. */\n"
+        "    if (!Dkc1VideoShouldRunPlacedActor(cpu))\n"
+        "      cpu_write_a_m(cpu, 0);\n"
+    )
+    if legacy in block:
+        if block.count(legacy) != 1:
+            raise ValueError("ambiguous legacy placed-actor phase guard")
+        block = block.replace(legacy, "", 1)
+        text = text[:start] + block + text[end:]
+        sources[path] = text
+
+    for owner, start_label, end_label in (
+            ("CODE_BF8000_M0X0", "L_802D_M0X0:", "L_8033_M0X0:"),
+            ("CODE_BF804B_M0X0", "L_8067_M0X0:", "L_806D_M0X0:")):
+        path, text, start, end = locate_function_block(
+            sources, owner, start_label, end_label)
+        block = text[start:end]
+        begin_call = "Dkc1VideoBeginPlacedActorDispatch(cpu);"
+        end_call = "Dkc1VideoEndPlacedActorDispatch(cpu);"
+        if begin_call in block or end_call in block:
+            if block.count(begin_call) != 1 or block.count(end_call) != 1:
+                raise ValueError(
+                    f"ambiguous placed-actor transaction in {start_label}")
+            continue
+        store_pattern = re.compile(
+            r"(    cpu_write16\(cpu, 0x00, \(uint16\)\(cpu->D \+ "
+            r"0x0082\), \w+\);\n)")
+        block, count = store_pattern.subn(
+            r"\1    Dkc1VideoBeginPlacedActorDispatch(cpu);\n", block, 1)
+        if count != 1:
+            raise ValueError(
+                f"expected current-index store in {start_label}")
+        goto_pattern = re.compile(r"(    goto L_[0-9A-F]+_M0X0;)")
+        matches = list(goto_pattern.finditer(block))
+        if len(matches) != 1:
+            raise ValueError(
+                f"expected one post-dispatch goto in {start_label}; "
+                f"found {len(matches)}")
+        offset = matches[0].start()
+        block = (block[:offset] +
+                 "    Dkc1VideoEndPlacedActorDispatch(cpu);\n" +
+                 block[offset:])
+        sources[path] = add_include(text[:start] + block + text[end:])
 
 
 LEFT_BLOCKS = (
@@ -347,6 +468,7 @@ def apply_overrides(generated_dir: Path) -> list[Path]:
         adapt_function_constant(
             sources, symbol, f"L_{block}_M0X0:",
             "0x120", "Dkc1VideoExpandCullLeft")
+    adapt_placed_actor_phase_guard(sources)
     adapt_type5_child_retry(sources)
 
     # Banana formations have a private candidate window and direct OAM

@@ -44,13 +44,33 @@ int Dkc1VideoPresentationBias(void);
 
 /* Private vertical-rope renderer adapters.  BiasCullX is used only for the
  * existing visibility comparisons; the original coordinate remains in the
- * game's $76 scratch word and is still written to OAM.  PromoteOamSizeMask
- * adds the adjacent X-high bit to the stock large-sprite mask when needed. */
+ * game's $76 scratch word and is still written to OAM.  The generated
+ * adapter retains that original X before $76 is repacked as Y:X-low. The
+ * final merge owns both the size and adjacent X-high bits so a reused OAM
+ * slot cannot leak an old X-high bit into a rope segment. */
 uint16_t Dkc1VideoBiasCullX(uint16_t screen_x);
 uint16_t Dkc1VideoPromoteOamSizeMask(uint16_t size_mask,
                                     uint16_t screen_x);
+uint16_t Dkc1VideoMergeOamSizeAndXHigh(uint16_t existing_word,
+                                      uint16_t size_mask,
+                                      uint16_t screen_x);
 
 struct CpuState;
+/* Widened placed-object windows can allocate ordinary actors before the
+ * cartridge's native scanner would have admitted their authored source
+ * record.  Delay only that actor's first behavior dispatch until the source
+ * reaches the reconstructed stock window.  The initialized actor remains in
+ * the pool so the host can present it in the added margin. */
+bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu);
+bool Dkc1VideoBeginPlacedActorDispatch(struct CpuState *cpu);
+void Dkc1VideoEndPlacedActorDispatch(struct CpuState *cpu);
+/* Observe free normal-pool slots at the boundary before allocation begins.
+ * A slot can later be reused for the same ID/source pair, which is still a
+ * new lifecycle generation and must not inherit the previous generation's
+ * stock-started decision. */
+void Dkc1VideoObserveActorPool(const uint8_t *wram);
+void Dkc1VideoResetPlacedActorPhases(void);
+
 /* Type-$05 groups mark their parent active even when the fixed actor pool
  * prevented one or more children from allocating. Wider prefetch makes that
  * stock one-shot failure reachable. When an active group is still inside the

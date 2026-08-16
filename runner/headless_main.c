@@ -126,6 +126,7 @@ int main(int argc, char **argv) {
   }
 
   const char *savestate_input = getenv("DKC1_SAVESTATE_INPUT");
+  const char *superzsnes_input = getenv("DKC1_SUPERZSNES_STATE");
   const char *savestate_output = getenv("DKC1_SAVESTATE_OUTPUT");
   long savestate_save_at = 0;
   if (!ParseFrameNumber(getenv("DKC1_SAVESTATE_SAVE_AT"), 0,
@@ -133,6 +134,8 @@ int main(int argc, char **argv) {
       savestate_save_at > frame_limit ||
       (savestate_save_at &&
        (!savestate_output || !*savestate_output)) ||
+      (savestate_input && *savestate_input && superzsnes_input &&
+       *superzsnes_input) ||
       (savestate_input && *savestate_input && savestate_output &&
        *savestate_output && strcmp(savestate_input, savestate_output) == 0)) {
     fprintf(stderr,
@@ -150,6 +153,19 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "savestate: loaded native snapshot %s frame=%d\n",
             savestate_input, snes_frame_counter);
+  }
+  if (superzsnes_input && *superzsnes_input) {
+    char import_error[256];
+    if (!Dkc1ImportSuperZsnesState(superzsnes_input, import_error,
+                                   sizeof import_error)) {
+      fprintf(stderr, "unable to import SuperZSNES state: %s\n", import_error);
+      free(rom);
+      return 20;
+    }
+    fprintf(stderr,
+            "savestate: imported SuperZSNES bundle %s frame=%d "
+            "audio_history=reconstructed\n",
+            superzsnes_input, snes_frame_counter);
   }
 
   const char *trace_pc_text = getenv("DKC1_TRACE_PC");
@@ -216,6 +232,8 @@ int main(int argc, char **argv) {
   unsigned long blank_frames = 0;
   unsigned long consecutive_blank_frames = 0;
   unsigned long max_consecutive_blank_frames = 0;
+  unsigned long obj_range_over_frames = 0;
+  unsigned long obj_time_over_frames = 0;
   unsigned long audio_active_frames = 0;
   unsigned long audio_silent_frames = 0;
   unsigned long long audio_nonzero_samples = 0;
@@ -382,6 +400,8 @@ int main(int argc, char **argv) {
       return 5;
     }
     Dkc1DrawPpuFrame();
+    if (g_ppu->rangeOver) obj_range_over_frames++;
+    if (g_ppu->timeOver) obj_time_over_frames++;
     {
       char error[192];
       if (!Dkc1WramDumpFrame(&wram_dump, frame + 1,
@@ -598,6 +618,7 @@ int main(int argc, char **argv) {
          "bgsc=[$%02x,$%02x,$%02x,$%02x] "
          "scroll=[%u,%u;%u,%u;%u,%u;%u,%u] terrain_ready=%d "
          "nmi=%d frame_counter=%d vram_words=%u cgram_words=%u "
+         "obj_range_over=%d obj_time_over=%d "
          "mode=$%04x entrance=$%04x fade=$%04x camera=[$%04x,$%04x] "
          "bounds=[$%04x,$%04x] presentation_bias=%d "
          "frame_ctr=$%04x bananas=$%04x\n",
@@ -611,6 +632,7 @@ int main(int argc, char **argv) {
          Dkc1VideoTerrainReady() ? 1 : 0,
          g_snes->nmiEnabled ? 1 : 0,
          snes_frame_counter, vram_words, cgram_words,
+         g_ppu->rangeOver ? 1 : 0, g_ppu->timeOver ? 1 : 0,
          ReadWram16(0x0032), ReadWram16(0x003e), ReadWram16(0x1df1),
          ReadWram16(0x088b), ReadWram16(0x0895),
          ReadWram16(0x1b23), ReadWram16(0x1b25),
@@ -618,15 +640,19 @@ int main(int argc, char **argv) {
          ReadWram16(0x057b));
   printf("shadow_stats "
          "bg1=[west_hit=%llu west_miss=%llu east_hit=%llu east_miss=%llu "
-         "west_blank=%llu east_blank=%llu west_raw=%llu east_raw=%llu] "
+         "west_blank=%llu east_blank=%llu west_cont=%llu east_cont=%llu "
+         "west_raw=%llu east_raw=%llu] "
          "bg2=[west_hit=%llu west_miss=%llu east_hit=%llu east_miss=%llu "
-         "west_blank=%llu east_blank=%llu west_raw=%llu east_raw=%llu]\n",
+         "west_blank=%llu east_blank=%llu west_cont=%llu east_cont=%llu "
+         "west_raw=%llu east_raw=%llu]\n",
          (unsigned long long)shadow[0].westHit,
          (unsigned long long)shadow[0].westMiss,
          (unsigned long long)shadow[0].eastHit,
          (unsigned long long)shadow[0].eastMiss,
          (unsigned long long)shadow[0].westBlank,
          (unsigned long long)shadow[0].eastBlank,
+         (unsigned long long)shadow[0].westRawContinuation,
+         (unsigned long long)shadow[0].eastRawContinuation,
          (unsigned long long)shadow[0].westRawFallback,
          (unsigned long long)shadow[0].eastRawFallback,
          (unsigned long long)shadow[1].westHit,
@@ -635,6 +661,8 @@ int main(int argc, char **argv) {
          (unsigned long long)shadow[1].eastMiss,
          (unsigned long long)shadow[1].westBlank,
          (unsigned long long)shadow[1].eastBlank,
+         (unsigned long long)shadow[1].westRawContinuation,
+         (unsigned long long)shadow[1].eastRawContinuation,
          (unsigned long long)shadow[1].westRawFallback,
          (unsigned long long)shadow[1].eastRawFallback);
   printf("frame_sha256=");
@@ -650,11 +678,13 @@ int main(int argc, char **argv) {
   printf("\noam_source_sha256=");
   PrintHash(stdout, oam_source_hash);
   printf("\nrun_stats video_active_frames=%lu blank_frames=%lu "
-         "max_consecutive_blank_frames=%lu audio_active_frames=%lu "
+         "max_consecutive_blank_frames=%lu obj_range_over_frames=%lu "
+         "obj_time_over_frames=%lu audio_active_frames=%lu "
          "audio_silent_frames=%lu audio_frames=%llu "
          "audio_nonzero_samples=%llu audio_peak=%u audio_fnv1a=%016llx "
          "state_events=%u",
          video_active_frames, blank_frames, max_consecutive_blank_frames,
+         obj_range_over_frames, obj_time_over_frames,
          audio_active_frames, audio_silent_frames, audio_rendered_frames,
          audio_nonzero_samples, audio_peak,
          (unsigned long long)audio_fnv1a, state_events);

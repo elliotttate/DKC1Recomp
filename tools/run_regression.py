@@ -36,12 +36,16 @@ Gates enforced:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from analyze_ws_trace import analyze as analyze_ws_trace
+from analyze_ws_trace import load_trace
 
 WRAM_SIZE = 0x20000
 
@@ -74,7 +78,7 @@ def evaluate(expect: dict, wram: bytes) -> tuple[bool, str]:
 
 
 def run_once(contract: dict, exe: Path, rom: Path, session: Path,
-             base: Path) -> dict[str, dict]:
+             base: Path) -> dict:
     if session.exists():
         shutil.rmtree(session)
     session.mkdir(parents=True)
@@ -83,6 +87,10 @@ def run_once(contract: dict, exe: Path, rom: Path, session: Path,
     env["DKC1_WIDESCREEN"] = "1" if contract.get("widescreen", True) else "0"
     env["DKC1_SCRIPT"] = str((base / contract["script"]).resolve())
     env["DKC1_SESSION_DIR"] = str(session)
+    trace_spec = contract.get("trace")
+    trace_path = session / "ws-trace.jsonl"
+    if trace_spec is not None:
+        env["DKC1_WS_TRACE"] = str(trace_path)
     result = subprocess.run(
         [str(exe), str(rom), str(contract["frames"])],
         cwd=str(session), env=env,
@@ -96,7 +104,40 @@ def run_once(contract: dict, exe: Path, rom: Path, session: Path,
         for line in index.read_text().splitlines():
             record = json.loads(line)
             checkpoints[record["name"]] = record
-    return checkpoints
+    evidence = {"checkpoints": checkpoints}
+    if trace_spec is not None:
+        frames = load_trace(trace_path)
+        if trace_spec.get("require_cgram", True) and any(
+                "cgram" not in frame["hash"] for frame in frames):
+            raise RuntimeError("widescreen trace lacks CGRAM hashes")
+        summary = analyze_ws_trace(
+            frames, extra=int(trace_spec.get("extra", 43)))
+        (session / "ws-trace-summary.json").write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8")
+        evidence["trace_summary"] = summary
+        evidence["trace_sha256"] = hashlib.sha256(
+            trace_path.read_bytes()).hexdigest()
+    return evidence
+
+
+def evaluate_trace(trace_spec: dict, summary: dict) -> list[str]:
+    """Return contract failures for one analyzed widescreen trace."""
+    failures: list[str] = []
+    for key in trace_spec.get("expect_empty", []):
+        value = summary.get(key)
+        if value != []:
+            failures.append(
+                f"trace.{key}: expected empty list, got "
+                f"{len(value) if isinstance(value, list) else value!r}")
+    decisions = summary.get("decision_counts", {})
+    for key, minimum in trace_spec.get(
+            "minimum_decision_counts", {}).items():
+        actual = int(decisions.get(key, 0))
+        if actual < int(minimum):
+            failures.append(
+                f"trace.decision_counts.{key}: {actual} < {minimum}")
+    return failures
 
 
 def main() -> int:
@@ -124,15 +165,17 @@ def main() -> int:
         print(f"=== {name} ({repeats} repeats) ===")
         failures: list[str] = []
         reference: dict[str, dict] | None = None
+        reference_trace_sha256: str | None = None
         reference_session: Path | None = None
 
         for attempt in range(repeats):
             session = (args.work / name / f"repeat-{attempt}").resolve()
             try:
-                checkpoints = run_once(contract, exe, rom, session, base)
+                evidence = run_once(contract, exe, rom, session, base)
             except RuntimeError as error:
                 failures.append(f"repeat {attempt}: {error}")
                 break
+            checkpoints = evidence["checkpoints"]
             for cp_name in contract.get("checkpoints", {}):
                 if cp_name not in checkpoints:
                     failures.append(
@@ -141,6 +184,7 @@ def main() -> int:
                 break
             if reference is None:
                 reference = checkpoints
+                reference_trace_sha256 = evidence.get("trace_sha256")
                 reference_session = session
                 # evaluate expects once, against the reference dumps
                 for cp_name, spec in contract.get("checkpoints", {}).items():
@@ -154,6 +198,11 @@ def main() -> int:
                         print(f"  {cp_name}: {detail}")
                         if not ok:
                             failures.append(f"{cp_name}: {detail}")
+                trace_spec = contract.get("trace")
+                if trace_spec is not None:
+                    for failure in evaluate_trace(
+                            trace_spec, evidence["trace_summary"]):
+                        failures.append(failure)
             else:
                 for cp_name, record in reference.items():
                     other = checkpoints.get(cp_name, {})
@@ -162,6 +211,10 @@ def main() -> int:
                             failures.append(
                                 f"repeat {attempt}: {cp_name}.{key} differs "
                                 f"from repeat 0 — nondeterministic route")
+                if reference_trace_sha256 != evidence.get("trace_sha256"):
+                    failures.append(
+                        f"repeat {attempt}: widescreen trace differs from "
+                        "repeat 0 — nondeterministic presentation")
         if failures:
             overall_failed += 1
             for failure in failures:

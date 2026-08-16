@@ -20,6 +20,7 @@ REQUIRED_HASHES = {
     "left", "center", "right", "bg1_left", "bg1_right", "bg2_left",
     "bg2_right", "vram", "ppu_oam", "wram_oam",
 }
+OPTIONAL_HASHES = {"cgram"}
 
 
 def validate_record(record: dict, location: str) -> None:
@@ -32,7 +33,8 @@ def validate_record(record: dict, location: str) -> None:
             f"{location}: missing hashes {sorted(missing_hashes)}")
     if len(record["world"]) != 2 or len(record["shadow_delta"]) != 2:
         raise ValueError(f"{location}: expected exactly two BG layers")
-    for name in REQUIRED_HASHES:
+    for name in REQUIRED_HASHES.union(
+            OPTIONAL_HASHES.intersection(record["hash"])):
         value = record["hash"][name]
         if not isinstance(value, str) or len(value) != 16 or any(
                 char not in "0123456789abcdef" for char in value):
@@ -74,13 +76,30 @@ def load_trace(path: Path) -> list[dict]:
     return frames
 
 
-def analyze(frames: list[dict], max_findings: int = 200) -> dict:
+def fnv1a_zero_bytes(size: int) -> str:
+    """Return the exact renderer FNV-1a hash for ``size`` zero bytes."""
+    if size < 0:
+        raise ValueError("zero-byte hash size must not be negative")
+    value = 1469598103934665603
+    for _ in range(size):
+        value ^= 0
+        value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return f"{value:016x}"
+
+
+def analyze(frames: list[dict], max_findings: int = 200,
+            extra: int = 43) -> dict:
+    if extra <= 0:
+        raise ValueError("widescreen margin width must be positive")
+    black_margin_hash = fnv1a_zero_bytes(extra * 4 * 224)
     decisions: Counter[str] = Counter()
     raw_fallback_frames: list[dict] = []
     refresh_frames: list[dict] = []
     stable_input_margin_changes: list[dict] = []
+    stable_input_unproven_margin_changes: list[dict] = []
     identity_transitions: list[dict] = []
     policy_violations: list[dict] = []
+    centered_nonblack_margin_frames: list[dict] = []
     frame_counter_resets: list[dict] = []
     previous: dict | None = None
 
@@ -118,6 +137,20 @@ def analyze(frames: list[dict], max_findings: int = 200) -> dict:
         if bool(decision.get("shadow_frame")) != \
                 bool(decision.get("shadow_commit")):
             violations.append("shadow_frame_commit_disagree")
+        if decision.get("centered_fallback"):
+            hashes = record["hash"]
+            bad_sides = [side for side in ("left", "right")
+                         if hashes.get(side) != black_margin_hash]
+            if bad_sides:
+                violations.append("centered_margin_not_black")
+                if len(centered_nonblack_margin_frames) < max_findings:
+                    centered_nonblack_margin_frames.append({
+                        "frame": record["frame"],
+                        "sides": bad_sides,
+                        "expected": black_margin_hash,
+                        "left": hashes.get("left"),
+                        "right": hashes.get("right"),
+                    })
         if violations and len(policy_violations) < max_findings:
             policy_violations.append({"frame": record["frame"],
                                       "violations": violations})
@@ -135,8 +168,24 @@ def analyze(frames: list[dict], max_findings: int = 200) -> dict:
         if previous is not None:
             old_hash = previous["hash"]
             new_hash = record["hash"]
-            inputs_same = all(old_hash.get(key) == new_hash.get(key)
-                              for key in ("vram", "ppu_oam", "wram_oam"))
+            has_full_hashes = "cgram" in old_hash and "cgram" in new_hash
+            machine_hashes_same = has_full_hashes and all(
+                old_hash.get(key) == new_hash.get(key)
+                for key in ("vram", "cgram", "ppu_oam", "wram_oam"))
+            ppu_keys = ("mode", "bgmode", "inidisp", "main", "sub",
+                        "bgsc", "h", "v", "wide_mask", "repeat_mask",
+                        "terrain_layer")
+            ppu_same = all(previous["ppu"].get(key) ==
+                           record["ppu"].get(key) for key in ppu_keys)
+            camera_keys = ("x", "y", "lower", "upper",
+                           "presentation_bias")
+            camera_same = all(previous["camera"].get(key) ==
+                              record["camera"].get(key)
+                              for key in camera_keys)
+            world_same = previous["world"] == record["world"]
+            center_same = old_hash.get("center") == new_hash.get("center")
+            inputs_same = (machine_hashes_same and ppu_same and camera_same and
+                           world_same and center_same)
             margin_changed = any(old_hash.get(key) != new_hash.get(key)
                                  for key in ("left", "right", "bg1_left",
                                              "bg1_right", "bg2_left",
@@ -155,6 +204,16 @@ def analyze(frames: list[dict], max_findings: int = 200) -> dict:
                         if old_hash.get(key) != new_hash.get(key)
                     ],
                 })
+            elif margin_changed and center_same and not has_full_hashes and \
+                    len(stable_input_unproven_margin_changes) < max_findings:
+                # Legacy v1 traces did not include CGRAM. Preserve the lead,
+                # but do not call it stable-input evidence: palette changes
+                # can alter only transparent/edge pixels in the margins.
+                stable_input_unproven_margin_changes.append({
+                    "frame": record["frame"],
+                    "previous_frame": previous["frame"],
+                    "reason": "trace_missing_cgram_hash",
+                })
         previous = record
 
     return {
@@ -172,11 +231,18 @@ def analyze(frames: list[dict], max_findings: int = 200) -> dict:
         "prefill_refresh_frames": refresh_frames,
         "identity_transitions": identity_transitions,
         "policy_violations": policy_violations,
+        "black_margin_hash": black_margin_hash,
+        "centered_nonblack_margin_frames": centered_nonblack_margin_frames,
         "stable_input_margin_changes": stable_input_margin_changes,
+        "stable_input_unproven_margin_changes":
+            stable_input_unproven_margin_changes,
         "truncated": any(len(items) >= max_findings for items in
                          (raw_fallback_frames, refresh_frames,
-                          stable_input_margin_changes, identity_transitions,
-                          policy_violations)),
+                          stable_input_margin_changes,
+                          stable_input_unproven_margin_changes,
+                          identity_transitions,
+                          policy_violations,
+                          centered_nonblack_margin_frames)),
     }
 
 
@@ -185,9 +251,13 @@ def main() -> int:
     parser.add_argument("trace", type=Path)
     parser.add_argument("--json-out", type=Path)
     parser.add_argument("--max-findings", type=int, default=200)
+    parser.add_argument(
+        "--extra", type=int, default=43,
+        help="added pixels on each side (43 for 342x224, 71 for 398x224)")
     args = parser.parse_args()
     try:
-        summary = analyze(load_trace(args.trace), args.max_findings)
+        summary = analyze(load_trace(args.trace), args.max_findings,
+                          args.extra)
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

@@ -30,10 +30,10 @@ coverage means fixing bounds/dispatch at the leaves (the DKC2 pattern).
   (`$0508`, `$0002`, `$0000` via B5/B6 script engines) â€” marked as
   `# TODO(dispatch)` comments in the cfgs. Deriving their target sets needs
   the writers of those tables enumerated (the sprite spawn-script system).
-- **9 dynamic RAM-pointer jumps** (e.g. the animation per-frame callback
-  `JML [$7A]` at `BE:813B`) listed in the disassembly pipeline's
-  `recomp_seed/dynamic_jumps.txt`; each needs a curated contract
-  (candidate values are whatever the game stores to `$1341/$130D` etc.).
+- **9 dynamic RAM-pointer jumps** were initially listed in the disassembly
+  pipeline's `recomp_seed/dynamic_jumps.txt`. The animation opcode dispatcher
+  at `$BE8179` is now closed by a source-backed 197-target contract and an
+  exact audit; the remaining sites still need equivalent writer/table proofs.
 - No host application yet: next milestones are (1) clean generation,
   (2) build the generated static library, (3) port DKC2Recomp's runner
   integration (`runner/`, `src/`, `app/`, CMake) and boot-probe workflow,
@@ -90,7 +90,9 @@ placed-object activation after the host proves a supported gameplay layout.
   Fixed screens (logos, title, map transitions) pillarbox via
   `PpuSetExtraSpaceCentered`.
 - `DKC1_WIDESCREEN=1` opts in the headless harness; the desktop host
-  defaults ON (`DKC1_WIDESCREEN=0` reverts to 4:3).
+  defaults to 16:9 (`DKC1_WIDESCREEN=0` starts in 4:3). The visible host also
+  exposes `View -> Aspect Ratio` so either presentation can be selected while
+  paused or playing without reloading the ROM or save state.
 - The post-generation override pass ports the proven SuperZSNES visibility
   fixes: 18 left activation sites, 14 span sites, two right-prefetch sites,
   common sprite culls, banana-private culls/OAM X-high, vertical-rope
@@ -111,16 +113,31 @@ Known issues / next:
   appears in the 256x224 run and is not a widescreen regression.
 - Audit vertical levels, underwater stages, bosses, object-pool pressure, and
   save-state restoration with the deterministic tooling used by the ROM hack.
-- The unresolved `$BE8179` runtime dispatch warning predates these adapters;
-  the current host skips that handler's effects and needs a separately proven
-  dispatch contract.
+- `$BE8179` is resolved by an exact 197-target source-backed contract. The
+  former incomplete route harvest caused real gameplay breakage (a repeating
+  jump) and is guarded by `tools/audit_animation_dispatch.py` plus a
+  deterministic one-tap regression. Other indirect dispatch sites remain
+  independent bring-up risks unless source-audited. The new
+  `tools/audit_indirect_tables.py` proves the other 118 cfg contracts exactly
+  from disassembly tables/records (zero missing or extra targets), so no
+  current indirect allowlist depends only on route harvesting.
+- Contact damage and the Jungle death/non-gameplay transition now pass a
+  two-checkpoint, three-repeat byte-identical closure contract. Every centered
+  transition frame has exact black margins with no raw fallback; map/title,
+  bonus, save-select, and cross-level routes remain to be covered.
+- The full boot/fixed-screen/map-to-Jungle entry contract applies the same
+  trace gate in the other direction. Its three 7,645-frame runs have identical
+  traces and zero raw fallback, nonblack centered sides, policy violations, or
+  stable-input margin mutations.
 
 ### Native widescreen decision trace
 
 `DKC1_WS_TRACE` enables a default-off JSONL record at the exact presentation
 boundary. Each frame records scene/source identity, PPU registers, both layout
 scores, the selected calibration/grace state, shadow reset/prefill/fallback
-decisions, world keys, margin-stat deltas, region hashes, and raw VRAM plus
-both OAM-copy hashes. This is the causal substrate for the planned provenance
+decisions, world keys, margin-stat deltas, region hashes, and raw VRAM, CGRAM,
+plus both OAM-copy hashes. The analyzer also requires equal PPU/scroll,
+camera/world, and center-pixel state before reporting a stable-input margin
+mutation. This is the causal substrate for the planned provenance
 overlay, first-divergence locator, and lifecycle tools. See
 `docs/WIDESCREEN_DEBUG_TOOLS.md` for usage and schema details.

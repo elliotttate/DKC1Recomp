@@ -1,5 +1,8 @@
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
+import tempfile
 import unittest
 
 
@@ -53,6 +56,33 @@ class FirstDivergenceTests(unittest.TestCase):
             FIRST_DIVERGENCE.contiguous_ranges([1, 2, 4]),
             [{"first": "0x00001", "last": "0x00002", "count": 2},
              {"first": "0x00004", "last": "0x00004", "count": 1}])
+
+    def test_sparse_wram_dump_is_reconstructed_at_original_offsets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "sparse"
+            payload = bytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE])
+            raw = prefix.with_suffix(".bin")
+            raw.write_bytes(payload)
+            index = Path(str(raw) + ".jsonl")
+            records = [
+                {"schema": "dkc1.wram.dump.v1", "type": "manifest",
+                 "first_frame": 1, "last_frame": 1, "payload_size": 5,
+                 "ranges": [["00010", "00011"],
+                            ["00ae5", "00ae7"]]},
+                {"schema": "dkc1.wram.dump.v1", "type": "frame",
+                 "relative_frame": 1, "emulator_frame": 99,
+                 "offset": 0, "length": 5,
+                 "sha256": hashlib.sha256(payload).hexdigest()},
+            ]
+            index.write_text(
+                "\n".join(json.dumps(row) for row in records) + "\n",
+                encoding="utf-8")
+
+            frames = FIRST_DIVERGENCE.load_wram_frames(prefix)
+
+            self.assertEqual(frames[1][0x10:0x12], b"\xAA\xBB")
+            self.assertEqual(frames[1][0x0AE5:0x0AE8], b"\xCC\xDD\xEE")
+            self.assertEqual(frames[1][0x0200], 0)
 
 
 if __name__ == "__main__":

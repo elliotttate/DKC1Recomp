@@ -34,10 +34,24 @@ def record(frame: int, left: str, vram: str = "1" * 16) -> dict:
             "left": left, "center": "0" * 16, "right": "2" * 16,
             "bg1_left": "3" * 16, "bg1_right": "4" * 16,
             "bg2_left": "5" * 16, "bg2_right": "6" * 16,
-            "vram": vram, "ppu_oam": "7" * 16,
+            "vram": vram, "cgram": "9" * 16,
+            "ppu_oam": "7" * 16,
             "wram_oam": "8" * 16,
         },
     }
+
+
+def centered_record(frame: int, extra: int = 43) -> dict:
+    black = MODULE.fnv1a_zero_bytes(extra * 4 * 224)
+    item = record(frame, black)
+    item["hash"]["right"] = black
+    item["decision"].update({
+        "edge_extension": 0,
+        "centered_fallback": 1,
+        "shadow_commit": 0,
+        "shadow_frame": 0,
+    })
+    return item
 
 
 class AnalyzeWsTraceTests(unittest.TestCase):
@@ -50,6 +64,25 @@ class AnalyzeWsTraceTests(unittest.TestCase):
         self.assertEqual(
             summary["stable_input_margin_changes"][0]["changed_hashes"],
             ["left"])
+
+    def test_does_not_call_scroll_or_palette_change_nondeterministic(self):
+        first = record(12, "a" * 16)
+        second = record(13, "b" * 16)
+        second["ppu"]["h"] = [1, 0, 0, 0]
+        second["hash"]["cgram"] = "e" * 16
+        summary = MODULE.analyze([first, second])
+        self.assertEqual(summary["stable_input_margin_changes"], [])
+
+    def test_legacy_trace_marks_margin_lead_unproven_without_cgram(self):
+        first = record(14, "a" * 16)
+        second = record(15, "b" * 16)
+        del first["hash"]["cgram"]
+        del second["hash"]["cgram"]
+        summary = MODULE.analyze([first, second])
+        self.assertEqual(summary["stable_input_margin_changes"], [])
+        self.assertEqual(
+            summary["stable_input_unproven_margin_changes"][0]["reason"],
+            "trace_missing_cgram_hash")
 
     def test_loader_tracks_counter_reset_as_new_epoch(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -74,17 +107,37 @@ class AnalyzeWsTraceTests(unittest.TestCase):
             }])
 
     def test_reports_identity_transition_and_policy_violation(self):
-        item = record(20, "a" * 16)
+        item = centered_record(20)
         item["identity"] = {"hash": "f" * 16, "change_mask": 8}
         item["decision"].update({"identity_reset": 1,
                                  "grace_accepted": 1,
-                                 "centered_fallback": 1})
+                                 "shadow_commit": 1,
+                                 "shadow_frame": 1})
         summary = MODULE.analyze([item])
         self.assertEqual(summary["identity_transitions"][0]["frame"], 20)
         self.assertEqual(
             summary["policy_violations"][0]["violations"],
             ["centered_frame_committed_shadow",
              "new_identity_used_old_grace"])
+
+    def test_centered_fallback_requires_exact_black_side_margins(self):
+        item = centered_record(30)
+        item["hash"]["right"] = "d" * 16
+        summary = MODULE.analyze([item])
+        self.assertEqual(summary["black_margin_hash"],
+                         MODULE.fnv1a_zero_bytes(43 * 4 * 224))
+        self.assertEqual(
+            summary["policy_violations"][0]["violations"],
+            ["centered_margin_not_black"])
+        self.assertEqual(
+            summary["centered_nonblack_margin_frames"][0]["sides"],
+            ["right"])
+
+    def test_black_hash_supports_398_pixel_variant(self):
+        item = centered_record(40, extra=71)
+        summary = MODULE.analyze([item], extra=71)
+        self.assertEqual(summary["policy_violations"], [])
+        self.assertEqual(summary["centered_nonblack_margin_frames"], [])
 
 
 if __name__ == "__main__":
