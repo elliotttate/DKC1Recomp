@@ -107,6 +107,19 @@ optional `quickload` leg seeded by a state the entry route itself saves.
 ## Tool catalog (`tools/`)
 
 **Understanding / naming**
+- `reverse_watch.py --rom R --route S --address HEX[:len] --before-frame F`
+  — who last changed this address before frame F, function-attributed,
+  with context and escalation hints (one deterministic forward pass).
+- `impact.py ADDR|NAME` — change blast radius: static callers, dispatch
+  membership, routes that executed it (profile corpus), required
+  regression gates.
+- `build_profile_corpus.py --rom R` — per-route function profiles into
+  build/profiles/ (feeds impact/profile_diff).
+- `capability_manifest.py` — docs/CAPABILITIES.json: per-scene
+  host-widescreen status (proven/degraded/centered/unproven), strictly
+  evidence-based from the sweep.
+- SSA IR: not built yet BY DESIGN — see docs/SSA_IR_DESIGN.md before
+  attempting semantic transforms.
 - `structure.py ADDR|NAME` — symbolized 1:1 listing (curated RAM names,
   define annotations, local labels); display aid, no semantic claims.
 - `sync_names.py` — derive `<Base>_StateN` names for dispatch-contract

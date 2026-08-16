@@ -1,0 +1,117 @@
+{
+ "schema": "dkc1.capabilities.v1",
+ "note": "evidence-based only; scenes absent here are UNPROVEN (no route reaches them), never assumed-good. Regenerate after tools/level_sweep.py.",
+ "scenes": [
+  {
+   "scene": "(0, 0, 0, 0)",
+   "host_widescreen": "centered",
+   "widened_frames": 0,
+   "calibrated_frames": 0,
+   "raw_fallbacks": 0,
+   "blank_serves": 0,
+   "pillarbox_in_gameplay_frames": 0,
+   "unstable_margin_frames": 0,
+   "evidence_routes": [
+    "capture_jungle_route_snapshots.dks",
+    "capture_jungle_snapshots.dks",
+    "jungle_snapshot_scroll.dks",
+    "rope_to_left_margin.dks",
+    "rope_to_right_margin.dks",
+    "route_death.dks",
+    "route_jungle.dks",
+    "snapshot_smoke.dks"
+   ]
+  },
+  {
+   "scene": "(0, 22, 0, 0)",
+   "host_widescreen": "centered",
+   "widened_frames": 0,
+   "calibrated_frames": 0,
+   "raw_fallbacks": 0,
+   "blank_serves": 0,
+   "pillarbox_in_gameplay_frames": 1,
+   "unstable_margin_frames": 0,
+   "evidence_routes": [
+    "route_death.dks"
+   ]
+  },
+  {
+   "scene": "(0, 22, 217, 0)",
+   "host_widescreen": "proven",
+   "widened_frames": 813,
+   "calibrated_frames": 813,
+   "raw_fallbacks": 0,
+   "blank_serves": 8064,
+   "pillarbox_in_gameplay_frames": 6,
+   "unstable_margin_frames": 0,
+   "evidence_routes": [
+    "route_death.dks",
+    "route_jungle.dks"
+   ]
+  },
+  {
+   "scene": "(1, 0, 0, 0)",
+   "host_widescreen": "centered",
+   "widened_frames": 0,
+   "calibrated_frames": 0,
+   "raw_fallbacks": 0,
+   "blank_serves": 0,
+   "pillarbox_in_gameplay_frames": 0,
+   "unstable_margin_frames": 0,
+   "evidence_routes": [
+    "capture_jungle_route_snapshots.dks",
+    "capture_jungle_snapshots.dks",
+    "jungle_snapshot_scroll.dks",
+    "rope_to_left_margin.dks",
+    "rope_to_right_margin.dks",
+    "route_death.dks",
+    "route_jungle.dks"
+   ]
+  },
+  {
+   "scene": "(1, 22, 0, 0)",
+   "host_widescreen": "centered",
+   "widened_frames": 0,
+   "calibrated_frames": 0,
+   "raw_fallbacks": 0,
+   "blank_serves": 0,
+   "pillarbox_in_gameplay_frames": 0,
+   "unstable_margin_frames": 0,
+   "evidence_routes": [
+    "capture_jungle_snapshots.dks",
+    "route_death.dks",
+    "route_jungle.dks"
+   ]
+  },
+  {
+   "scene": "(1, 235, 0, 0)",
+   "host_widescreen": "centered",
+   "widened_frames": 0,
+   "calibrated_frames": 0,
+   "raw_fallbacks": 0,
+   "blank_serves": 0,
+   "pillarbox_in_gameplay_frames": 0,
+   "unstable_margin_frames": 0,
+   "evidence_routes": [
+    "capture_jungle_snapshots.dks",
+    "route_death.dks",
+    "route_jungle.dks"
+   ]
+  },
+  {
+   "scene": "(1, 236, 0, 0)",
+   "host_widescreen": "centered",
+   "widened_frames": 0,
+   "calibrated_frames": 0,
+   "raw_fallbacks": 0,
+   "blank_serves": 0,
+   "pillarbox_in_gameplay_frames": 0,
+   "unstable_margin_frames": 0,
+   "evidence_routes": [
+    "capture_jungle_snapshots.dks",
+    "route_death.dks",
+    "route_jungle.dks"
+   ]
+  }
+ ]
+}
