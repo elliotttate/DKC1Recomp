@@ -20,6 +20,24 @@ def put16(memory: bytearray, offset: int, value: int) -> None:
 
 
 class FirstDivergenceTests(unittest.TestCase):
+    def test_first_hash_divergence_can_begin_after_initializer(self):
+        stock = [(1, "same"), (2, "stock-init"), (3, "same-again"),
+                 (4, "stock-gameplay")]
+        wide = [(1, "same"), (2, "wide-init"), (3, "same-again"),
+                (4, "wide-gameplay")]
+
+        self.assertEqual(
+            FIRST_DIVERGENCE.first_hash_divergence(stock, wide), 2)
+        self.assertEqual(
+            FIRST_DIVERGENCE.first_hash_divergence(stock, wide, 3), 4)
+        self.assertIsNone(
+            FIRST_DIVERGENCE.first_hash_divergence(stock, wide, 5))
+
+    def test_first_hash_divergence_rejects_frame_misalignment(self):
+        with self.assertRaisesRegex(RuntimeError, "different frame numbering"):
+            FIRST_DIVERGENCE.first_hash_divergence(
+                [(1, "same")], [(2, "same")])
+
     def test_render_pose_refresh_and_oam_are_presentation_not_gameplay(self):
         stock = bytearray(FIRST_DIVERGENCE.WRAM_SIZE)
         wide = bytearray(stock)
@@ -35,6 +53,8 @@ class FirstDivergenceTests(unittest.TestCase):
         result = FIRST_DIVERGENCE.classify(bytes(stock), bytes(wide))
 
         self.assertFalse(result["gameplay_critical"])
+        self.assertFalse(result["actor_bookkeeping_critical"])
+        self.assertFalse(result["scene_outcome_critical"])
         self.assertEqual(result["divergence_class"], "presentation_only")
         self.assertEqual(result["presentation_diff_bytes"], 2)
         self.assertEqual(len(result["render_pose_refresh_only_actors"]), 1)
@@ -47,9 +67,25 @@ class FirstDivergenceTests(unittest.TestCase):
         result = FIRST_DIVERGENCE.classify(bytes(stock), bytes(wide))
 
         self.assertTrue(result["gameplay_critical"])
+        self.assertTrue(result["actor_bookkeeping_critical"])
+        self.assertFalse(result["scene_outcome_critical"])
         self.assertEqual(result["divergence_class"], "gameplay_state")
         self.assertEqual(result["gameplay_actor_differences"][0]["slot"],
                          0x06)
+
+    def test_scene_outcome_is_separate_from_camera_transient(self):
+        stock = bytearray(FIRST_DIVERGENCE.WRAM_SIZE)
+        wide = bytearray(stock)
+        put16(wide, 0x088B, 0xFF38)
+        camera_only = FIRST_DIVERGENCE.classify(bytes(stock), bytes(wide))
+        self.assertTrue(camera_only["gameplay_critical"])
+        self.assertFalse(camera_only["actor_bookkeeping_critical"])
+        self.assertFalse(camera_only["scene_outcome_critical"])
+
+        put16(wide, 0x003E, 0x00F9)
+        outcome = FIRST_DIVERGENCE.classify(bytes(stock), bytes(wide))
+        self.assertTrue(outcome["scene_outcome_critical"])
+        self.assertIn("entrance", outcome["scene_outcome_fields"])
 
     def test_contiguous_ranges_are_exact(self):
         self.assertEqual(

@@ -39,6 +39,7 @@ add_executable(dkc1_snesrecomp_headless
     ${DKC1_SNESRECOMP_GEN_SOURCES}
     runner/dkc1_game.c
     runner/dkc1_video.c
+    runner/dkc1_margin_proxy.c
     runner/dkc1_ws_trace.c
     runner/headless_host.c
     runner/input_playback.c

@@ -168,10 +168,13 @@ def analyze(frames: list[dict], max_findings: int = 200,
         if previous is not None:
             old_hash = previous["hash"]
             new_hash = record["hash"]
-            has_full_hashes = "cgram" in old_hash and "cgram" in new_hash
+            has_full_hashes = all(
+                key in old_hash and key in new_hash
+                for key in ("wram", "cgram"))
             machine_hashes_same = has_full_hashes and all(
                 old_hash.get(key) == new_hash.get(key)
-                for key in ("vram", "cgram", "ppu_oam", "wram_oam"))
+                for key in ("wram", "vram", "cgram", "ppu_oam",
+                            "wram_oam"))
             ppu_keys = ("mode", "bgmode", "inidisp", "main", "sub",
                         "bgsc", "h", "v", "wide_mask", "repeat_mask",
                         "terrain_layer")
@@ -183,9 +186,16 @@ def analyze(frames: list[dict], max_findings: int = 200,
                               record["camera"].get(key)
                               for key in camera_keys)
             world_same = previous["world"] == record["world"]
+            identity_same = (previous.get("identity", {}).get("hash") ==
+                             record.get("identity", {}).get("hash"))
+            reset_boundary = any(record.get("decision", {}).get(key)
+                                 for key in ("reset", "cold_start",
+                                             "source_reset",
+                                             "identity_reset"))
             center_same = old_hash.get("center") == new_hash.get("center")
             inputs_same = (machine_hashes_same and ppu_same and camera_same and
-                           world_same and center_same)
+                           world_same and identity_same and not reset_boundary and
+                           center_same)
             margin_changed = any(old_hash.get(key) != new_hash.get(key)
                                  for key in ("left", "right", "bg1_left",
                                              "bg1_right", "bg2_left",
@@ -212,7 +222,7 @@ def analyze(frames: list[dict], max_findings: int = 200,
                 stable_input_unproven_margin_changes.append({
                     "frame": record["frame"],
                     "previous_frame": previous["frame"],
-                    "reason": "trace_missing_cgram_hash",
+                    "reason": "trace_missing_full_machine_hash",
                 })
         previous = record
 

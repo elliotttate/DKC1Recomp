@@ -415,9 +415,14 @@ prototype failed open.
 
 The corrected experiment reads `$82`, reconstructs the stock scanner interval
 from `$EF/$F1`, and suppresses the first behavior dispatch until the source
-record reaches that interval. A whole-pool seed on the first dispatch after a
-reset treats actors already present in a loaded snapshot as left-censored and
-started. Phase history is reset only by a real gameplay-context change
+record reaches that interval. The normal actor pool is sampled at the frame
+boundary **before** the cartridge scanner. Actors already present there (for
+example in a loaded snapshot) are left-censored and trusted; actors allocated
+by the widened scanner later in the same frame remain new and must pass the
+stock interval. The earlier deferred whole-pool seed at first dispatch was
+wrong: on a fresh entry it accidentally trusted the very margin-only actors
+the guard was meant to hold. Phase history is reset only by a real
+gameplay-context change
 (`mode`, `level`, or `entrance`) or an explicit state import/load. A rejected
 presentation frame is not a gameplay transition and no longer clears the
 history. Evidence is under `build/phaseguard-v3-first-divergence/`.
@@ -447,6 +452,46 @@ separate case where a wide actor persists while stock culls and reallocates it.
 Do not claim early activation harmless, and do not ship this guard until a
 visual oracle proves that prefetched actors remain correctly presented and a
 semantic trace resolves the remaining work fields.
+
+The pre-scanner seed correction has a deterministic gameplay proof at
+`build/first-divergence-treetop-righty-phaseguard-v2/`. Tree Top Town source
+record `$02` (Gnawty `$4D`, authored X `$0180`) is allocated by the widened
+scanner at relative frame 92, logged as `prefetch_candidate`, and held at its
+initial state until the reconstructed stock interval reaches X `$0180` at
+relative frame 190. Without the correction it ran about 98 extra AI frames,
+hit the Kong, and the wide route exited gameplay at frame 545. With the
+correction the 721-frame Right+Y route remains in entrance `$00A4`; Kong's
+final position and state equal stock. Additional candidates `$03..$08` are
+released at their exact stock-window crossings rather than by a fixed delay.
+
+`tools/fresh_entry_stress_sweep.py --prefetch-phase-guard` is the only
+accepted matrix invocation for this experiment. The harness removes ambient
+`DKC1_PREFETCH_PHASE_GUARD` from child environments, then writes an explicit
+0/1 value and records `config.prefetch_phase_guard`; this prevents a shell
+setting from silently contaminating a baseline or, conversely, from being
+silently discarded during a purported guarded run.
+
+The rejected presentation-OAM companion is not part of the current design.
+An instrumented suppressed Gnawty dispatch changed 50 WRAM bytes before the
+transaction rollback, but it did not advance the OAM cursor or emit an OAM
+entry. Source/IDA grounding explains why: placed-actor AI runs first and the
+shared world-sprite renderer `CODE_BBA849` builds OAM later from the resulting
+pose. Capturing OAM inside the suppressed AI transaction was therefore
+state-safe but image-inert. The prototype and its environment switch were
+removed. `DKC1_PREFETCH_TRANSACTION_DEBUG=1` remains as a default-off
+write-set diagnostic. With `DKC1_LIFECYCLE_TRACE`, the first suppressed
+dispatch for each pool ordinal emits `dkc1.prefetch-transaction.v1`: every
+changed byte plus counts for the actor's own indexed state, other actor slots,
+OAM, object bookmarks, verified scratch, and other global WRAM. The trace is
+captured before the full 128 KiB rollback and never changes presentation.
+`tools/analyze_prefetch_write_sets.py` groups those events by sprite ID and
+authored source and fails closed on cross-actor, bookmark, persistent-global,
+or truncated evidence. The three-scene evidence bundle is
+`build/prefetch-write-set-highrisk-v3/`; all eight observed authored records
+write only their own indexed actor fields plus verified scratch. No sampled
+dispatch wrote another actor, OAM, `$192B` bookkeeping, or persistent global
+WRAM. This is enough to prototype host-owned state projection for those exact
+sprite/source pairs, not to declare every DKC actor class proxy-safe.
 
 ### BG2 parallax-loop regression (2026-08-15)
 
@@ -546,6 +591,340 @@ the visible output is continuous on both sides. Evidence is under
 `tools/verify_shadow_localization.py` and its report is
 `shadow-localization-verification.json`.
 
+### Transition contamination clean-history oracle (2026-08-16)
+
+`tools/bisect_transition_contamination.py` now distinguishes bad cartridge
+state from retained host presentation history. For each sampled route frame it
+saves a native snapshot and the live-history frame, then loads that snapshot
+in a new process and performs a diagnostic zero-frame render. The latter runs
+`Dkc1DrawPpuFrame` without advancing CPU, APU, or PPU time, so WRAM, VRAM,
+CGRAM, WRAM OAM, and PPU OAM remain exact while the host-only widescreen
+shadow starts clean. A margin-only difference is contamination; a raw-state
+or native-center difference fails closed.
+
+The current Expresso Bonus quicksave (level `$0050`, entrance `$006C`, source
+SHA-256 `200B3D34526A489F2E411543B8B1D0183AAC2414D7857C7478D4648E1A299F0C`)
+is clean at relative frames 1 and 30. The path-history and fresh-history
+renders have zero changed pixels in left, center, and right regions, with
+exact WRAM/VRAM/CGRAM and both OAM copies. Evidence is
+`build/bonus-transition-clean-history-v2/report.json`.
+
+The same tools build then replayed imported states 0, 1, 2, and 5 for 180
+frames in native and wide modes, three repeats each. All eight mode/state
+cells are deterministic in WRAM, VRAM, CGRAM, OAM, and final pixels, with zero
+OBJ range/time overflow. This is a stability gate, not route-completion proof;
+the authored exit/barrel/section outcomes listed above remain required.
+Manifest: `build/imported-state-suite-transition-tool-v18/manifest.json`.
+
+### Live streamed terrain capture and bonus-stage culling (2026-08-16)
+
+The Snow Barrel Blast fresh-entry route exposed a stable right-side cutoff/
+repeat that the earlier sweep grader missed. The cartridge adapters had
+proved a complete widened rolling-map fill, but `WsShadowFrame` still copied
+only the native viewport. The host then either retained an old ROM-prefilled
+margin or served blanks outside those 32 columns. The ROM decoder was not a
+safe fallback here: it calibrated perfectly during forced blank, then matched
+only about 30 of 224 sampled visible tiles after the real terrain appeared.
+
+The accepted implementation keeps `extend_world` dependent on a successfully
+prepared shadow and adds an authoritative live-tile capture path. When the
+checksum-locked cartridge stream coverage is complete, DKC1 projects the
+entire widened terrain range plus an eight-pixel guard into world tile
+coordinates, reads those exact cells from the 64-column rolling PPU map, and
+records them as captured provenance with `WsShadowCaptureTile`. This handles
+west and east columns symmetrically; simply increasing the generic capture
+column count was rejected because that API grows only east of the native
+origin.
+
+A later Right+Y stress branch exposed a second host-only artifact at a fixed
+Jungle Hijinxs camera: a 13-pixel strip at the extreme left changed downward
+in eight-pixel steps for twelve frames after cartridge inputs had stopped
+changing. The live range was already authoritative, but the ROM bootstrap
+refill continued to overwrite it after stream readiness as per-cell
+game-write cooldowns expired. The accepted policy is now one-way: the ROM
+decoder bootstraps margins only before complete stream coverage; after
+coverage is proven, the symmetric live capture is published and left intact.
+`DKC1_WS_TRACE` now hashes the full 128 KiB WRAM image and gates stability on
+identity/reset boundaries, so changing decoded source data cannot masquerade
+as host nondeterminism.
+
+Snow Barrel evidence is
+`build/snowbarrel-live-stream-capture-v6/`: BG1 records 351,904 west hits and
+342,720 east hits, zero misses, zero blank/raw fallback, and no stable-input
+margin mutation. Its WRAM, VRAM, CGRAM, and both OAM hashes remain identical
+to the pre-fix run. The final frame is continuous and is retained as
+`final.png`.
+
+The current full fresh-entry sweep is
+`build/world-map-fresh-entry-sweep-v8/`. It explores 65 map nodes and 325
+edges, reaches 40 distinct fresh entrances, and replays each three times. The
+strict grade is 40/40: zero terrain misses, zero raw fallbacks, zero
+stable-input margin changes, and deterministic native state. Thirty-seven
+entrances widen. Necky's Nuts, Boss Dumb Drum, and Necky's Revenge remain
+intentionally centered over black because their fixed arenas publish
+`lower==upper`; a tested forced-wide candidate produced visibly corrupt
+right-edge tiles despite nominal stream coverage. That rejected evidence is
+under `build/fixed-arena-stream-capture-v8/`.
+
+Imported playtester states 0, 1, 2, and 5 were then replayed in
+native and wide modes, three times each. All 24 runs pass and every WRAM,
+VRAM, CGRAM, and OAM stream is deterministic. Manifest:
+`build/imported-state-suite-live-stream-v20/manifest.json`. The verified
+runner SHA-256 is
+`81313a07606aa57a211c68065e0e84b88e62c48371e4e7b992d8490d8343c22d`.
+
+`tools/fresh_entry_stress_sweep.py` extends the entrance gate with neutral,
+Right+Y, and Left+Y motion from every immutable pre-entry snapshot. The clean
+matrix at `build/fresh-entry-stress-v6/report.json` contains 120 branches and
+240 isolated native/wide processes. It reports zero hard presentation
+failures: no shadow-cache OOB, no terrain miss/raw fallback, no true OAM
+X-high loss, no persistent OAM pipeline mismatch, no OAM-budget regression,
+and no stable-input margin mutation. Every branch does report native/wide
+machine-state divergence and is therefore honestly queued as a lifecycle
+investigation; this matrix is not route-completion proof.
+
+The original stress matrix started input after one fixed host-frame delay.
+That is not a valid native/wide comparison: the widened tilemap initializer
+can take a different number of host frames, and Tree Top Town's entrance walk
+was exactly one frame behind in wide mode. `--align-gameplay-ready` now runs
+each side to an independent post-entry snapshot, then requires matching level,
+mode, resolved entrance, fade phase, active Kong identity, position, state,
+and animation before applying the common input. Camera bounds are deliberately
+excluded because their difference is the feature under test. The default 64
+neutral frames after the coarse predicates clears the measured entrance-walk
+skew. A mismatch rejects the branch without producing lifecycle evidence.
+
+This changes the interpretation materially. The aligned Tree Top Town gate at
+`build/fresh-entry-stress-v7-aligned-tree64/` reaches the same `$00F9` outcome
+in native and wide mode in both repeats; the earlier critical exit difference
+was phase contamination. The aligned Temple Tempest gate also removes its old
+stock-only records. Winky's Walkway remains a real lifecycle result: without
+the prefetch guard, source `$02` advances before stock eligibility and sources
+`$03/$04` never allocate; with the guard they allocate with stock-identical
+identity/pose (`build/fresh-entry-stress-v7-aligned-winky-guard/`).
+
+The phase guard must nevertheless remain opt-in. A 40-entry, 120-branch
+aligned guarded matrix is retained at
+`build/fresh-entry-stress-v8-aligned-guard-full/`. It removes all `stock_only`
+findings and reduces critical findings from 16 to one, but the remaining
+Misty Mine Right+Y case is decisive: native dies and returns to the map while
+the guarded wide run remains alive. The corresponding aligned unguarded
+control at `build/fresh-entry-stress-v10-aligned-misty-baseline/` has both
+sides die and reach the same map state. Therefore transactionally freezing
+every early type-1 actor is not semantics-preserving. The next architecture
+should keep the cartridge gameplay scanner native-width and render added
+margin objects through presentation-only proxies, rather than retaining wide
+actors in the real pool and rolling back all their WRAM effects.
+
+Readiness now uses the resolved `level_state` entrance/fade oracle instead of
+assuming the map entrance persists or `fade==0`: Reptile Rumble redirects
+`$00EA->$0001`, while Ropey Rampage and Ice Age Alley retain nonzero gameplay
+fade values. Equal nonzero bounds are valid fixed arenas. The corrected
+affected-entry gate is
+`build/fresh-entry-stress-v9-aligned-guard-readiness/`. Lifecycle triage also
+preserves alignment-rejected branches as skipped evidence instead of indexing
+an empty run list.
+
+### Expresso Bonus quicksave culling audit (2026-08-16)
+
+The user quicksave at level `$0050`, entrance `$006C`, SHA-256
+`200B3D34526A489F2E411543B8B1D0183AAC2414D7857C7478D4648E1A299F0C`,
+was rechecked after the live-stream policy change.  Same-frame isolated BG1,
+BG2, BG3, OBJ, composite, and provenance captures show no hard edge at either
+old 4:3 boundary.  BG1 terrain and BG2 foliage continue across the full
+342-pixel presentation; BG3's authored periodic field also spans the output.
+The 360-frame neutral/Right+Y/Left+Y branches report zero raw fallback, zero
+terrain-margin miss, zero policy violation, and zero stable-input margin
+mutation.  Evidence is under
+`build/bonus-quicksave-culling-20260816/`.
+
+The corrected pre-scanner phase guard was also replayed for 240 Right+Y frames
+from this exact quicksave. Every sampled frame (0 through 210 in 30-frame
+steps) is byte-identical to the unguarded build, including the timed fade and
+exit, and the trace still contains zero raw fallback or policy violation.
+This save therefore does not reproduce the Tree Top early-AI defect and the
+guard does not hide or change its reported image.
+
+The capture did expose a recorder defect rather than a renderer defect.  Its
+F9 bundle retained a frame-300 anchor even though F12 later replaced the
+machine with the bonus quicksave.  Replaying 3,325 recorded neutral inputs
+therefore ended at a different WRAM hash.  The recorder now treats F12,
+file-picker loads, and scripted `state_load` as hard timeline boundaries:
+old inputs/anchors are invalidated and the loaded machine is captured as the
+new anchor before any further emulated frame.  This is required evidence
+discipline for future reports where the visual corruption occurs before the
+quicksave and disappears on reload.
+
+Interactive F11 now closes the other half of this evidence gap.  A successful
+quicksave writes the native machine snapshot and—when the rolling recorder is
+armed—also exports the causal anchor, resolved input history, final raw machine
+planes, and same-frame BG1/BG2/BG3/OBJ/composite captures.  Format-v8 snapshots
+preserve the host-only widescreen shadow directly; the companion bundle adds
+the causal history needed to explain how it became invalid.  This path was
+exercised in a visible build: the F11
+bundle under `build/bonus-quicksave-repro-candidate-v4/` contains the snapshot,
+inputs, raw planes, manifest, and all five requested layer captures, while the
+user's original quicksave was restored byte-for-byte afterward.  The visible
+candidate `dkc1_widescreen_desktop_quicksave_repro_v2.exe` was then launched
+paused at this exact bonus-room state so the next occurrence can be preserved
+without a separate F9 step.
+
+Native state format v8 now preserves that host state directly as well.  The
+extra DKC1 chunk contains a sparse, bounds-checked WsShadow snapshot plus the
+calibration identity, cache origins, presentation bias, cartridge stream
+coverage, and placed-actor phase state.  Existing v4-v7 states still load and
+take the established cold-rebuild path.  On the Expresso Bonus state, the
+authoritative 60-frame split test saved at frame 30 and resumed the remaining
+30 frames in a fresh process.  It matched the uninterrupted run exactly for
+the composite framebuffer, WRAM, VRAM, CGRAM, WRAM OAM, PPU OAM, renderer
+state, and cumulative shadow counters.  The generated state is 324,858 bytes
+rather than a raw multi-megabyte cache dump.  Re-run the contract with
+`tools/verify_widescreen_savestate.py`; the recorded result is
+`build/widescreen-savestate-roundtrip-bonus/report.json`.
+
+The automatic blank-margin detector also had a blind spot relevant to this
+report: it discarded a frame when *both* added margins were fully flat, on the
+assumption that this was normal pillarboxing.  It now receives the proven
+extended-gameplay latch from the renderer.  Fully flat sides are still ignored
+for centered menus/logos/fades, but they are classified as
+`full_flat_gameplay` and increment the automatic-export trigger during a
+supported level.  `DKC1_AUTO_EXPORT=1` activates this detector even when no
+`DKC1_BLANK_SCAN` JSONL path was requested.
+
+The detector now also checks 16-line bands. The original whole-column profile
+could dilute a BG/window/foreground cutoff occupying only part of the 224-line
+frame. A band is promoted only when its adjacent native edge has structure and
+at least eight margin columns collapse to a flat value; JSONL schema v3 records
+`partial_height_flat` with `y0`/`y1`. The compiled model proves a 16-line
+two-sided cull is detected while a centered non-gameplay pillarbox is ignored.
+On the Expresso quicksave, a 240-frame Right+Y gate produced zero events under
+the stronger detector (`build/bonus-bandscan-live-gate/blank-scan.jsonl`).
+
+An offline arbitrary-snapshot matrix now removes dependence on one guessed
+input macro. `tools/snapshot_widescreen_stress.py` ran the exact Expresso Bonus
+quicksave through twelve fixed, diagonal, alternating, and box routes twice
+each (`build/bonus-snapshot-stress-v3/report.json`). All repeat machine and
+detector signatures were exact. The 24 runs contained 7,992 extended gameplay
+frames, 22,871,744 terrain hits, no terrain miss/raw fallback/strict failure,
+and no rendered-blank event. Therefore the supplied old state and these
+420-frame branches do not reproduce the player's cull. The visible rolling
+recorder remains necessary for the longer/manual route; it is armed at the
+same state and will export automatically when the failure occurs.
+
+A visible Right+Y pass from the same state reached the normal bonus-exit fade
+at host frame 224 and completed 517 frames without a rendered-blank event.
+The first auto-export at that fade was rejected: its composite and all four
+isolated planes were intentionally black, while `blank-scan.jsonl` remained
+empty.  The exporter had polled cumulative shadow diagnostics that changed
+during scene teardown. `MaybeAutoExport` now consumes those counters whenever
+extended terrain is unavailable and can only promote their later increments
+while `Dkc1VideoTerrainReady()` is true. The corrected visible build is
+`build/dkc1_widescreen_desktop_bonus_autocapture_v5.exe`, with live evidence
+under `build/bonus-quicksave-autocapture-v8/`.
+
+The later manual report at host frame 18,758 was preserved again from the
+long-running desktop on 2026-08-16. F11 rewrote `quicksave.state`, but its
+SHA-256 remained exactly
+`200B3D34526A489F2E411543B8B1D0183AAC2414D7857C7478D4648E1A299F0C`;
+WRAM, VRAM, CGRAM, WRAM OAM, and PPU OAM in the new F9 bundle also match the
+earlier frame-18,758 bundle byte-for-byte. A fresh current-build same-frame
+capture shows BG1, BG2, BG3, OBJ, and composite across all 342 pixels. The
+wide center (`x=43..298`) is pixel-identical to a native 256x224 replay for
+all five surfaces (zero changed pixels). Two deterministic 1,200-frame
+Right+Y replays reach the normal bonus exit with 3,117,408 terrain hits, zero
+terrain misses, zero raw-margin pixels, zero policy violations, and no blank
+event. Evidence is under `build/bonus-current-same-frame-layers/` and
+`build/bonus-snapshot-long-right-v4/`.
+
+The F9 causal anchor exported by the old PID 39728 is not admissible: that
+executable predates the state-load timeline reset and its anchor replays
+Jungle Hijinxs instead of the loaded bonus snapshot. The current snapshot and
+raw final planes remain valid. A current `dkc1_desktop_tools.exe` was launched
+paused at the same immutable state for visual confirmation; any distinct
+pop-in/cull must be captured there at the visible failing frame rather than
+in the stale long-running process.
+
+A boundary-specific isolated-plane audit was added after that recheck. On the
+same frame, BG1 and BG2 are clean at both centered 256-pixel boundaries: their
+side margins neither empty nor copy the opposite native edge. BG3 is an exact
+opposite-edge repeat on both sides, matching the explicit `repeat_mask=$04`
+policy for this bounded 32-column periodic horizon. Its boundary transition is
+not an outlier (difference 0.0134, nearby median 0.0156), so this is not the
+reported hard cull by itself. The machine-readable result is
+`build/bonus-current-masked-layers/legacy-width-audit.json`. Layer-capture v2
+also emits a backdrop-only surface and per-plane P5 occupancy masks, preventing
+the shared gradient/backdrop from being mistaken for OBJ repetition. The
+auditor checks 16-line bands as well as the whole plane; this exact state has
+no hard partial-height cull. Rerun it with
+`tools/detect_legacy_width_cull.py` against same-frame isolated captures.
+
+A subsequent 420-frame, 12-action replay initially appeared to contradict
+that result: the first detector revision reported a 27-pixel flat band at
+relative frame 307, after the bonus exit returned to Jungle Hijinxs. Raw VRAM
+comparison resolved it. The BG2 `$7400` tilemap is byte-identical to independent
+fresh Jungle captures, and the flat interval begins four pixels *outside* the
+old 256-pixel boundary before authored foliage resumes. It is a transparent
+opening in the 64-column parallax map, not a legacy-width cutoff. Repeating a
+native 256-pixel BG2 scanline in the margins (the DKC2Recomp strategy for
+proven cyclic parallax) produced obvious duplicated palms and hard seams, so
+that experiment was rejected and removed.
+
+The runtime band detector now requires a flat cutoff to be connected directly
+to the native/margin seam and walks outward only until structured pixels
+resume. Its compiled model retains the genuine full- and partial-height cull
+oracles and adds the exact four-pixel-offset/27-pixel authored-gap regression.
+With that correction, two exact repeats of all twelve 420-frame action routes
+are clean: zero process failures, deterministic cull events, strict margin
+failures, terrain misses, raw fallback pixels, or policy violations. Evidence
+is under `build/bonus-bandscan-v2-full-matrix/report.json`. The saved bonus
+frame is therefore not a reproducible cull; a distinct visible failure must be
+saved or exported on its exact frame rather than inferred from this state.
+
+The visible diagnostic panel was corrected during the same recheck.  Its old
+`Scanner` row displayed the type-9 section words at `$1E07-$1E0D`, not the
+object scanner itself.  It now reads the real scanner record at `$00A4`, the
+range at `$00EF/$00F1`, and reports the section controller separately.  At the
+saved Expresso Bonus frame the actual scanner is record `$02`, range
+`$994F..$9BF5` (406 pixels), with 43 presentation pixels on each side and the
+widescreen world marked ready.  This rules out a native-width gameplay scanner
+at the exact saved frame; the remaining reported appearance is a plane or
+presentation-path question, not evidence that placed objects were culled.
+
+### Presentation-only margin proxy renderer gate (2026-08-16)
+
+The first approved margin proxy now reaches DKC's authentic sprite renderer.
+The initial host transaction was correct but the sprite never appeared because
+word `$0AB1,x` was modeled as actor state.  It is actually the global
+`NorSpr_DrawOrderIndexLo` list.  Restoring the scratch actor's zero there
+removed the borrowed slot from `CODE_BBA849` before it could draw.  The proxy
+now preserves the authentic draw-order entry while borrowing a free actor
+slot, retains only its host-owned displayed-pose state, and restores every
+normal actor word after the draw.
+
+`tools/verify_margin_proxy_ab.py` is the release gate for this path.  It
+requires audio equality, no gameplay-owned WRAM difference, both WRAM-shadow
+and PPU-OAM changes, an actual OAM-cursor advance, and pixel changes confined
+to the side bands.  Renderer scratch, OAM shadow, and the sprite graphics DMA
+queue are classified separately instead of being mistaken for gameplay state.
+The two cartridge tails following the renderer (`CODE_80A203` and
+`CODE_80A49D`) consume only the advanced OAM cursor from those differing
+direct-page values; the other renderer temporaries are not gameplay inputs.
+
+The Winky's Walkway source-`$02` Kritter proof uses the aligned ready snapshot
+`00d9-WinkysWalkway_Main`.  At relative frame 3 the proxy adds exactly 37
+pixels in bounding box `[298,90,306,98]`, where the sprite begins entering the
+right extension.  The protected center is unchanged, audio PCM is exact, and
+all 66 changed WRAM bytes belong to named presentation domains (48 OAM, 11
+renderer scratch, 7 sprite-upload queue).  Three independent proxy-on and
+proxy-off replays are byte-identical for framebuffer, WRAM, VRAM, audio, and
+proxy event stream; all three A/B reports pass under
+`build/winky-proxy-repeat-gate-20260816/`.
+
+The apparent one-frame absence immediately after injection is normal SNES
+pipeline behavior: DKC writes the WRAM OAM shadow first and the PPU consumes it
+at the following VBlank.  Never reject or relocate a proxy from one PPU-OAM
+sample without checking the WRAM shadow and the next complete frame.
+
 ### Runtime 4:3 / 16:9 desktop option (2026-08-15)
 
 The visible Win32 host exposes `View -> Aspect Ratio` with native 4:3
@@ -596,6 +975,57 @@ Native oracle: run the same command with `DKC1_WIDESCREEN=0`.
 Fixed-screen frame 600: clear `SNESRECOMP_INPUT_PLAY`, run 600 frames in wide
 and native modes, then assert that wide columns 43-298 equal the native image
 and columns 0-42/299-341 are black.
+
+## Post-bonus BG1 transition contamination (2026-08-16)
+
+The broken Jungle frame after leaving a bonus room was not cartridge tilemap
+damage. A retained-history render and a forced-cold render of the same v8
+snapshot had byte-identical WRAM, VRAM, CGRAM, and both OAM copies, while the
+retained BG1 margins contained the repeated outer strips. BG2 and BG3 were
+not the source.
+
+The exact 464-frame flight bundle is
+`build/bonus-safe-control-repros-20260816/capture-f00000464-20260816-075932-p28476`.
+Binary search located the first visible difference at relative frame 307.
+The widened column initializer had completed one frame earlier while the live
+VRAM ring still mixed outgoing-bonus and returning-Jungle data. The renderer
+accepted column-count coverage as sufficient to bootstrap an unknown layout,
+captured those transitional cells, and skipped the clean ROM prefill.
+
+The fix separates presentation proof from gameplay readiness:
+
+- completed stream coverage may revalidate only an already-established
+  layout;
+- completed coverage with an unknown layout is invalidated and its pixels are
+  rejected for that frame;
+- the next calibrated frame performs the normal cold ROM prefill;
+- the previous next-frame terrain-ready value is restored after the rejected
+  presentation frame, so widened gameplay culls retain byte-exact timing.
+
+`DKC1_WS_COLD_STATE_LOAD=1` is the default-off diagnostic oracle used to
+discard only serialized host presentation history while preserving the loaded
+SNES state exactly. `tools/bisect_transition_contamination.py` compares raw
+WRAM/VRAM first, then the left margin, native center, and right margin.
+
+The repaired route is pixel-identical to its cold reconstruction in all three
+regions. Three independent replays agree on:
+
+- frame SHA-256 `13b87dc1137cf737135ba7e9e572c88442b174a961c29d1450a150379395d43b`;
+- WRAM SHA-256 `f1bfb99712cd06d85c194dc26d46c15276eb1600a2aa9087c9ee9c550b4ac7dd`;
+- VRAM SHA-256 `99353eadfafd748d734a42971beaffa3d1324ed6bccb6d28b052dc32a3d66fea`;
+- CGRAM SHA-256 `10db7dad300104d04691ab92d0a8294fe2ed9c7c8c8119781441c2896ad4c95e`;
+- PPU and WRAM OAM SHA-256
+  `b546233c7c9ab27b4d7c4396d664b5997af4f5941c07c2674d2efeeda343aa6a`;
+- audio FNV-1a `d4f10376e4bf6dce`.
+
+Candidate evidence is under
+`build/post-bonus-fix-candidate-v3-20260816/` and the two repeat directories.
+The complete host build and all 152 Python tests pass. The exact 361-frame
+Snow Barrel Blast route also retains its prior framebuffer, WRAM, VRAM,
+CGRAM, both OAM, and audio hashes; it still records 257 intentional
+stream-only revalidations with zero policy violations, raw fallbacks,
+stable-input margin changes, or nonblack centered margins. That regression is
+`build/post-bonus-fix-snowbarrel-route-20260816/`.
 
 ## Release gates
 

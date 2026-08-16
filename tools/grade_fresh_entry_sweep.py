@@ -11,7 +11,15 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any, Iterable
+
+
+TOOLS = Path(__file__).resolve().parent
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+from analyze_ws_trace import analyze as analyze_ws_trace  # noqa: E402
+from analyze_ws_trace import load_trace as load_ws_trace  # noqa: E402
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -46,6 +54,14 @@ def _terrain_layer(row: dict[str, Any]) -> int:
 
 
 def _classify_centered(rows: list[dict[str, Any]]) -> str:
+    settled = rows[-120:]
+    if (settled and
+            all(int(r.get("scene", {}).get("mode", -1)) == 0x000C
+                for r in settled) and
+            all(int(r.get("camera", {}).get("upper", 0)) ==
+                int(r.get("camera", {}).get("lower", 0))
+                for r in settled)):
+        return "centered_fixed_camera_arena"
     bounded = [r for r in rows if r.get("decision", {}).get("bounds_ready")]
     if not bounded:
         return "centered_static_or_unready_bounds"
@@ -64,7 +80,7 @@ def _classify_centered(rows: list[dict[str, Any]]) -> str:
     return "centered_unknown"
 
 
-def grade_repeat(trace_path: Path) -> dict[str, Any]:
+def grade_repeat(trace_path: Path, *, strict: bool = False) -> dict[str, Any]:
     rows = _read_jsonl(trace_path)
     gameplay = [r for r in rows if int(r.get("scene", {}).get("mode", -1)) != 3
                 or int(r.get("scene", {}).get("level", -1)) != 0x25
@@ -85,12 +101,28 @@ def grade_repeat(trace_path: Path) -> dict[str, Any]:
             terrain_hits += int(delta.get("west_hit", 0)) + int(delta.get("east_hit", 0))
     centered_reason = None if extended else _classify_centered(gameplay)
     failures: list[str] = []
-    if not extended:
+    if not extended and centered_reason != "centered_fixed_camera_arena":
         failures.append(centered_reason or "centered_unknown")
     if raw:
         failures.append("raw_margin_fallback")
     if terrain_misses:
         failures.append("terrain_margin_miss")
+    strict_summary = None
+    if strict:
+        strict_summary = analyze_ws_trace(
+            load_ws_trace(trace_path), max_findings=100000, extra=43)
+        strict_checks = {
+            "trace_policy_violation": strict_summary["policy_violations"],
+            "centered_nonblack_margin":
+                strict_summary["centered_nonblack_margin_frames"],
+            "stable_input_margin_change":
+                strict_summary["stable_input_margin_changes"],
+            "unproven_margin_change":
+                strict_summary["stable_input_unproven_margin_changes"],
+        }
+        for failure, findings in strict_checks.items():
+            if findings:
+                failures.append(failure)
     return {
         "trace": str(trace_path.resolve()),
         "frames": len(rows),
@@ -100,6 +132,7 @@ def grade_repeat(trace_path: Path) -> dict[str, Any]:
         "terrain_misses": terrain_misses,
         "raw_margin_pixels": raw,
         "centered_reason": centered_reason,
+        "strict_summary": strict_summary,
         "status": "pass" if not failures else "fail",
         "failures": failures,
     }
@@ -111,7 +144,8 @@ def grade_report(report_path: Path) -> dict[str, Any]:
         raise ValueError("unexpected sweep schema")
     entries: list[dict[str, Any]] = []
     for entry in source.get("fresh_entries", []):
-        repeats = [grade_repeat(Path(r["paths"]["trace"])) for r in entry.get("repeats", [])]
+        repeats = [grade_repeat(Path(r["paths"]["trace"]), strict=True)
+                   for r in entry.get("repeats", [])]
         name = entry.get("map_state", {}).get("entrance_name", "unknown")
         failures = sorted({failure for repeat in repeats for failure in repeat["failures"]})
         entries.append({

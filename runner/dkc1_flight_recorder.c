@@ -131,6 +131,24 @@ int Dkc1FlightRecorderEnabled(void) {
   return s_enabled;
 }
 
+int Dkc1FlightRecorderReanchorAfterStateLoad(long completed_frame,
+                                             char *error,
+                                             size_t error_size) {
+  if (!s_enabled)
+    return 1;
+
+  /* State loads are hard timeline boundaries.  Retain the allocated anchor
+   * buffers for reuse, but make every pre-load frame impossible to select or
+   * export. */
+  memset(s_inputs, 0, sizeof s_inputs);
+  for (int i = 0; i < kAnchorCount; i++) {
+    s_anchors[i].frame = 0;
+    s_anchors[i].valid = 0;
+  }
+  s_next_anchor = 0;
+  return CaptureAnchor(completed_frame, error, error_size);
+}
+
 void Dkc1FlightRecorderRecord(long completed_frame, uint32_t input_mask) {
   if (!s_enabled || completed_frame <= 0) return;
   const size_t index = (size_t)completed_frame % kInputCapacity;
@@ -335,6 +353,65 @@ write_failed:
   free(input_text);
   SetError(error, error_size, "unable to write one or more bundle files");
   return 0;
+}
+
+int Dkc1FlightRecorderExportTail(const char *bundle_dir, long from_frame,
+                                 long to_frame, char *error,
+                                 size_t error_size) {
+  if (!s_enabled) {
+    SetError(error, error_size, "flight recorder is disabled");
+    return 0;
+  }
+  if (to_frame <= from_frame || to_frame - from_frame > kInputCapacity) {
+    SetError(error, error_size, "tail window empty or beyond input ring");
+    return 0;
+  }
+  char path[1200];
+  snprintf(path, sizeof path, "%s%cpost.inputs.txt", bundle_dir,
+           PathSeparator);
+  FILE *inputs = fopen(path, "wb");
+  if (!inputs) {
+    SetError(error, error_size, "unable to write post.inputs.txt");
+    return 0;
+  }
+  for (long frame = from_frame + 1; frame <= to_frame; frame++) {
+    const InputFrame *entry = &s_inputs[(size_t)frame % kInputCapacity];
+    if (entry->frame != frame) {
+      fclose(inputs);
+      SetError(error, error_size, "tail input history has a gap");
+      return 0;
+    }
+    fprintf(inputs, "%03X\n", entry->mask & 0xfffu);
+  }
+  if (fclose(inputs) != 0) {
+    SetError(error, error_size, "unable to finish post.inputs.txt");
+    return 0;
+  }
+  size_t size = RtlSaveSnapshotToMemory(NULL, 0);
+  uint8_t *state = (uint8_t *)malloc(size ? size : 1);
+  if (!state || !size ||
+      RtlSaveSnapshotToMemory(state, size) != size) {
+    free(state);
+    SetError(error, error_size, "unable to capture post-tail snapshot");
+    return 0;
+  }
+  snprintf(path, sizeof path, "%s%cpost.state", bundle_dir, PathSeparator);
+  const int state_ok = WriteExact(path, state, size);
+  free(state);
+  if (!state_ok) {
+    SetError(error, error_size, "unable to write post.state");
+    return 0;
+  }
+  snprintf(path, sizeof path, "%s%cpost.json", bundle_dir, PathSeparator);
+  FILE *meta = fopen(path, "wb");
+  if (meta) {
+    fprintf(meta,
+            "{\"schema\":\"dkc1.post-tail.v1\",\"from_frame\":%ld,"
+            "\"to_frame\":%ld,\"tail_frames\":%ld}\n",
+            from_frame, to_frame, to_frame - from_frame);
+    fclose(meta);
+  }
+  return 1;
 }
 
 void Dkc1FlightRecorderClose(void) {

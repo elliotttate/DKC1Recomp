@@ -151,6 +151,13 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
                        ppu_oam_hash);
   const uint64_t wram_oam_hash = Fnv1a(
       g_ram + 0x0200, 0x0220, UINT64_C(1469598103934665603));
+  /* VRAM alone is not a complete presentation input for DKC. The rolling
+   * decoded level map and metatile definitions live in WRAM and may animate
+   * or stream while the visible native center remains unchanged. Hash the
+   * complete 128 KiB so the trace never calls a margin change
+   * "stable-input" merely because only offscreen source data changed. */
+  const uint64_t wram_hash = Fnv1a(
+      g_ram, sizeof g_ram, UINT64_C(1469598103934665603));
 
   fprintf(s_trace_file,
       "{\"schema\":\"dkc1.ws.frame.v1\",\"frame\":%d,"
@@ -161,6 +168,9 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"identity\":{\"hash\":\"%016llx\",\"change_mask\":%u},"
       "\"camera\":{\"x\":%u,\"y\":%u,\"lower\":%u,"
       "\"upper\":%u,\"presentation_bias\":%d},"
+      "\"prepare_ppu\":{\"bgmode\":%u,\"inidisp\":%u,"
+      "\"main\":%u,\"sub\":%u,\"bgsc\":[%u,%u,%u,%u],"
+      "\"h\":[%u,%u,%u,%u],\"v\":[%u,%u,%u,%u]},"
       "\"ppu\":{\"mode\":%u,\"bgmode\":%u,\"inidisp\":%u,"
       "\"main\":%u,\"sub\":%u,\"bgsc\":[%u,%u,%u,%u],"
       "\"h\":[%u,%u,%u,%u],\"v\":[%u,%u,%u,%u],"
@@ -172,9 +182,17 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"source_reset\":%u,\"identity_reset\":%u,"
       "\"bounds_ready\":%u,"
       "\"calibration_accepted\":%u,\"grace_accepted\":%u,"
+      "\"stream_revalidated\":%u,"
       "\"shadow_commit\":%u,\"shadow_frame\":%u,\"prefill\":%u,"
-      "\"edge_extension\":%u,\"centered_fallback\":%u,"
+      "\"edge_extension\":%u,\"cartridge_stream_ready\":%u,"
+      "\"centered_fallback\":%u,"
       "\"debug_forced_fallback\":%u},"
+      "\"stream_coverage\":{\"mode\":%u,\"level\":%u,"
+      "\"entrance\":%u,\"last_layer_x\":%u,"
+      "\"last_selected_x\":%u,\"unique\":%u,\"required\":%u,"
+      "\"initial_count_calls\":%u,\"initial_count_rejected\":%u,"
+      "\"selector_calls\":%u,\"observed_columns\":%u,"
+      "\"context_valid\":%u,\"ready\":%u},"
       "\"world\":[{\"valid\":%u,\"x\":%u,\"y\":%u,"
       "\"shadow_x\":%u,\"shadow_y\":%u},"
       "{\"valid\":%u,\"x\":%u,\"y\":%u,"
@@ -191,7 +209,23 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       (unsigned)frame->identity_change_mask,
       (unsigned)ReadWram16(0x088b), (unsigned)ReadWram16(0x0895),
       (unsigned)ReadWram16(0x1b23), (unsigned)ReadWram16(0x1b25),
-      frame->presentation_bias, (unsigned)(g_ppu->bgmode & 7u),
+      frame->presentation_bias, (unsigned)frame->prepare_bgmode,
+      (unsigned)frame->prepare_inidisp,
+      (unsigned)frame->prepare_main_layers,
+      (unsigned)frame->prepare_sub_layers,
+      (unsigned)frame->prepare_bgsc[0],
+      (unsigned)frame->prepare_bgsc[1],
+      (unsigned)frame->prepare_bgsc[2],
+      (unsigned)frame->prepare_bgsc[3],
+      (unsigned)frame->prepare_hscroll[0],
+      (unsigned)frame->prepare_hscroll[1],
+      (unsigned)frame->prepare_hscroll[2],
+      (unsigned)frame->prepare_hscroll[3],
+      (unsigned)frame->prepare_vscroll[0],
+      (unsigned)frame->prepare_vscroll[1],
+      (unsigned)frame->prepare_vscroll[2],
+      (unsigned)frame->prepare_vscroll[3],
+      (unsigned)(g_ppu->bgmode & 7u),
       (unsigned)g_ppu->bgmode, (unsigned)g_ppu->inidisp,
       (unsigned)g_ppu->screenEnabled[0],
       (unsigned)g_ppu->screenEnabled[1],
@@ -212,11 +246,26 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       frame->bounds_ready ? 1u : 0u,
       frame->calibration_accepted ? 1u : 0u,
       frame->grace_accepted ? 1u : 0u,
+      frame->stream_revalidated ? 1u : 0u,
       frame->shadow_commit ? 1u : 0u,
       frame->shadow_frame ? 1u : 0u,
       frame->prefill ? 1u : 0u, frame->edge_extension ? 1u : 0u,
+      frame->cartridge_stream_ready ? 1u : 0u,
       frame->centered_fallback ? 1u : 0u,
       frame->debug_forced_fallback ? 1u : 0u,
+      (unsigned)frame->stream_coverage.mode,
+      (unsigned)frame->stream_coverage.level,
+      (unsigned)frame->stream_coverage.entrance,
+      (unsigned)frame->stream_coverage.last_layer_x,
+      (unsigned)frame->stream_coverage.last_selected_x,
+      (unsigned)frame->stream_coverage.unique_columns,
+      (unsigned)frame->stream_coverage.required_columns,
+      (unsigned)frame->stream_coverage.initial_count_calls,
+      (unsigned)frame->stream_coverage.initial_count_rejected,
+      (unsigned)frame->stream_coverage.selector_calls,
+      (unsigned)frame->stream_coverage.observed_columns,
+      frame->stream_coverage.context_valid ? 1u : 0u,
+      frame->stream_coverage.ready ? 1u : 0u,
       frame->world_valid[0] ? 1u : 0u, frame->world_x[0],
       frame->world_y[0], frame->shadow_local_x[0],
       frame->shadow_local_y[0], frame->world_valid[1] ? 1u : 0u,
@@ -237,13 +286,15 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"center\":\"%016llx\",\"right\":\"%016llx\","
       "\"bg1_left\":\"%016llx\",\"bg1_right\":\"%016llx\","
       "\"bg2_left\":\"%016llx\",\"bg2_right\":\"%016llx\","
-      "\"vram\":\"%016llx\",\"cgram\":\"%016llx\","
+      "\"wram\":\"%016llx\",\"vram\":\"%016llx\","
+      "\"cgram\":\"%016llx\","
       "\"ppu_oam\":\"%016llx\","
       "\"wram_oam\":\"%016llx\"}}\n",
       (unsigned long long)left_hash, (unsigned long long)center_hash,
       (unsigned long long)right_hash, (unsigned long long)bg1_left,
       (unsigned long long)bg1_right, (unsigned long long)bg2_left,
-      (unsigned long long)bg2_right, (unsigned long long)vram_hash,
+      (unsigned long long)bg2_right, (unsigned long long)wram_hash,
+      (unsigned long long)vram_hash,
       (unsigned long long)cgram_hash,
       (unsigned long long)ppu_oam_hash, (unsigned long long)wram_oam_hash);
   fflush(s_trace_file);

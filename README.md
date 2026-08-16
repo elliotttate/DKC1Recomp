@@ -102,6 +102,9 @@ $env:DKC1_FLIGHT_RECORDER_DIR = "$env:TEMP\dkc1-repros"
 .\build\dkc1_desktop.exe "C:\private\dkc1.sfc"
 ```
 
+Set `DKC1_START_PAUSED=1` when opening a diagnostic snapshot to render that
+exact state immediately without advancing a frame; F7 then resumes play.
+
 The recorder keeps roughly one minute of input and periodic native snapshot
 anchors in memory; it writes nothing until F9. Validate and deterministically
 replay an exported bundle with:
@@ -110,6 +113,55 @@ replay an exported bundle with:
 python tools\verify_flight_bundle.py "<bundle>" `
   --runner build\dkc1_snesrecomp_headless.exe --rom "C:\private\dkc1.sfc"
 ```
+
+F11 save states written by current builds use native format v8 and include a
+sparse snapshot of DKC1's host-only widescreen margin and placed-object phase
+history. Older v4-v7 states remain loadable. Verify exact split-run continuity
+with `tools\verify_widescreen_savestate.py`.
+
+For intermittent culling, also set `DKC1_AUTO_EXPORT=1`. With the flight
+recorder armed, a partial blank margin or a fully culled pair of margins in a
+proven extended-gameplay frame automatically exports the same causal bundle
+as F9. Fully black margins remain ignored on centered menus, logos, and fades.
+Partial-height detection is boundary-connected: a flat band must start at the
+centered 256-pixel seam and continue into the added margin. Authored holes that
+begin later inside an otherwise rendered margin are not classified as culls.
+
+For side art that appears only after a title/map/bonus/level transition, use
+the clean-history oracle to distinguish retained host state from cartridge
+VRAM/OAM data:
+
+```powershell
+python tools\bisect_transition_contamination.py `
+  --runner build\dkc1_snesrecomp_headless.exe `
+  --rom "C:\private\dkc1.sfc" --snapshot "<route-root.state>" `
+  --input-play "<route-inputs.txt>" --good-frame 120 --bad-frame 180 `
+  --output build\transition-bisect
+```
+
+The headless host accepts a frame count of `0` only for this diagnostic case:
+it renders the exact loaded state without advancing emulation, rebuilding the
+host-owned widescreen shadow from a clean history.
+
+For an intermittent report anchored by an arbitrary native quicksave, fan the
+same immutable state through deterministic movement branches without touching
+the visible window:
+
+```powershell
+python tools\snapshot_widescreen_stress.py `
+  --runner build\dkc1_headless_tools.exe `
+  --layer-capture build\dkc1_layer_capture.exe `
+  --rom "C:\private\dkc1.sfc" --snapshot quicksave.state `
+  --output build\snapshot-stress --frames 420 --repeats 2
+```
+
+The runner applies fixed, diagonal, horizontal/vertical sweep, and box input
+patterns. It requires exact repeat determinism and the strict margin grade. A
+deterministic failure is rerun automatically with the exact trigger snapshot,
+five surrounding frames, and BG1/BG2/BG3/OBJ/composite captures. Layer-capture
+schema v2 also writes a backdrop-only frame and backdrop-subtracted occupancy
+masks, allowing partial-height legacy-boundary culls to be distinguished from
+transparent OBJ space or a shared fixed-color backdrop.
 
 ## Content boundary
 

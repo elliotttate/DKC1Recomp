@@ -38,6 +38,10 @@ size_t Dkc1VideoPixelCount(void);
  */
 uint16_t Dkc1VideoExpandCullLeft(uint16_t native_margin);
 uint16_t Dkc1VideoExpandCullSpan(uint16_t native_span);
+/* Placed-object scanner constants stay native when the host-owned margin
+ * proxy experiment is enabled; other sprite/OAM culls remain widened. */
+uint16_t Dkc1VideoObjectScannerCullLeft(uint16_t native_margin);
+uint16_t Dkc1VideoObjectScannerCullSpan(uint16_t native_span);
 uint16_t Dkc1VideoPromoteOamXHigh(uint16_t screen_x);
 void Dkc1VideoSetPresentationBias(int bias);
 int Dkc1VideoPresentationBias(void);
@@ -49,6 +53,32 @@ int Dkc1VideoPresentationBias(void);
  * final merge owns both the size and adjacent X-high bits so a reused OAM
  * slot cannot leak an old X-high bit into a rope segment. */
 uint16_t Dkc1VideoBiasCullX(uint16_t screen_x);
+uint16_t Dkc1VideoInitialBackstep(struct CpuState *cpu,
+                                  uint16_t native_backstep);
+uint16_t Dkc1VideoInitialColumnCount(struct CpuState *cpu,
+                                     uint16_t native_count);
+uint16_t Dkc1VideoSelectStreamX(struct CpuState *cpu,
+                                uint16_t stock_stream_x);
+bool Dkc1VideoCartridgeTerrainReady(const uint8_t *wram);
+void Dkc1VideoInvalidateStreamCoverage(void);
+
+typedef struct Dkc1VideoStreamCoverageStats {
+  uint16_t mode;
+  uint16_t level;
+  uint16_t entrance;
+  uint16_t last_layer_x;
+  uint16_t last_selected_x;
+  uint8_t unique_columns;
+  uint8_t required_columns;
+  uint32_t initial_count_calls;
+  uint32_t initial_count_rejected;
+  uint32_t selector_calls;
+  uint32_t observed_columns;
+  bool context_valid;
+  bool ready;
+} Dkc1VideoStreamCoverageStats;
+
+void Dkc1VideoGetStreamCoverageStats(Dkc1VideoStreamCoverageStats *stats);
 uint16_t Dkc1VideoPromoteOamSizeMask(uint16_t size_mask,
                                     uint16_t screen_x);
 uint16_t Dkc1VideoMergeOamSizeAndXHigh(uint16_t existing_word,
@@ -56,6 +86,10 @@ uint16_t Dkc1VideoMergeOamSizeAndXHigh(uint16_t existing_word,
                                       uint16_t screen_x);
 
 struct CpuState;
+/* Exact CODE_BBA849 call-site hooks. They borrow only currently free actor
+ * slots and restore every normal-actor word after OAM generation. */
+void Dkc1MarginProxyBeginRender(struct CpuState *cpu);
+void Dkc1MarginProxyEndRender(struct CpuState *cpu);
 /* Widened placed-object windows can allocate ordinary actors before the
  * cartridge's native scanner would have admitted their authored source
  * record.  Delay only that actor's first behavior dispatch until the source
@@ -70,6 +104,14 @@ void Dkc1VideoEndPlacedActorDispatch(struct CpuState *cpu);
  * stock-started decision. */
 void Dkc1VideoObserveActorPool(const uint8_t *wram);
 void Dkc1VideoResetPlacedActorPhases(void);
+
+/* Versioned host-only lifecycle snapshot used by DKC1 save-state v8. This
+ * preserves placed-actor phase and stream-coverage decisions that widened
+ * gameplay depends on, without serializing the temporary 128 KiB rollback
+ * buffer (saves occur only at frame boundaries). */
+size_t Dkc1VideoSnapshotSize(void);
+bool Dkc1VideoSnapshotSave(void *data, size_t size);
+bool Dkc1VideoSnapshotLoad(const void *data, size_t size);
 
 /* Type-$05 groups mark their parent active even when the fixed actor pool
  * prevented one or more children from allocating. Wider prefetch makes that

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dkc1-transition-contamination-v1.schema.json",
+  "title": "DKC1 transition contamination bisector report",
+  "type": "object",
+  "required": [
+    "schema",
+    "inputs",
+    "window",
+    "boundary_frame",
+    "classification",
+    "deterministic",
+    "analysis_valid",
+    "passed",
+    "samples",
+    "confirmations"
+  ],
+  "properties": {
+    "schema": {"const": "dkc1.transition-contamination.v1"},
+    "inputs": {
+      "type": "object",
+      "required": ["runner", "runner_sha256", "rom", "rom_sha256"],
+      "additionalProperties": true
+    },
+    "window": {
+      "type": "object",
+      "required": ["good_frame", "bad_frame", "bisection_assumes_monotonic_within_window"],
+      "properties": {
+        "good_frame": {"type": "integer", "minimum": 1},
+        "bad_frame": {"type": "integer", "minimum": 2},
+        "bisection_assumes_monotonic_within_window": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "boundary_frame": {"type": ["integer", "null"], "minimum": 2},
+    "classification": {
+      "enum": [
+        "retained_margin_contamination",
+        "no_contamination_at_bad_endpoint"
+      ]
+    },
+    "deterministic": {"type": "boolean"},
+    "analysis_valid": {"type": "boolean"},
+    "passed": {"type": "boolean"},
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["frame", "classification"],
+        "properties": {
+          "frame": {"type": "integer", "minimum": 1},
+          "classification": {
+            "enum": [
+              "identical",
+              "retained_margin_contamination",
+              "machine_state_mismatch",
+              "native_center_mismatch"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "confirmations": {"type": "array", "items": {"type": "object"}}
+  },
+  "additionalProperties": false
+}

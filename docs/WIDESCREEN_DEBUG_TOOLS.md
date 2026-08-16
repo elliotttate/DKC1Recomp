@@ -79,6 +79,17 @@ non-conclusion vocabulary, and 3x byte-identical repeat gates.
   when the same WRAM-shadow entry supplies direct contradictory evidence.
   The 7,600-frame Jungle oracle was clean: zero X-high loss suspects, with
   valid left/right margin entries still reported descriptively.
+- **Tool 16 is implemented.** `tools/bisect_transition_contamination.py`
+  compares a route-history frame with a zero-frame render of an exact snapshot
+  of that same machine state. The reload resets only host-owned widescreen
+  history, while WRAM/VRAM and the native 256-pixel center are required to
+  remain exact. A margin-only difference is therefore classified as retained
+  transition contamination; raw-state or center differences fail closed.
+  The supplied good/bad window is bisected, the predecessor is rechecked, and
+  the boundary is repeated three times by default. Reports keep
+  `analysis_valid` separate from the release-gate `passed`: deterministic
+  contamination is valid evidence but still fails the gate. Reports use
+  `docs/schemas/dkc1-transition-contamination-v1.schema.json`.
 
 Provenance colors are: green = captured/authentic history, cyan = ROM
 prefill, magenta = proven periodic fold, gray = verified transparent blank,
@@ -239,6 +250,58 @@ cross-run semantic mismatch. Accepted evidence is under
 tooling: actors that legitimately remain visible in a wide margin after stock
 culls them still require an explicit gameplay policy and route oracle.
 
+Fresh-entry tracking must seed actor identities from the pre-scanner frame
+boundary, not from the first behavior dispatch. The latter occurs after the
+widened scanner may already have allocated a margin-only record and therefore
+misclassifies the new actor as left-censored. The Tree Top `$02` proof is
+`build/first-divergence-treetop-righty-phaseguard-v2/`: allocation at relative
+frame 92, stock-window release at frame 190, and no premature hit/exit.
+Matrix tests must pass `fresh_entry_stress_sweep.py
+--prefetch-phase-guard`; the harness records the setting and explicitly sets
+the child environment after removing any ambient value.
+
+Fresh-entry stress also supports `--align-gameplay-ready`. Native and wide
+entry initialization run independently, then the tool starts the shared input
+only after the resolved scene and active Kong fields match. It retains both
+ready snapshots, their different host-frame counts, and the exact mismatch
+fields when alignment is impossible. Use the default 64 neutral settling
+frames; four frames was proven too short by Tree Top Town's one-frame entrance
+walk skew. Do not feed alignment-rejected branches into lifecycle triage as if
+they had run; the triager records them as skipped with their rejection reason.
+
+The guard switch is an experiment, not a release recommendation. It fixes the
+aligned Winky's Walkway `$02->$04` allocation failure, but the full guarded
+matrix changes Misty Mine survival relative to an aligned unguarded control.
+This is evidence that freezing a real early-allocated actor still changes pool
+and ordering semantics. The preferred replacement is a native-width gameplay
+scanner plus a separate, read-only presentation proxy for authored records in
+the extra margins.
+
+Use `--prefetch-phase-guard --prefetch-transaction-debug` only for proxy
+research. It emits structured `dkc1.prefetch-transaction.v1` rows during both
+gameplay-ready alignment and the stress branch. Analyze them with
+`tools/analyze_prefetch_write_sets.py ... --json-out report.json`. A proxy
+candidate may retain only its own host-owned actor fields and presentation
+output; writes to another actor, `$192B` bookkeeping, or unclassified global
+WRAM are release blockers. Direct-page `$0000-$01FF` and the opcode-grounded
+`$08AB` draw-loop temporary remain visible as `scratch` but are discarded by
+the enclosing transaction.
+
+The first renderer-backed proxy is now implemented and has its own evidence
+gate.  `tools/verify_margin_proxy_ab.py --on-dir <proxy-on> --off-dir
+<proxy-off>` compares one aligned frame and permits differences only in the
+documented presentation domains: DKC renderer scratch, WRAM OAM shadow, and
+the sprite graphics-upload queue.  It rejects any gameplay-WRAM change, any
+audio change, a missing WRAM-shadow/PPU-OAM handoff, or pixels entering the
+protected native center.  The Winky source-`$02` fixture passes three
+byte-identical repeats under `build/winky-proxy-repeat-gate-20260816/`.
+
+When borrowing a free normal-actor slot, preserve `$0AB1,x`: despite its
+actor-strided address it is the global `NorSpr_DrawOrderIndexLo` array, not
+host-owned proxy state.  Zeroing it silently drops the actor before
+`CODE_BBA849`.  Also evaluate visual onset with both OAM copies: the WRAM
+shadow changes during the draw and PPU OAM follows on the next VBlank.
+
 ### 5. Margin provenance overlay + plane isolation (desktop host)
 Debug hotkeys in `dkc1_desktop`: BG1/BG2/BG3/OBJ isolation toggles, and a
 false-color margin mode painting every margin tile by its WsShadow source —
@@ -263,6 +326,30 @@ absolute keys project into stable per-layer cache windows, that 512px/256px
 origins preserve rolling-map parity, and that terrain margins have no misses.
 This catches the bonus/vertical-stage 4:3 cutoff that looked like a BG-width
 policy failure.
+
+`tools/detect_legacy_width_cull.py` is the focused same-frame plane check for
+this failure class. Layer-capture schema v2 emits a backdrop-only P6 plus a
+backdrop-subtracted P5 occupancy mask for every composite/BG/OBJ surface, so
+shared sky/fixed-color pixels cannot make an empty OBJ margin look repeated.
+The auditor locates the centered 256-pixel boundaries and reports empty side
+margins, an exact opposite-edge copy, and boundary transitions that are
+outliers relative to nearby columns. It evaluates both the full plane and
+16-line bands, catching a foreground that stops only over part of the screen.
+Only an empty margin is a hard failure by itself. Repeat and seam findings are
+diagnostic leads because a bounded, authored periodic plane (notably DKC1
+BG3) can legitimately repeat without producing a visible discontinuity. The
+Expresso Bonus quicksave audit is retained at
+`build/bonus-current-masked-layers/legacy-width-audit.json`.
+
+The live blank-band detector applies the same boundary discipline: it starts
+at each centered native/margin seam and walks outward until the first
+structured column. It deliberately does not count a flat interval beginning
+later inside the margin. The Expresso-return route contains the regression
+oracle—a 27-pixel authored transparent BG2 opening beginning four pixels past
+the right seam. Treating arbitrary flat margin columns as a cutoff falsely
+flagged it; raw VRAM matched a normal fresh Jungle map exactly. The corrected
+12-action x 2-repeat matrix is
+`build/bonus-bandscan-v2-full-matrix/report.json` and has zero cull events.
 **Serves:** open issues 1, 6; the transition release gate ("no prior world
 tiles may survive in either margin"). **Cost:** ~1 day.
 
@@ -308,6 +395,13 @@ repro bundle containing the covered anchor and current snapshots, exact
 per-frame input masks, full WRAM/VRAM/CGRAM, both WRAM-shadow and PPU OAM, and
 SHA-256 provenance. `tools/verify_flight_bundle.py` validates the bundle and can
 replay it through a supplied runner to prove the final 128 KiB WRAM hash.
+Native state loads are explicit timeline boundaries.  F12, the file-picker
+load path, and scripted `state_load` now discard every pre-load input/anchor
+and immediately capture the loaded machine as the new replay root.  This was
+added after a real bonus-stage bundle claimed to cover host frames 300–3625
+even though F12 had replaced the machine near the end; the bundle was
+internally hash-valid but could never replay its final WRAM.  A quickload must
+never be represented as ordinary controller history.
 `DKC1_FLIGHT_RECORDER_DIR` selects the export root. The recorder is default-off,
 allocates and writes nothing when disabled, and performs no disk I/O while
 playing until F9 is pressed. The cost when armed is a native in-memory snapshot
@@ -407,6 +501,82 @@ fresh-entry output. This is the quickest path for title/bonus/map transitions
 that preserve stale side art. It depends on tools 1, 2, and 6 and should not be
 built as a separate capture format—the bundle must reference their hashes.
 
+Implemented as `tools/bisect_transition_contamination.py`. The headless host's
+diagnostic zero-frame mode renders a loaded snapshot without advancing CPU,
+APU, or PPU time, rebuilding only the host-side widescreen shadow. The tool
+replays the original route to each sampled frame, saves its snapshot, performs
+that clean-history render, and compares left/center/right pixels plus raw WRAM
+and VRAM. It retains each sampled trace, snapshot, raw memory image, PPM, and
+process log under one checksum-addressable report tree.
+
+The fresh-entry sweep grader now also runs the strict transition analyzer for
+every repeat. In addition to legacy terrain hit/miss and raw-fallback counts,
+it rejects policy violations, nonblack centered margins, stable-input margin
+changes, and unproven margin changes. This caught Snow Barrel Blast even when
+the older tile-stat-only grader reported 40/40. Fixed-camera boss arenas are
+an explicit safe-centered class only when the settled scene remains boss mode
+and `camera.lower == camera.upper`; forcing those unaddressed maps wide was
+visually tested and rejected.
+
+Current accepted evidence:
+
+- `build/world-map-fresh-entry-sweep-v8/report.json`
+- `build/world-map-fresh-entry-sweep-v8/grade.json` (40/40, 120 repeats)
+- `build/snowbarrel-live-stream-capture-v6/summary.json`
+- `build/imported-state-suite-live-stream-v20/manifest.json`
+- `build/fresh-entry-stress-v6/report.json` (120 motion branches, zero hard
+  presentation failures; all lifecycle differences retained as investigations)
+
+The stress tool replaces the old frame-to-frame OAM-slot wrap heuristic with
+the evidence-grade dual-view oracle in `tools/oam_inspect.py`. DKC reuses OAM
+indexes between unrelated objects, so slot continuity is not identity. A
+real X-high loss now requires a PPU entry to match the current/recent WRAM
+shadow in low X, Y, tile, and attributes while differing in bit 8; persistent
+shadow/PPU mismatch is graded separately from the normal VBlank handoff.
+
+`DKC1_WS_TRACE` also includes a full-WRAM hash. Stable-input margin grading
+requires equal WRAM, VRAM, CGRAM, PPU OAM, WRAM OAM, PPU/register state,
+camera/world coordinates, and widescreen identity, and excludes reset/source
+boundaries. This caught and then verified the fix for the post-stream
+13-pixel Jungle margin wipe without misclassifying changing decoded map data.
+
+Example:
+
+```powershell
+python tools\bisect_transition_contamination.py `
+  --runner build\dkc1_headless_tools.exe `
+  --rom D:\private\DKC1_USA1.sfc `
+  --snapshot build\snapshots\map-before-entry.state `
+  --input-play build\routes\entry.inputs.txt `
+  --good-frame 120 --bad-frame 180 `
+  --output build\transition-bisect-entry
+```
+
+### 17. Arbitrary-snapshot widescreen stress matrix
+
+`tools/snapshot_widescreen_stress.py` complements the fresh-entry sweep when a
+tester supplies a native quicksave in the middle of a level or bonus room. It
+never contacts the visible process. Every action/repeat starts a fresh process
+from the same hashed snapshot, applies controller-only fixed/diagonal/sweep/box
+patterns, and records the strict widescreen trace, rendered-blank detector,
+lifecycle stream, dual OAM evidence, final raw WRAM, final frame, and v8 state.
+Determinism includes the final machine, framebuffer, trace, lifecycle, and both
+OAM artifacts—not merely whether the detector fired.
+
+When a detector or accepted strict-grade failure occurs identically, the tool
+replays that action, saves the exact trigger frame, emits a five-frame window,
+and invokes `dkc1_layer_capture.exe` for same-frame isolated planes. Non-terrain
+shadow misses do not trigger it; the strict grade must identify an actual
+terrain/raw/policy/stability failure.
+
+The Expresso Bonus matrix at `build/bonus-snapshot-stress-v3/report.json` ran
+12 actions x 2 exact repeats for 420 frames. All machine and blank signatures
+were deterministic. Across 7,992 extended gameplay frames it recorded
+22,871,744 terrain hits, zero terrain misses, zero raw fallback, zero strict
+failures, and zero blank-margin events. This proves the immutable state plus
+those fixed/oscillating routes are clean; it does not replace the rolling
+capture of the player's longer route.
+
 ## Suggested order against the current open issues
 
 1 → 5 → 6 (attack the margin nondeterminism at frame 7,600 with evidence)
@@ -488,8 +658,31 @@ Native full-machine snapshots exist at three layers: script directives
 `state_save`/`state_load` (both hosts), env anchors DKC1_SAVESTATE_INPUT /
 DKC1_SAVESTATE_OUTPUT / DKC1_SAVESTATE_SAVE_AT, and the F9 repro bundle's
 embedded anchor. Loading resets the widescreen shadow by design
-(loaded-state vs fresh-entry evidence discipline). Interactive F11/F12 quick
-save/load is implemented in the desktop host.
+for legacy v4-v7 states; v8 restores the serialized host state. Interactive
+F11/F12 quick save/load is implemented in the desktop host.
+
+Save format v8 additionally serializes DKC1's host-only widescreen state.
+The world-keyed BG cache is stored sparsely (only valid cells, their
+captured/prefill/served ownership, cooldown stamps, scene-local origin, and
+vertical-history inputs), together with calibration identity, presentation
+bias, stream-coverage state, and placed-actor phase decisions. Existing v4-v7
+states remain readable and intentionally rebuild this data cold; new v8 states
+resume it exactly. `tools/verify_widescreen_savestate.py` proves this by
+comparing an uninterrupted run with a fresh-process split-state continuation.
+Its required oracle includes the final framebuffer, WRAM, VRAM, CGRAM, both
+OAM copies, renderer state, and cumulative margin counters—not just a PNG.
+When the flight recorder is armed, every interactive or scripted state load
+also reanchors its rolling history at the current host-frame number.  Exports
+after the load therefore contain only inputs applied to that loaded state.
+With `DKC1_AUTO_EXPORT=1`, the visible host also enables the framebuffer
+blank-margin detector without requiring a separate log path.  It distinguishes
+centered presentation from proven extended gameplay, so a complete two-sided
+gameplay cull now exports the rolling bundle rather than being mistaken for
+intentional pillarboxing.
+The same terrain-ready gate applies to cumulative shadow integrity counters:
+transition teardown may update those diagnostics, but such updates are
+consumed while terrain is unavailable and cannot cause an all-black fade to
+be exported as a gameplay cull.
 SuperZSNES v0.230 `.szst` states are now first-class repro inputs after
 conversion through `tools/SuperZSNESStateExporter`. The exporter uses an exact
 five-type deserialization allowlist, validates the 280,640-byte raw tail, and
@@ -582,9 +775,14 @@ an earlier draw-cache refresh into a false behavior-phase bug.
   remaining `$BE8179` contract is the separately proven 197-target animation
   callback set. This removes route coverage as a prerequisite for executing
   an unvisited actor or state handler.
-- **F11/F12 quick save/load** added to the desktop host (native snapshots
-  to quicksave.state beside the exe; loading intentionally resets the
-  widescreen shadow so presentation state recalibrates).
+- **F11/F12 quick save/load** added to the desktop host. F11 writes the native
+  machine to `quicksave.state`; when the rolling recorder is armed it also
+  exports the covered anchor, resolved input history, final raw machine
+  planes, and same-frame isolated layer captures. This matters because the
+  v8 state, including the host-only widescreen shadow and placed-actor phase
+  history, so a margin-history bug remains reproducible after F12. The
+  default-off `DKC1_WS_COLD_STATE_LOAD=1` diagnostic discards only that host
+  history when an exact cold reconstruction is required.
 - **Contact damage/death is closed.** The earlier no-damage result belonged
   to the incomplete animation-callback build. With all 197 legal `$BE8179`
   targets present, `recipes/route_death.dks` clears both Kong actor slots and

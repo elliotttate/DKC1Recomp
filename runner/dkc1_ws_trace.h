@@ -2,6 +2,7 @@
 #define DKC1_WS_TRACE_H
 
 #include "snes/ws_shadow.h"
+#include "dkc1_video.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -11,6 +12,13 @@ typedef struct Dkc1WsTraceFrame {
   uint8_t wide_layer_mask;
   uint8_t render_layer_mask;
   uint8_t repeat_layer_mask;
+  uint8_t prepare_bgmode;
+  uint8_t prepare_inidisp;
+  uint8_t prepare_main_layers;
+  uint8_t prepare_sub_layers;
+  uint8_t prepare_bgsc[4];
+  uint16_t prepare_hscroll[4];
+  uint16_t prepare_vscroll[4];
   int terrain_layer;
   int presentation_bias;
   int selected_layout;
@@ -35,10 +43,13 @@ typedef struct Dkc1WsTraceFrame {
   bool bounds_ready;
   bool calibration_accepted;
   bool grace_accepted;
+  bool stream_revalidated;
   bool shadow_commit;
   bool shadow_frame;
   bool prefill;
   bool edge_extension;
+  bool cartridge_stream_ready;
+  Dkc1VideoStreamCoverageStats stream_coverage;
   bool centered_fallback;
   bool debug_forced_fallback;
   WsShadowMarginStat shadow_before[2];

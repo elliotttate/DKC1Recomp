@@ -94,7 +94,7 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("cpu->D + 0x0082u", body)
         self.assertNotIn("cpu->D + 0x0084u", body)
         self.assertIn("s_placed_actor_phases_seeded", body)
-        self.assertIn("seeded->stock_started = seeded->id != 0", body)
+        self.assertNotIn("seeded->stock_started = seeded->id != 0", body)
         self.assertIn("phase->stock_started", body)
         self.assertIn("Dkc1VideoObserveActorPool", source)
         self.assertIn("Dkc1VideoObservePlacedActorContext(wram)", source)
@@ -105,6 +105,9 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         observer = source.split(
             "void Dkc1VideoObserveActorPool", 1)[1].split(
                 "bool Dkc1VideoShouldRunPlacedActor", 1)[0]
+        self.assertIn("before the cartridge scanner", observer)
+        self.assertIn("phase->stock_started = phase->id != 0", observer)
+        self.assertIn("s_placed_actor_phases_seeded = true", observer)
         self.assertIn("id != 0", observer)
         self.assertIn("phase->id = 0", observer)
         self.assertIn("phase->stock_started = false", observer)
@@ -113,6 +116,7 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("kDkc1WramSize = 0x20000", source)
         self.assertIn("memcpy(s_prefetch_wram, cpu->ram", source)
         self.assertIn("memcpy(cpu->ram, s_prefetch_wram", source)
+        self.assertIn("phase->stock_started", source)
         self.assertIn("Dkc1VideoEndPlacedActorDispatch", source)
         self.assertIn("prefetch_candidate", source)
         self.assertIn("prefetch_suppressed", source)
@@ -145,6 +149,11 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("DKC1_WS_FORCE_FALLBACK_FRAME", game)
         self.assertIn("!debug_forced_fallback", game)
+        self.assertIn("stream_revalidated", game)
+        self.assertIn("const bool extend_world = shadow_world_ready", game)
+        self.assertNotIn(
+            "const bool extend_world = shadow_world_ready || "
+            "cartridge_stream_ready", game)
         ws_trace = (ROOT / "runner" / "dkc1_ws_trace.c").read_text(
             encoding="utf-8")
         self.assertIn("debug_forced_fallback", ws_trace)
@@ -169,6 +178,24 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             game)
         self.assertIn("return x - ppu->wsPresentationXBias;", ppu)
 
+    def test_margin_proxy_preserves_the_global_actor_draw_order(self):
+        source = (ROOT / "runner" / "dkc1_margin_proxy.c").read_text(
+            encoding="utf-8")
+        self.assertIn("kDkc1ProxyWordDrawOrder = 1", source)
+        begin = source.split(
+            "void Dkc1MarginProxyBeginRender", 1)[1].split(
+                "void Dkc1MarginProxyEndRender", 1)[0]
+        self.assertIn(
+            "SetActorWord(g_ram, slot->actorIndex, "
+            "kDkc1ProxyWordDrawOrder,", begin)
+        self.assertIn("slot->words[kDkc1ProxyWordDrawOrder]", begin)
+        end = source.split(
+            "void Dkc1MarginProxyEndRender", 1)[1].split(
+                "size_t Dkc1MarginProxySnapshotSize", 1)[0]
+        self.assertIn("const uint16_t proxy_draw_order", end)
+        self.assertIn(
+            "proxy->words[kDkc1ProxyWordDrawOrder] = proxy_draw_order", end)
+
     def test_presentation_bias_does_not_write_logical_camera_or_bounds(self):
         game = (ROOT / "runner" / "dkc1_game.c").read_text(
             encoding="utf-8")
@@ -177,6 +204,82 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
                 "static uint16_t Dkc1RollingMapWord", 1)[0]
         self.assertNotIn("g_ram[", function)
         self.assertNotIn("Dkc1Write", function)
+
+    def test_cartridge_stream_widening_is_complete_and_fail_closed(self):
+        video = (ROOT / "runner" / "dkc1_video.c").read_text(
+            encoding="utf-8")
+        injector = (ROOT / "scripts" /
+                    "apply_dkc1_widescreen_overrides.py").read_text(
+                        encoding="utf-8")
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+
+        self.assertIn("kDkc1StreamMargin", video)
+        self.assertIn("(kDkc1VideoWidescreenExtra + 7) & ~7", video)
+        self.assertIn("native_backstep == 0x0100u", video)
+        self.assertIn("the initializer itself is the capability boundary", video)
+        self.assertIn("return 0x0160u", video)
+        self.assertIn("native_count == 0x0020u", video)
+        self.assertIn("Dkc1VideoBeginStreamCoverage(cpu, 0x2cu)", video)
+        self.assertIn(
+            "stock_stream_x + kDkc1StreamMargin + bias", video)
+        self.assertIn(
+            "stock_stream_x + kDkc1StreamMargin + 8 + bias", video)
+        self.assertIn("Dkc1VideoAlignedStreamBias(cpu, target_x)", video)
+        self.assertIn("layer_x > upper", video)
+        self.assertIn("layer_x != target_x", video)
+        self.assertIn("Dkc1VideoObserveStreamColumn", video)
+        self.assertIn("unique_columns >=", video)
+        self.assertIn("s_stream_coverage.entrance == entrance", video)
+        self.assertIn("s_stream_coverage.required_columns != 0", video)
+        self.assertIn("!s_stream_coverage.ready", video)
+        self.assertIn("stable frame-boundary identity", video)
+        self.assertIn("Dkc1VideoCartridgeTerrainReady", video)
+        self.assertIn("Dkc1VideoInvalidateStreamCoverage", video)
+        self.assertIn("upper >= lower", video)
+        self.assertIn("2 * kDkc1VideoWidescreenExtra", video)
+        self.assertIn("initialization_active", video)
+        self.assertIn("0x809ec4u", game)
+        self.assertIn("0x809ed6u", game)
+        self.assertNotIn("0x809ed5u", game)
+        self.assertIn("0x80c56eu", game)
+        self.assertIn("0x80c57du", game)
+        self.assertIn("Dkc1InterpreterInitialColumnCount", game)
+        self.assertIn("interp_bridge_pre_opcode_redirect", game)
+        observe_body = video.split(
+            "static void Dkc1VideoObserveStreamColumn", 1)[1].split(
+                "bool Dkc1VideoCartridgeTerrainReady", 1)[0]
+        self.assertNotIn("Dkc1VideoSyncStreamContext", observe_body)
+        self.assertIn("Dkc1VideoSyncStreamContext(wram)", video)
+
+        for symbol in (
+                "Level_BuildTilemapColumn_TypeA_M0X0",
+                "Level_DMATilemapColumnToVRAM_M0X0",
+                "CODE_8188A8_M0X0",
+                "Level_BuildTilemapColumn_TypeB_M0X0"):
+            self.assertIn(symbol, injector)
+        self.assertIn("adapt_stream_selector", injector)
+        self.assertIn("adapt_function_cpu_constant", injector)
+        self.assertNotIn("shadow_world_ready || cartridge_stream_ready", game)
+        self.assertIn("const bool extend_world = shadow_world_ready", game)
+        self.assertIn("stream_revalidated", game)
+        self.assertIn(
+            "cartridge_stream_ready &&\n             s_ws_layout != kDkc1LayoutUnknown",
+            game)
+        self.assertIn("Dkc1VideoInvalidateStreamCoverage();", game)
+        self.assertIn("stream_bootstrap_rejected", game)
+        self.assertIn("Dkc1VideoSetTerrainReady(true);", game)
+        self.assertIn("WsShadowCaptureTile", game)
+        self.assertIn("Dkc1RollingMapWord(ppu_map_base, wtx, wty)", game)
+        self.assertIn("trace.cartridge_stream_ready", game)
+
+        # A 44-column standard fill must cover 352 pixels in distinct ring
+        # columns, with a complete 342-pixel 16:9 viewport inside it.
+        selected = [(-352 + i * 8 + 304 + 48) & 0xffff
+                    for i in range(44)]
+        self.assertEqual(selected[0], 0)
+        self.assertEqual(selected[-1], 344)
+        self.assertEqual(len({(x >> 3) & 63 for x in selected}), 44)
 
     def test_shadow_calibration_is_read_only_until_commit(self):
         game = (ROOT / "runner" / "dkc1_game.c").read_text(
@@ -348,6 +451,92 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("s_host_frame >= s_input_playback.count", playback)
         self.assertIn('SetRouteTerminal(0, "complete"', playback)
 
+    def test_quicksave_preserves_live_widescreen_repro_history(self):
+        host = (ROOT / "runner" / "win32_host.c").read_text(
+            encoding="utf-8")
+        block = host.split("if (s_quicksave_requested)", 1)[1].split(
+            "if (s_quickload_requested)", 1)[0]
+        self.assertIn('RtlSaveSnapshot("quicksave.state")', block)
+        self.assertIn("Dkc1FlightRecorderEnabled()", block)
+        self.assertIn("Dkc1FlightRecorderExport(s_host_frame", block)
+        self.assertIn("SpawnLayerCapture(bundle)", block)
+        self.assertIn("sparse host-only", host)
+
+    def test_v8_native_state_preserves_host_widescreen_state(self):
+        rtl = (ROOT / "snesrecomp" / "runner" / "src" /
+               "common_rtl.c").read_text(encoding="utf-8")
+        shadow_h = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
+                    "ws_shadow.h").read_text(encoding="utf-8")
+        shadow_c = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
+                    "ws_shadow.c").read_text(encoding="utf-8")
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        video_h = (ROOT / "runner" / "dkc1_video.h").read_text(
+            encoding="utf-8")
+        video_c = (ROOT / "runner" / "dkc1_video.c").read_text(
+            encoding="utf-8")
+
+        self.assertIn("#define RTL_SAV_VERSION 8u", rtl)
+        for symbol in ("WsShadowSnapshotSize", "WsShadowSnapshotSave",
+                       "WsShadowSnapshotLoad"):
+            self.assertIn(symbol, shadow_h)
+            self.assertIn(symbol, shadow_c)
+        self.assertIn("kWsSnapshotMagic", shadow_c)
+        self.assertIn("SnapshotCellCount", shadow_c)
+        self.assertIn("Validate the entire variable-length stream", shadow_c)
+
+        for symbol in ("Dkc1VideoSnapshotSize", "Dkc1VideoSnapshotSave",
+                       "Dkc1VideoSnapshotLoad"):
+            self.assertIn(symbol, video_h)
+            self.assertIn(symbol, video_c)
+            self.assertIn(symbol, game)
+        self.assertIn("version >= 8 && Dkc1LoadWidescreenSnapshot", game)
+        self.assertIn(
+            "if (!restored_host_widescreen || force_cold_widescreen)", game)
+        self.assertIn("Dkc1VideoResetPlacedActorPhases();", game)
+
+    def test_cold_state_load_oracle_discards_only_host_widescreen_history(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        bisector = (ROOT / "tools" /
+                    "bisect_transition_contamination.py").read_text(
+                        encoding="utf-8")
+        self.assertIn('getenv("DKC1_WS_COLD_STATE_LOAD")', game)
+        self.assertIn("force_cold_widescreen", game)
+        self.assertIn('"DKC1_WS_COLD_STATE_LOAD": "1"', bisector)
+
+    def test_auto_capture_does_not_ignore_a_full_gameplay_margin_cull(self):
+        detector_h = (ROOT / "runner" / "dkc1_blank_scan.h").read_text(
+            encoding="utf-8")
+        detector_c = (ROOT / "runner" / "dkc1_blank_scan.c").read_text(
+            encoding="utf-8")
+        desktop = (ROOT / "runner" / "win32_host.c").read_text(
+            encoding="utf-8")
+        headless = (ROOT / "runner" / "headless_main.c").read_text(
+            encoding="utf-8")
+
+        self.assertIn("bool extended_gameplay", detector_h)
+        self.assertIn('getenv("DKC1_AUTO_EXPORT")', detector_c)
+        self.assertIn("if (!s_active || width <= 256", detector_c)
+        self.assertIn(
+            "const bool full_flat_gameplay = suspects >= extra * 2;",
+            detector_c)
+        self.assertIn("full_flat_gameplay && !extended_gameplay", detector_c)
+        self.assertIn('"full_flat_gameplay"', detector_c)
+        self.assertIn('"partial_height_flat"', detector_c)
+        self.assertIn("for (int y0 = 0; y0 < height; y0 += 16)", detector_c)
+        self.assertIn("band_suspects >= 8", detector_c)
+        self.assertIn("Dkc1VideoTerrainReady());", desktop)
+        self.assertIn("Dkc1VideoTerrainReady());", headless)
+        auto_export = desktop.split("static void MaybeAutoExport(void)", 1)[1]
+        auto_export = auto_export.split("static void SpawnLayerCapture", 1)[0]
+        self.assertIn("if (!Dkc1VideoTerrainReady())", auto_export)
+        self.assertIn("s_seen_total = total;", auto_export)
+        self.assertLess(auto_export.index("if (!Dkc1VideoTerrainReady())"),
+                        auto_export.index("if (total > s_seen_total) {",
+                                          auto_export.index(
+                                              "if (!Dkc1VideoTerrainReady())")))
+
     def test_visible_manual_input_tracks_release_and_clears_on_focus_loss(self):
         source = (ROOT / "runner" / "win32_host.c").read_text(
             encoding="utf-8")
@@ -370,6 +559,33 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("DKC1_ROUTE_FRAME_LIMIT", source)
         self.assertIn("DKC1_ROUTE_AUTOCLOSE_MS", source)
         self.assertIn("SetEnvironmentVariable($name, $null, 'Process')", source)
+
+    def test_visible_host_can_render_a_loaded_state_while_starting_paused(self):
+        source = (ROOT / "runner" / "win32_host.c").read_text(
+            encoding="utf-8")
+        self.assertIn('EnvironmentEnabled("DKC1_START_PAUSED")', source)
+        begin = source.index("Dkc1BeginDrawing(s_pixels")
+        paused_draw = source.index("if (s_paused)\n    Dkc1DrawPpuFrame();")
+        window = source.index("CreateWindowA(")
+        self.assertLess(begin, paused_draw)
+        self.assertLess(paused_draw, window)
+
+    def test_visible_panel_reports_the_real_object_scanner_window(self):
+        source = (ROOT / "runner" / "win32_host.c").read_text(
+            encoding="utf-8")
+        panel = source.split("VISIBLE WIDESCREEN DEBUGGER", 1)[1].split(
+            "static HWAVEOUT", 1)[0]
+        self.assertIn("Scanner: rec $%02X", panel)
+        self.assertIn("g_ram[0x00a4]", panel)
+        self.assertIn("ReadWram16(0x00ef)", panel)
+        self.assertIn("ReadWram16(0x00f1)", panel)
+        self.assertIn("Dkc1VideoTerrainReady() ? \"READY\" : \"not ready\"",
+                      panel)
+        # $1E03/$1E07-$1E0B are type-9 section state, not the generic
+        # object scanner. Keep those values on their separately named line.
+        self.assertIn("Section: state $%04X", panel)
+        self.assertIn("ReadWram16(0x1e03)", panel)
+        self.assertIn("ReadWram16(0x1e0b)", panel)
 
     def test_desktop_exposes_runtime_native_and_16_9_aspect_modes(self):
         source = (ROOT / "runner" / "win32_host.c").read_text(

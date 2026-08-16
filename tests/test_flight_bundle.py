@@ -59,6 +59,19 @@ class FlightBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "covered interval"):
                 verify_bundle(root)
 
+    def test_visible_host_reanchors_every_runtime_state_load(self):
+        repo = Path(__file__).resolve().parents[1]
+        header = (repo / "runner" / "dkc1_flight_recorder.h").read_text()
+        source = (repo / "runner" / "dkc1_flight_recorder.c").read_text()
+        host = (repo / "runner" / "win32_host.c").read_text()
+        self.assertIn("Dkc1FlightRecorderReanchorAfterStateLoad", header)
+        self.assertIn("memset(s_inputs, 0, sizeof s_inputs);", source)
+        self.assertIn("s_anchors[i].valid = 0;", source)
+        # Quickload, the file-picker load, and scripted state_load are three
+        # independent host paths and must all terminate the old timeline.
+        self.assertEqual(
+            host.count("Dkc1FlightRecorderReanchorAfterStateLoad("), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

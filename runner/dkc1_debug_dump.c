@@ -80,6 +80,68 @@ static uint16_t s_section[5];
 static bool s_lifecycle_primed;
 static int s_lifecycle_last_keyframe = -1000000;
 
+typedef enum PrefetchWriteDomain {
+  kPrefetchOwnActor,
+  kPrefetchOtherActor,
+  kPrefetchOam,
+  kPrefetchBookkeeping,
+  kPrefetchScratch,
+  kPrefetchGlobal,
+  kPrefetchWriteDomainCount,
+} PrefetchWriteDomain;
+
+/* These are the byte-exact table bases in RAM_Map_DKC1.asm.  Each normal
+ * actor owns a 16-bit word at base+rawIndex, where rawIndex is even $02..$32.
+ * Gaps between these tables are deliberately not treated as actor state. */
+static const uint16_t kNormalActorTableBases[] = {
+  0x0a7du, 0x0ab1u, 0x0ae5u, 0x0b19u, 0x0b8du, 0x0bc1u,
+  0x0c35u, 0x0c69u, 0x0cddu, 0x0d11u, 0x0d45u, 0x0db9u,
+  0x0dedu, 0x0e21u, 0x0e55u, 0x0e89u, 0x0ebdu, 0x0ef1u,
+  0x0f25u, 0x0f59u, 0x0f8du, 0x0fc1u, 0x0ff5u, 0x1029u,
+  0x109du, 0x10d1u, 0x1105u, 0x1139u, 0x116du, 0x11a1u,
+  0x11d5u, 0x1209u, 0x123du, 0x1271u, 0x12a5u, 0x12d9u,
+  0x130du, 0x1341u, 0x1375u, 0x13e9u, 0x145du, 0x1491u,
+  0x14c5u, 0x14f9u, 0x152du, 0x1561u, 0x1595u, 0x15c9u,
+  0x15fdu, 0x1631u, 0x1665u,
+};
+
+static PrefetchWriteDomain PrefetchDomainFor(size_t offset,
+                                               uint16_t actor_index) {
+  /* $0000-$01FF is the cartridge's transient direct-page/work area.  The
+   * enclosing full-WRAM transaction already guarantees these values cannot
+   * escape.  Keep them visible as evidence, but do not confuse them with
+   * persistent gameplay state. */
+  if (offset < kOamShadowBase)
+    return kPrefetchScratch;
+  /* $08AB is a shared loop/index temporary (for example CODE_BBA849 clears,
+   * increments, and reloads it while walking draw order). Actor routines use
+   * the same word transiently; it is not durable actor or gameplay state. */
+  if (offset >= 0x08abu && offset <= 0x08acu)
+    return kPrefetchScratch;
+  if (offset >= kOamShadowBase && offset < kOamShadowBase + kOamBytes)
+    return kPrefetchOam;
+  if (offset >= kBookkeepingBase &&
+      offset < kBookkeepingBase + kBookkeepingLength)
+    return kPrefetchBookkeeping;
+  for (size_t i = 0;
+       i < sizeof kNormalActorTableBases / sizeof kNormalActorTableBases[0];
+       i++) {
+    const size_t base = kNormalActorTableBases[i];
+    if (offset < base + kActorFirst || offset > base + kActorLast + 1u)
+      continue;
+    const uint16_t owner = (uint16_t)((offset - base) & ~1u);
+    return owner == actor_index ? kPrefetchOwnActor : kPrefetchOtherActor;
+  }
+  return kPrefetchGlobal;
+}
+
+static const char *PrefetchDomainName(PrefetchWriteDomain domain) {
+  static const char *const names[kPrefetchWriteDomainCount] = {
+    "own_actor", "other_actor", "oam", "bookkeeping", "scratch", "global"
+  };
+  return names[domain];
+}
+
 static uint16_t Wram16(uint32_t address) {
   return (uint16_t)(g_ram[address] | ((uint16_t)g_ram[address + 1] << 8));
 }
@@ -347,6 +409,63 @@ void Dkc1DebugTracePlacedActorPhase(const char *event,
       (unsigned)((actor_index - kActorFirst) >> 1), id, source, source_x,
       terrain_ready ? "true" : "false", current_left, current_right,
       stock_left, stock_right);
+}
+
+void Dkc1DebugTracePrefetchTransaction(uint16_t actor_index, uint16_t id,
+                                       uint16_t source,
+                                       const uint8_t *before,
+                                       const uint8_t *after, size_t size) {
+  enum { kMaxEmittedChanges = 256 };
+  Initialize();
+  if (!s_lifecycle || !before || !after)
+    return;
+  if (size > kWramSize)
+    size = kWramSize;
+
+  size_t counts[kPrefetchWriteDomainCount] = {0};
+  size_t total = 0;
+  for (size_t offset = 0; offset < size; offset++) {
+    if (before[offset] == after[offset])
+      continue;
+    counts[PrefetchDomainFor(offset, actor_index)]++;
+    total++;
+  }
+
+  fprintf(s_lifecycle,
+      "{\"schema\":\"dkc1.prefetch-transaction.v1\","
+      "\"event\":\"write_set\",\"frame\":%d,"
+      "\"mode\":%u,\"level\":%u,\"entrance\":%u,"
+      "\"actor_index\":%u,\"pool_ordinal\":%u,"
+      "\"id\":%u,\"source\":%u,\"changed_bytes\":%u,"
+      "\"domains\":{",
+      snes_frame_counter, Wram16(0x0032u), Wram16(0x0030u),
+      Wram16(kAddrEntranceId), actor_index,
+      actor_index >= kActorFirst ?
+          (unsigned)((actor_index - kActorFirst) >> 1) : 0u,
+      id, source, (unsigned)total);
+  for (int domain = 0; domain < kPrefetchWriteDomainCount; domain++)
+    fprintf(s_lifecycle, "%s\"%s\":%u", domain ? "," : "",
+            PrefetchDomainName((PrefetchWriteDomain)domain),
+            (unsigned)counts[domain]);
+  fprintf(s_lifecycle, "},\"changes\":[");
+
+  size_t emitted = 0;
+  for (size_t offset = 0;
+       offset < size && emitted < kMaxEmittedChanges; offset++) {
+    if (before[offset] == after[offset])
+      continue;
+    const PrefetchWriteDomain domain =
+        PrefetchDomainFor(offset, actor_index);
+    fprintf(s_lifecycle,
+        "%s{\"offset\":%u,\"before\":%u,\"after\":%u,"
+        "\"domain\":\"%s\"}",
+        emitted ? "," : "", (unsigned)offset, before[offset],
+        after[offset], PrefetchDomainName(domain));
+    emitted++;
+  }
+  fprintf(s_lifecycle, "],\"offsets_truncated\":%s}\n",
+          emitted < total ? "true" : "false");
+  fflush(s_lifecycle);
 }
 
 void Dkc1DebugDumpFrame(int frame) {

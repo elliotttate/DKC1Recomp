@@ -55,6 +55,23 @@ class GradeFreshEntryTests(unittest.TestCase):
         result = GRADER.grade_repeat(self.write_trace([row(extended=False)]))
         self.assertEqual("centered_calibration_rejected", result["centered_reason"])
 
+    def test_fixed_camera_arena_is_safe_centered_policy(self):
+        rows = []
+        for frame in range(120):
+            value = row(extended=False, bounds=False)
+            value["frame"] = frame
+            value["scene"]["mode"] = 0x000C
+            value["camera"] = {"lower": 0x0100, "upper": 0x0100}
+            rows.append(value)
+        result = GRADER.grade_repeat(self.write_trace(rows))
+        self.assertEqual("pass", result["status"])
+        self.assertEqual("centered_fixed_camera_arena",
+                         result["centered_reason"])
+
+    def test_strict_mode_rejects_incomplete_trace_contract(self):
+        with self.assertRaisesRegex(ValueError, "missing fields"):
+            GRADER.grade_repeat(self.write_trace([row()]), strict=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -28,11 +28,12 @@
     },
     {
       "id": "margin-decode-attribute-mismatch",
-      "status": "open",
+      "status": "fixed",
       "summary": "Stream retrodiction proves 1690 served-margin entries on the jungle entry route disagree with the game's own later stream, overwhelmingly in the ATTRIBUTE byte (palette/priority/flip: xor 0x1c00/0x5c00/0x4c00 clusters; whole 29-row columns as they scroll into view). The ROM level-map decoder's attribute derivation does not match streamed truth for some metatiles - margins can show wrong-palette art.",
       "repro": "SNESRECOMP_WS_RETRODICT=out.jsonl + recipes/route_jungle.dks; analyze with tools/analyze_retrodiction.py",
       "expected": "retrodictMismatch == 0 on every route.",
-      "first_seen": "2026-08-16"
+      "first_seen": "2026-08-16",
+      "fixed_note": "fixed 2026-08-16 by the margin decode/localization rework; retrodiction now reports zero mismatches on the jungle route; contract ratchet tightened to 0"
     },
     {
       "id": "entry-oam-xhigh-loss",
@@ -49,6 +50,15 @@
       "repro": "recipes/route_death.dks via tools/level_sweep.py",
       "expected": "Calibration should lock from the entry decode without requiring camera motion.",
       "first_seen": "2026-08-16"
+    },
+    {
+      "id": "post-bonus-bg1-transition-contamination",
+      "status": "fixed",
+      "summary": "Leaving a bonus room could seed BG1 widescreen margins from a transitional VRAM ring, producing repeated vertical strips on both outer edges while the native center and cartridge state remained valid.",
+      "repro": "build/bonus-safe-control-repros-20260816/capture-f00000464-20260816-075932-p28476",
+      "expected": "Unknown-layout stream coverage is rejected until calibration establishes a real layout; the repaired retained render equals a cold reconstruction without changing gameplay timing.",
+      "first_seen": "2026-08-16",
+      "fixed_note": "fixed 2026-08-16; first visible divergence was relative frame 307, three 464-frame replays are byte-identical, and the final retained/cold left-center-right comparison is exact"
     }
   ]
 }

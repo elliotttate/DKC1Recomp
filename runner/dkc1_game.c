@@ -29,6 +29,51 @@ static uint32_t s_resume_pc = kDkc1ResetPc;
 static int s_last_lle_result = 1;
 static uint64_t s_next_frame_master;
 
+static void Dkc1SetInterpreterA16(CpuState *cpu, uint16_t value) {
+  cpu_write_a_m(cpu, value);
+  cpu->_flag_Z = value == 0;
+  cpu->_flag_N = (value & 0x8000u) != 0;
+  cpu->P = (uint8_t)((cpu->P & (uint8_t)~0x82u) |
+                     (cpu->_flag_Z ? 0x02u : 0u) |
+                     (cpu->_flag_N ? 0x80u : 0u));
+}
+
+static void Dkc1InterpreterInitialBackstep(CpuState *cpu, uint32_t pc24) {
+  const uint16_t native = (pc24 & 0xffffu) == 0x9ec4u ? 0x0100u : 0x0108u;
+  const uint16_t widened = Dkc1VideoInitialBackstep(cpu, native);
+  if (widened != native)
+    cpu_write_a_m(cpu, (uint16_t)(cpu_read_a16(cpu) -
+                                  (uint16_t)(widened - native)));
+}
+
+static void Dkc1InterpreterInitialColumnCount(CpuState *cpu,
+                                              uint32_t pc24) {
+  const uint16_t native = (pc24 & 0xffffu) == 0x9ed6u ? 0x0020u : 0x0021u;
+  const uint16_t count = Dkc1VideoInitialColumnCount(cpu, native);
+  if (count == native)
+    return;
+  Dkc1SetInterpreterA16(cpu, count);
+  /* Skip the cartridge's LDA #native. The following PHA/loop body remains
+   * byte-for-byte cartridge execution; only its initial loop count changes. */
+  interp_bridge_pre_opcode_redirect((pc24 + 3u) & 0xffffffu);
+}
+
+static void Dkc1Initialize(void) {
+  /* The main engine can reach both initializers while executing through the
+   * bank-$00 HiROM interpreter mirror. Generated-C adapters alone therefore
+   * miss those entries. Mirror the same two constant substitutions at the
+   * exact clean-ROM opcodes; compiled paths continue to use the generated
+   * helper calls and never see these hooks. */
+  interp_bridge_set_pre_opcode_hook(0x809ec4u,
+                                    Dkc1InterpreterInitialBackstep);
+  interp_bridge_set_pre_opcode_hook(0x809ed6u,
+                                    Dkc1InterpreterInitialColumnCount);
+  interp_bridge_set_pre_opcode_hook(0x80c56eu,
+                                    Dkc1InterpreterInitialBackstep);
+  interp_bridge_set_pre_opcode_hook(0x80c57du,
+                                    Dkc1InterpreterInitialColumnCount);
+}
+
 typedef struct Dkc1HostSnapshot {
   CpuState cpu;
   uint32_t resume_pc;
@@ -43,6 +88,10 @@ typedef struct Dkc1HostSnapshot {
   uint8_t last_hdmaen;
   uint8_t memsel;
 } Dkc1HostSnapshot;
+
+static void Dkc1SaveWidescreenSnapshot(SaveLoadInfo *sli);
+static bool Dkc1LoadWidescreenSnapshot(SaveLoadInfo *sli);
+static bool s_ws_snapshot_restore_valid;
 
 enum {
   /* NTSC master clocks per non-short host frame. */
@@ -107,10 +156,10 @@ static void Dkc1SaveExtra(SaveLoadInfo *sli) {
   snapshot.last_hdmaen = g_snesrecomp_last_hdmaen;
   snapshot.memsel = g_memsel;
   sli->func(sli, &snapshot, sizeof snapshot);
+  Dkc1SaveWidescreenSnapshot(sli);
 }
 
 static void Dkc1LoadExtra(SaveLoadInfo *sli, uint32_t version) {
-  (void)version;
   Dkc1HostSnapshot snapshot;
   sli->func(sli, &snapshot, sizeof snapshot);
   g_cpu = snapshot.cpu;
@@ -126,6 +175,8 @@ static void Dkc1LoadExtra(SaveLoadInfo *sli, uint32_t version) {
   s_cpu_initialized = snapshot.cpu_initialized != 0;
   g_snesrecomp_last_hdmaen = snapshot.last_hdmaen;
   g_memsel = snapshot.memsel;
+  s_ws_snapshot_restore_valid =
+      version >= 8 && Dkc1LoadWidescreenSnapshot(sli);
 }
 
 static void Dkc1ResetWidescreenShadow(void);
@@ -136,13 +187,25 @@ static void Dkc1OnStateLoaded(uint32_t version) {
   g_apu_last_sync_master = g_cpu.master_cycles;
   g_snes->beamMasterLast = g_cpu.master_cycles;
   interp_bridge_set_master_deadline(0);
-  Dkc1ResetWidescreenShadow();
-  Dkc1VideoResetPlacedActorPhases();
+  const bool restored_host_widescreen = s_ws_snapshot_restore_valid;
+  const char *cold_load = getenv("DKC1_WS_COLD_STATE_LOAD");
+  const bool force_cold_widescreen =
+      cold_load && *cold_load && *cold_load != '0';
+  /* Diagnostic oracle: keep the loaded SNES machine state byte-exact while
+   * deliberately discarding only the serialized host presentation history.
+   * This makes retained-margin contamination directly comparable against a
+   * cold reconstruction from the same v8 snapshot. It is default-off and
+   * never changes ordinary quickload semantics. */
+  if (!restored_host_widescreen || force_cold_widescreen) {
+    Dkc1ResetWidescreenShadow();
+    Dkc1VideoResetPlacedActorPhases();
+  }
+  s_ws_snapshot_restore_valid = false;
 }
 
 static const RtlGameInfo kDkc1GameInfo = {
   .title = "dkc1",
-  .initialize = NULL,
+  .initialize = &Dkc1Initialize,
   .run_frame = &Dkc1RunOneFrame,
   .draw_ppu_frame = &Dkc1DrawPpuFrame,
   .save_name_prefix = "dkc1s",
@@ -718,6 +781,143 @@ enum Dkc1WsIdentityChange {
 static bool s_ws_identity_valid;
 static Dkc1WsIdentity s_ws_identity;
 
+enum {
+  kDkc1WsSaveMagic = 0x38535744u, /* "DWS8" */
+  kDkc1WsSaveVersion = 1,
+  kDkc1WsSaveMaximumBytes = 64 * 1024 * 1024,
+};
+
+typedef struct Dkc1WidescreenSnapshot {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t shadowSize;
+  uint32_t videoSize;
+  uint8_t shadowActive;
+  uint8_t originValid[2];
+  uint8_t shadowOriginValid[2];
+  uint8_t identityValid;
+  uint8_t traceResetPending;
+  uint8_t terrainReady;
+  uint8_t reserved;
+  int32_t presentationBias;
+  uint32_t worldX[2];
+  uint32_t worldY[2];
+  uint32_t shadowOriginX[2];
+  uint32_t shadowOriginY[2];
+  int32_t layout;
+  int32_t layoutGrace;
+  Dkc1WsIdentity identity;
+} Dkc1WidescreenSnapshot;
+
+static void Dkc1SaveWidescreenSnapshot(SaveLoadInfo *sli) {
+  Dkc1WidescreenSnapshot snapshot;
+  memset(&snapshot, 0, sizeof snapshot);
+  snapshot.magic = kDkc1WsSaveMagic;
+  snapshot.version = kDkc1WsSaveVersion;
+  snapshot.shadowActive = s_ws_shadow_active ? 1u : 0u;
+  snapshot.originValid[0] = s_ws_origin_valid[0] ? 1u : 0u;
+  snapshot.originValid[1] = s_ws_origin_valid[1] ? 1u : 0u;
+  snapshot.shadowOriginValid[0] =
+      s_ws_shadow_origin_valid[0] ? 1u : 0u;
+  snapshot.shadowOriginValid[1] =
+      s_ws_shadow_origin_valid[1] ? 1u : 0u;
+  snapshot.identityValid = s_ws_identity_valid ? 1u : 0u;
+  snapshot.traceResetPending = s_ws_trace_reset_pending ? 1u : 0u;
+  snapshot.terrainReady = Dkc1VideoTerrainReady() ? 1u : 0u;
+  snapshot.presentationBias = Dkc1VideoPresentationBias();
+  memcpy(snapshot.worldX, s_ws_world_x, sizeof snapshot.worldX);
+  memcpy(snapshot.worldY, s_ws_world_y, sizeof snapshot.worldY);
+  memcpy(snapshot.shadowOriginX, s_ws_shadow_origin_x,
+         sizeof snapshot.shadowOriginX);
+  memcpy(snapshot.shadowOriginY, s_ws_shadow_origin_y,
+         sizeof snapshot.shadowOriginY);
+  snapshot.layout = (int32_t)s_ws_layout;
+  snapshot.layoutGrace = s_ws_layout_grace;
+  snapshot.identity = s_ws_identity;
+
+  const size_t shadow_size = WsShadowSnapshotSize();
+  uint8_t *shadow = NULL;
+  uint8_t *video = NULL;
+  if (shadow_size && shadow_size <= kDkc1WsSaveMaximumBytes &&
+      shadow_size <= UINT32_MAX) {
+    shadow = (uint8_t *)malloc(shadow_size);
+    if (shadow && WsShadowSnapshotSave(shadow, shadow_size))
+      snapshot.shadowSize = (uint32_t)shadow_size;
+    else {
+      free(shadow);
+      shadow = NULL;
+    }
+  }
+  const size_t video_size = Dkc1VideoSnapshotSize();
+  if (video_size && video_size <= UINT32_MAX) {
+    video = (uint8_t *)malloc(video_size);
+    if (video && Dkc1VideoSnapshotSave(video, video_size))
+      snapshot.videoSize = (uint32_t)video_size;
+    else {
+      free(video);
+      video = NULL;
+    }
+  }
+  sli->func(sli, &snapshot, sizeof snapshot);
+  if (snapshot.shadowSize)
+    sli->func(sli, shadow, snapshot.shadowSize);
+  if (snapshot.videoSize)
+    sli->func(sli, video, snapshot.videoSize);
+  free(shadow);
+  free(video);
+}
+
+static bool Dkc1LoadWidescreenSnapshot(SaveLoadInfo *sli) {
+  Dkc1WidescreenSnapshot snapshot;
+  memset(&snapshot, 0, sizeof snapshot);
+  sli->func(sli, &snapshot, sizeof snapshot);
+  if (snapshot.magic != kDkc1WsSaveMagic ||
+      snapshot.version != kDkc1WsSaveVersion || !snapshot.shadowSize ||
+      snapshot.shadowSize > kDkc1WsSaveMaximumBytes || !snapshot.videoSize ||
+      snapshot.videoSize > 1024u * 1024u ||
+      snapshot.layout < kDkc1LayoutUnknown ||
+      snapshot.layout > kDkc1LayoutVertical ||
+      snapshot.layoutGrace < 0 || snapshot.layoutGrace > 2 ||
+      snapshot.identity.terrain_layer < -1 ||
+      snapshot.identity.terrain_layer > 3)
+    return false;
+  uint8_t *shadow = (uint8_t *)malloc(snapshot.shadowSize);
+  uint8_t *video = (uint8_t *)malloc(snapshot.videoSize);
+  if (!shadow || !video) {
+    free(shadow);
+    free(video);
+    return false;
+  }
+  sli->func(sli, shadow, snapshot.shadowSize);
+  sli->func(sli, video, snapshot.videoSize);
+  const bool restored = WsShadowSnapshotLoad(shadow, snapshot.shadowSize) &&
+                        Dkc1VideoSnapshotLoad(video, snapshot.videoSize);
+  free(shadow);
+  free(video);
+  if (!restored)
+    return false;
+
+  s_ws_shadow_active = snapshot.shadowActive != 0;
+  s_ws_origin_valid[0] = snapshot.originValid[0] != 0;
+  s_ws_origin_valid[1] = snapshot.originValid[1] != 0;
+  s_ws_shadow_origin_valid[0] = snapshot.shadowOriginValid[0] != 0;
+  s_ws_shadow_origin_valid[1] = snapshot.shadowOriginValid[1] != 0;
+  s_ws_identity_valid = snapshot.identityValid != 0;
+  s_ws_trace_reset_pending = snapshot.traceResetPending != 0;
+  memcpy(s_ws_world_x, snapshot.worldX, sizeof s_ws_world_x);
+  memcpy(s_ws_world_y, snapshot.worldY, sizeof s_ws_world_y);
+  memcpy(s_ws_shadow_origin_x, snapshot.shadowOriginX,
+         sizeof s_ws_shadow_origin_x);
+  memcpy(s_ws_shadow_origin_y, snapshot.shadowOriginY,
+         sizeof s_ws_shadow_origin_y);
+  s_ws_layout = (Dkc1LevelLayout)snapshot.layout;
+  s_ws_layout_grace = snapshot.layoutGrace;
+  s_ws_identity = snapshot.identity;
+  Dkc1VideoSetPresentationBias(snapshot.presentationBias);
+  Dkc1VideoSetTerrainReady(snapshot.terrainReady != 0);
+  return true;
+}
+
 static uint32_t Dkc1BlendDebugColor(uint32_t pixel, uint32_t color) {
   /* Keep the rendered image legible beneath a 50% false-color wash. */
   uint32_t rb = ((pixel & 0x00ff00ffu) + (color & 0x00ff00ffu)) >> 1;
@@ -933,7 +1133,11 @@ static int Dkc1CalibrateLayout(Dkc1LevelLayout layout, uint16_t ppu_map_base,
 
 static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
                                         int presentation_bias,
+                                        bool cartridge_stream_ready,
+                                        bool *stream_bootstrap_rejected,
                                         Dkc1WsTraceFrame *trace) {
+  if (stream_bootstrap_rejected)
+    *stream_bootstrap_rejected = false;
   const uint32_t camera_x = Dkc1ReadWram16(0x088b);
   const uint32_t camera_y = Dkc1ReadWram16(0x0895);
   const uint16_t stream_vram = Dkc1ReadWram16(0x1b13);
@@ -1044,17 +1248,45 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       best_decodable >= 64 && best_matches * 10 >= best_decodable * 7;
   Dkc1LevelLayout accepted_layout = kDkc1LayoutUnknown;
   int next_grace = 0;
+  bool stream_revalidated = false;
   if (calibrated) {
     accepted_layout = best;
     next_grace = 2;
     if (trace) trace->calibration_accepted = true;
+  } else if (cartridge_stream_ready &&
+             s_ws_layout != kDkc1LayoutUnknown) {
+    /* The checksum-locked cartridge adapters observed a complete widened
+     * rolling-map fill for this exact mode/level/entrance. Some levels (Snow
+     * Barrel Blast is the concrete oracle) cannot remain ROM-decode
+     * calibrated after forced blank lifts, even though the live 64-column
+     * PPU map is complete. Keep capturing that authoritative streamed map
+     * instead of widening with an inactive shadow or pillarboxing gameplay.
+     * Do not ROM-prefill this path: the rejected decoder is not an oracle. */
+    accepted_layout = s_ws_layout;
+    stream_revalidated = true;
+    if (trace) trace->stream_revalidated = true;
   } else if (s_ws_layout != kDkc1LayoutUnknown && s_ws_layout_grace > 0) {
-    /* Soft misses are tolerated only inside an unchanged hard identity. The
-     * counter is a remaining-frame budget: two means two accepted misses. */
+    /* Soft misses are tolerated only inside an unchanged hard identity and
+     * only before the cartridge has proved a complete widened stream. Once
+     * that proof exists, the live PPU map is stronger than a rejected ROM
+     * decoder and must take precedence over this grace budget. */
     accepted_layout = s_ws_layout;
     next_grace = s_ws_layout_grace - 1;
     if (trace) trace->grace_accepted = true;
   } else {
+    if (cartridge_stream_ready &&
+        s_ws_layout == kDkc1LayoutUnknown) {
+      /* A complete column count is not enough to bootstrap a scene whose
+       * ROM decoder still rejects the live ring. Bonus exits can execute the
+       * widened initializer while VRAM contains a mixture of the outgoing
+       * room and the returning level. Treat that proof as transitional and
+       * let the first calibrated frame take the ROM-prefill cold path. The
+       * stream-only escape hatch remains available after this identity has
+       * established a real layout (Snow Barrel Blast is the oracle). */
+      Dkc1VideoInvalidateStreamCoverage();
+      if (stream_bootstrap_rejected)
+        *stream_bootstrap_rejected = true;
+    }
     return false;
   }
 
@@ -1150,6 +1382,7 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     WsShadowSetScroll(layer,
                       (uint16_t)(g_ppu->hScroll[layer] + presentation_bias),
                       g_ppu->vScroll[layer]);
+    WsShadowSetCaptureCols(layer, 0);
     WsShadowSetWestKeep(layer, keep_tiles);
     WsShadowSetEastKeep(layer, keep_tiles);
     /* Keep the default world-relative Y key (projected through the stable
@@ -1186,6 +1419,46 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     trace->shadow_frame = true;
     trace->terrain_layer = terrain_layer;
   }
+
+  if (cartridge_stream_ready) {
+    /* The checksum-locked DKC adapters prove the rolling terrain map covers
+     * the widened viewport, including columns west of the native scroll
+     * origin. The generic viewport sweep can only grow eastward, so ingest
+     * this proven live range explicitly by the same world-coordinate ring
+     * mapping used by DKC's column streamer. This is captured cartridge data,
+     * not a ROM-decoder prediction. */
+    const uint32_t guard = 8u;
+    const uint32_t left_px =
+        wx > (uint32_t)Dkc1VideoExtra() + guard
+            ? wx - (uint32_t)Dkc1VideoExtra() - guard : 0u;
+    const uint32_t right_px =
+        wx + kDkc1VideoNativeWidth + (uint32_t)Dkc1VideoExtra() + guard;
+    const uint32_t top_px = wy > guard ? wy - guard : 0u;
+    const uint32_t bottom_px = wy + kDkc1VideoHeight + guard;
+    const uint32_t origin_tx = s_ws_shadow_origin_x[terrain_layer] >> 3;
+    const uint32_t origin_ty = s_ws_shadow_origin_y[terrain_layer] >> 3;
+    for (uint32_t wtx = left_px >> 3; wtx <= right_px >> 3; wtx++) {
+      for (uint32_t wty = top_px >> 3; wty <= bottom_px >> 3; wty++) {
+        if (wtx < origin_tx || wty < origin_ty)
+          continue;
+        const uint16_t entry =
+            g_ppu->vram[Dkc1RollingMapWord(ppu_map_base, wtx, wty) & 0x7fffu];
+        WsShadowCaptureTile(terrain_layer, wtx - origin_tx,
+                            wty - origin_ty, entry);
+      }
+    }
+  }
+
+  /* Once the cartridge has proved and populated the complete widened
+   * rolling map, the symmetric live capture above is authoritative on every
+   * frame. Re-running the ROM margin refill after that point overwrote live
+   * cells as their one-frame game-write cooldowns expired. Because DKC may
+   * upload a row over several frames, that appeared as an 8px-at-a-time
+   * wipe down a stationary margin even though WRAM/VRAM/OAM were unchanged.
+   * Publish the live range and leave it intact; the decoder is only the
+   * bootstrap source before stream coverage is proven. */
+  if (cartridge_stream_ready || accepted_layout == kDkc1LayoutUnknown)
+    return true;
 
   /* Prefill the margin columns (plus one guard tile each side) from ROM. */
   uint16_t blank_entry = 0;
@@ -1253,6 +1526,13 @@ void Dkc1DrawPpuFrame(void) {
   memset(&trace, 0, sizeof trace);
   trace.frame = snes_frame_counter;
   trace.terrain_layer = -1;
+  trace.prepare_bgmode = g_ppu->bgmode;
+  trace.prepare_inidisp = g_ppu->inidisp;
+  trace.prepare_main_layers = g_ppu->screenEnabled[0];
+  trace.prepare_sub_layers = g_ppu->screenEnabled[1];
+  memcpy(trace.prepare_bgsc, g_ppu->bgXsc, sizeof trace.prepare_bgsc);
+  memcpy(trace.prepare_hscroll, g_ppu->hScroll, sizeof trace.prepare_hscroll);
+  memcpy(trace.prepare_vscroll, g_ppu->vScroll, sizeof trace.prepare_vscroll);
   const bool trace_enabled = Dkc1WsTraceEnabled();
   if (trace_enabled) {
     WsShadowGetMarginStats(0, &trace.shadow_before[0]);
@@ -1277,10 +1557,19 @@ void Dkc1DrawPpuFrame(void) {
   const bool debug_forced_fallback =
       wide_layer_mask != 0 && Dkc1DebugForceWidescreenFallback();
   trace.debug_forced_fallback = debug_forced_fallback;
-  const bool extend_world =
+  const bool cartridge_stream_ready =
+      wide_layer_mask != 0 && !debug_forced_fallback &&
+      Dkc1VideoCartridgeTerrainReady(g_ram);
+  bool stream_bootstrap_rejected = false;
+  const bool shadow_world_ready =
       wide_layer_mask != 0 && !debug_forced_fallback &&
       Dkc1PrepareWidescreenShadow(wide_layer_mask, presentation_bias,
+                                  cartridge_stream_ready,
+                                  &stream_bootstrap_rejected,
                                   trace_enabled ? &trace : NULL);
+  Dkc1VideoGetStreamCoverageStats(&trace.stream_coverage);
+  const bool extend_world = shadow_world_ready;
+  trace.cartridge_stream_ready = cartridge_stream_ready;
   if (trace_enabled) {
     trace.selected_layout = s_ws_layout;
     trace.layout_grace = s_ws_layout_grace;
@@ -1338,6 +1627,14 @@ void Dkc1DrawPpuFrame(void) {
              0, row_bytes);
     PpuSetExtraSpaceCentered(g_ppu, (uint8_t)Dkc1VideoExtra());
     PpuSetWidescreenPresentationXBias(g_ppu, 0);
+    if (stream_bootstrap_rejected) {
+      /* The old renderer enabled widened gameplay culls after observing the
+       * completed initializer on this boundary. Keep that next-frame
+       * gameplay decision byte-identical while refusing only its unproven
+       * pixels. The following calibrated frame establishes the clean shadow
+       * and ordinary terrain-ready ownership resumes. */
+      Dkc1VideoSetTerrainReady(true);
+    }
   } else {
     Dkc1ResetWidescreenShadow();
     PpuSetExtraSpace(g_ppu, 0);

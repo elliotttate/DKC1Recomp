@@ -33,6 +33,28 @@ class WidescreenOverrideTests(unittest.TestCase):
         generated = root / "generated"
         generated.mkdir()
 
+        self.write_function(
+            generated, "standard_initializer.c", "CODE_809E32_M0X0", [
+                ("L_9E9C_M0X0:",
+                 "uint16 backstep = 0x100; uint16 columns = 0x20;"),
+                ("L_9EA2_M0X0:", "cpu_trace_block(cpu, 0x809EA2);"),
+            ])
+        self.write_function(
+            generated, "alternate_initializer.c", "CODE_80C501_M0X0", [
+                ("L_C53A_M0X0:",
+                 "uint16 backstep = 0x108; uint16 columns = 0x21;"),
+                ("L_C540_M0X0:", "cpu_trace_block(cpu, 0x80C540);"),
+            ])
+        for index, (symbol, label) in enumerate((
+                ("Level_BuildTilemapColumn_TypeA_M0X0", "L_8722_M0X0:"),
+                ("Level_DMATilemapColumnToVRAM_M0X0", "L_8868_M0X0:"),
+                ("CODE_8188A8_M0X0", "L_88CE_M0X0:"),
+                ("Level_BuildTilemapColumn_TypeB_M0X0", "L_8E17_M0X0:"))):
+            self.write_function(
+                generated, f"stream_selector_{index}.c", symbol, [
+                    (label, "cpu_write_a_m(cpu, (uint16)(stream_x));"),
+                ])
+
         self.write_function(generated, "shared.c", "SHARED_M0X0", [
             ("L_A8D4_M0X0:", "uint16 left_a = 0x30; uint16 span_a = 0x160;"),
             ("L_A8E5_M0X0:", "cpu_trace_block(cpu, 0xBBA8E5);"),
@@ -116,6 +138,33 @@ class WidescreenOverrideTests(unittest.TestCase):
              "    goto L_806D_M0X0;"),
             ("L_806D_M0X0:", "cpu_trace_block(cpu, 0xBF806D);"),
         ])
+        self.write_function(
+            generated, "oam_draw_hud.c", "OAM_BeginFrameAndDrawHUD_M0X0", [
+                ("L_A1B9_M0X0:",
+                 "if (deadline) {\n"
+                 "      return RECOMP_RETURN_YIELD;\n"
+                 "    }\n"
+                 "    {\n"
+                 "      /* JSL return frame -> cpu->S (Option-1) */\n"
+                 "      draw_actors(cpu);\n"
+                 "    }\n"
+                 "    goto L_A1BD_M0X0;"),
+                ("L_A1BD_M0X0:", "cpu_trace_block(cpu, 0x80A1BD);"),
+            ])
+        self.write_function(
+            generated, "oam_draw_alt.c", "CODE_80C96F_M0X0", [
+                ("L_C973_M0X0:",
+                 "if (deadline) {\n"
+                 "      return RECOMP_RETURN_YIELD;\n"
+                 "    }\n"
+                 "    cpu_write16(cpu, 0x00, 0x008e, 0x0200);\n"
+                 "    {\n"
+                 "      /* JSL return frame -> cpu->S (Option-1) */\n"
+                 "      draw_actors(cpu);\n"
+                 "    }\n"
+                 "    goto L_C9B1_M0X0;"),
+                ("L_C9B1_M0X0:", "cpu_trace_block(cpu, 0x80C9B1);"),
+            ])
 
         # A duplicate bank-local label in another function must not attract
         # the function-scoped banana rewrite.
@@ -137,16 +186,34 @@ class WidescreenOverrideTests(unittest.TestCase):
             self.assertEqual(first, self.read_all(generated))
 
             combined = "\n".join(first.values())
-            self.assertEqual(combined.count("Dkc1VideoExpandCullLeft(0x20)"),
+            self.assertEqual(combined.count(
+                                 "Dkc1VideoObjectScannerCullLeft(0x20)"),
                              len(MODULE.LEFT_BLOCKS))
-            self.assertEqual(combined.count("Dkc1VideoExpandCullSpan(0x140)"),
+            self.assertEqual(combined.count(
+                                 "Dkc1VideoObjectScannerCullSpan(0x140)"),
                              len(MODULE.SPAN_BLOCKS))
-            self.assertEqual(combined.count("Dkc1VideoExpandCullLeft(0x120)"),
+            self.assertEqual(combined.count(
+                                 "Dkc1VideoObjectScannerCullLeft(0x120)"),
                              len(MODULE.PREFETCH_BLOCKS))
             self.assertEqual(
                 first["shared.c"].count("Dkc1VideoExpandCullLeft"), 2)
             self.assertEqual(
                 first["shared.c"].count("Dkc1VideoExpandCullSpan"), 2)
+            self.assertIn(
+                "Dkc1VideoInitialBackstep(cpu, 0x100)",
+                first["standard_initializer.c"])
+            self.assertIn(
+                "Dkc1VideoInitialColumnCount(cpu, 0x20)",
+                first["standard_initializer.c"])
+            self.assertIn(
+                "Dkc1VideoInitialBackstep(cpu, 0x108)",
+                first["alternate_initializer.c"])
+            self.assertIn(
+                "Dkc1VideoInitialColumnCount(cpu, 0x21)",
+                first["alternate_initializer.c"])
+            self.assertEqual(
+                combined.count("Dkc1VideoSelectStreamX(cpu, cpu_read_a16(cpu))"),
+                4)
             self.assertEqual(
                 first["banana_draw.c"].count("Dkc1VideoPromoteOamXHigh"), 2)
             self.assertIn("Dkc1VideoBiasCullX", first["rope.c"])
@@ -161,6 +228,19 @@ class WidescreenOverrideTests(unittest.TestCase):
                 combined.count("Dkc1VideoBeginPlacedActorDispatch(cpu)"), 2)
             self.assertEqual(
                 combined.count("Dkc1VideoEndPlacedActorDispatch(cpu)"), 2)
+            self.assertEqual(
+                combined.count("Dkc1MarginProxyBeginRender(cpu)"), 2)
+            # Each synthetic renderer block has one abnormal return and one
+            # normal exit; both must restore borrowed actor slots.
+            self.assertEqual(
+                combined.count("Dkc1MarginProxyEndRender(cpu)"), 4)
+            alternate = first["oam_draw_alt.c"]
+            self.assertLess(
+                alternate.index("cpu_write16(cpu, 0x00, 0x008e, 0x0200)"),
+                alternate.index("Dkc1MarginProxyBeginRender(cpu)"))
+            self.assertLess(
+                alternate.index("Dkc1MarginProxyBeginRender(cpu)"),
+                alternate.index("/* JSL return frame -> cpu->S"))
             self.assertNotIn("cpu_write_a_m(cpu, 0)",
                              first["actor_dispatch.c"])
             self.assertNotIn(MODULE.INCLUDE, first["duplicate.c"])

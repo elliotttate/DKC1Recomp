@@ -7,7 +7,8 @@
  *
  * usage: dkc1_layer_capture <rom.sfc> <snapshot.state> <output-dir>
  * DKC1_WIDESCREEN=0 selects the native 4:3 framebuffer (default wide).
- * Output: composite/bg1/bg2/bg3/obj .ppm (P6) plus layer_capture.json.
+ * Output: backdrop/composite/bg1/bg2/bg3/obj .ppm (P6), backdrop-subtracted
+ * per-plane occupancy masks (P5), plus layer_capture.json.
  */
 #include "dkc1_game.h"
 #include "dkc1_video.h"
@@ -22,6 +23,7 @@
 #include <string.h>
 
 static uint8_t s_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
+static uint8_t s_backdrop[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
 
 static int WritePpm(const char *path, const uint8_t *bgra, int width,
                     int height) {
@@ -34,6 +36,26 @@ static int WritePpm(const char *path, const uint8_t *bgra, int width,
       const uint8_t *pixel = bgra + ((size_t)y * width + x) * 4;
       const uint8_t rgb[3] = {pixel[2], pixel[1], pixel[0]};
       if (fwrite(rgb, 1, 3, file) != 3) {
+        fclose(file);
+        return 0;
+      }
+    }
+  }
+  return fclose(file) == 0;
+}
+
+static int WriteMask(const char *path, const uint8_t *bgra,
+                     const uint8_t *backdrop, int width, int height) {
+  FILE *file = fopen(path, "wb");
+  if (!file)
+    return 0;
+  fprintf(file, "P5\n%d %d\n255\n", width, height);
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      const size_t offset = ((size_t)y * width + x) * 4;
+      const uint8_t occupied =
+          memcmp(bgra + offset, backdrop + offset, 4) != 0 ? 255 : 0;
+      if (fwrite(&occupied, 1, 1, file) != 1) {
         fclose(file);
         return 0;
       }
@@ -78,8 +100,8 @@ int main(int argc, char **argv) {
     const char *name;
     uint8_t mask;
   } kShots[] = {
-      {"composite", 0xff}, {"bg1", 0x01}, {"bg2", 0x02},
-      {"bg3", 0x04},       {"obj", 0x10},
+      {"backdrop", 0x00}, {"composite", 0xff}, {"bg1", 0x01},
+      {"bg2", 0x02},      {"bg3", 0x04},       {"obj", 0x10},
   };
 
   int captured_frame = -1;
@@ -110,6 +132,16 @@ int main(int argc, char **argv) {
       fprintf(stderr, "unable to write %s\n", path);
       return 8;
     }
+    if (i == 0) {
+      memcpy(s_backdrop, s_pixels, (size_t)width * height * 4);
+    } else {
+      snprintf(path, sizeof path, "%s/%s.mask.pgm", out_dir,
+               kShots[i].name);
+      if (!WriteMask(path, s_pixels, s_backdrop, width, height)) {
+        fprintf(stderr, "unable to write %s\n", path);
+        return 8;
+      }
+    }
   }
   Dkc1DebugSetLayerMask(0xff);
 
@@ -118,11 +150,13 @@ int main(int argc, char **argv) {
   FILE *file = fopen(meta, "wb");
   if (file) {
     fprintf(file,
-            "{\"schema\":\"dkc1.layer-capture.v1\",\"snapshot\":\"%s\","
+            "{\"schema\":\"dkc1.layer-capture.v2\",\"snapshot\":\"%s\","
             "\"snes_frame\":%d,\"width\":%d,\"height\":%d,"
             "\"widescreen\":%s,"
-            "\"images\":[\"composite.ppm\",\"bg1.ppm\",\"bg2.ppm\","
-            "\"bg3.ppm\",\"obj.ppm\"]}\n",
+            "\"images\":[\"backdrop.ppm\",\"composite.ppm\","
+            "\"bg1.ppm\",\"bg2.ppm\",\"bg3.ppm\",\"obj.ppm\"],"
+            "\"masks\":[\"composite.mask.pgm\",\"bg1.mask.pgm\","
+            "\"bg2.mask.pgm\",\"bg3.mask.pgm\",\"obj.mask.pgm\"]}\n",
             snapshot_path, captured_frame, width, height,
             Dkc1VideoIsWidescreen() ? "true" : "false");
     fclose(file);

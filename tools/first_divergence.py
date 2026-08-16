@@ -178,6 +178,27 @@ def load_hash_log(path: Path) -> list[tuple[int, str]]:
     return rows
 
 
+def first_hash_divergence(stock: list[tuple[int, str]],
+                          wide: list[tuple[int, str]],
+                          start_frame: int = 1) -> int | None:
+    """Return the first mismatching relative frame at or after start_frame.
+
+    Fresh-entry routes intentionally use different temporary Layer1 origins
+    while the widened cartridge initializer fills extra columns.  Callers
+    auditing settled gameplay must be able to retain those frames in the
+    determinism logs while beginning divergence classification after the
+    initializer/transition boundary.  Frame numbers are authoritative; do
+    not assume a zero-based list index or silently align unequal rows.
+    """
+    for stock_row, wide_row in zip(stock, wide):
+        if stock_row[0] != wide_row[0]:
+            raise RuntimeError(
+                "stock/wide hash logs have different frame numbering")
+        if stock_row[0] >= start_frame and stock_row != wide_row:
+            return stock_row[0]
+    return None
+
+
 def load_wram_frames(prefix: Path) -> dict[int, bytes]:
     """Read wram_dump.c output: <raw>.bin plus <raw>.bin.jsonl whose frame
     rows carry relative_frame, offset, length, and sha256 (first row is a
@@ -329,8 +350,16 @@ def classify(stock: bytes, wide: bytes) -> dict:
         name: value for name, value in fields.items()
         if not name.startswith("scanner_")
     }
+    actor_bookkeeping_critical = bool(
+        gameplay_actor_differences or bookmarks)
+    scene_outcome_fields = {
+        name: value for name, value in fields.items()
+        if name in {"game_mode", "entrance", "fade", "section_state",
+                    "section_current", "section_pending"}
+    }
+    scene_outcome_critical = bool(scene_outcome_fields)
     gameplay_critical = bool(
-        gameplay_actor_differences or bookmarks or gameplay_named_fields)
+        actor_bookkeeping_critical or gameplay_named_fields)
     if gameplay_critical:
         divergence_class = "gameplay_state"
     elif any(name.startswith("scanner_") for name in fields):
@@ -357,6 +386,9 @@ def classify(stock: bytes, wide: bytes) -> dict:
         "gameplay_actor_differences": gameplay_actor_differences[:16],
         "bookmark_differences": bookmarks[:32],
         "gameplay_named_fields": gameplay_named_fields,
+        "actor_bookkeeping_critical": actor_bookkeeping_critical,
+        "scene_outcome_fields": scene_outcome_fields,
+        "scene_outcome_critical": scene_outcome_critical,
         "gameplay_critical": gameplay_critical,
         "divergence_class": divergence_class,
     }
@@ -374,6 +406,11 @@ def main() -> int:
                         help="DKC1_SCRIPT route (recommended) — the same "
                              "route runs in both modes")
     parser.add_argument("--frames", type=int, required=True)
+    parser.add_argument(
+        "--start-frame", type=int, default=1,
+        help=("begin stock/wide divergence classification at this relative "
+              "frame while still recording and determinism-checking the "
+              "complete route (use after a proven initializer boundary)"))
     parser.add_argument("--snapshot-input", type=Path,
                         help="native full-machine anchor loaded before every "
                              "stock/wide pass")
@@ -394,6 +431,9 @@ def main() -> int:
               "--work; every reused artifact is revalidated before the two "
               "semantic passes run"))
     args = parser.parse_args()
+
+    if not 1 <= args.start_frame <= args.frames:
+        parser.error("--start-frame must be within 1..--frames")
 
     profile_path = args.profile or (
         DEFAULT_PROFILE if DEFAULT_PROFILE.exists() else None)
@@ -449,13 +489,11 @@ def main() -> int:
             raise RuntimeError(f"empty baseline hash log: {log_path}")
 
     length = min(len(logs["stock"]), len(logs["wide"]))
-    first = None
-    for i in range(length):
-        if logs["stock"][i] != logs["wide"][i]:
-            first = logs["stock"][i][0]
-            break
+    first = first_hash_divergence(
+        logs["stock"][:length], logs["wide"][:length], args.start_frame)
     report = {
         "frames_compared": length,
+        "comparison_frame_range": [args.start_frame, length],
         "first_divergence_frame": first,
     }
     if first is None:
@@ -466,7 +504,7 @@ def main() -> int:
         return 0
 
     # pass 2: raw window dumps + independent confirmation
-    lo = max(1, first - args.window)
+    lo = max(args.start_frame, first - args.window)
     hi = first + args.window
     dumps = {}
     for mode, wide in (("stock", False), ("wide", True)):
@@ -534,7 +572,7 @@ def main() -> int:
     if not args.skip_semantic_scan:
         semantic_dumps = {}
         report["semantic_scan"] = {
-            "frames": [1, length],
+            "frames": [args.start_frame, length],
             "ranges": SEMANTIC_DUMP_RANGES,
         }
         for mode, wide in (("stock", False), ("wide", True)):
@@ -546,7 +584,7 @@ def main() -> int:
             run_host(
                 exe, rom, length, wide, None,
                 playback_env({
-                    "DKC1_WRAM_DUMP": f"1-{length}",
+                    "DKC1_WRAM_DUMP": f"{args.start_frame}-{length}",
                     "DKC1_WRAM_DUMP_PATH": str(prefix.with_suffix(".bin")),
                     "DKC1_WRAM_DUMP_RANGES": SEMANTIC_DUMP_RANGES,
                     "DKC1_WRAM_HASH_LOG": str(semantic_hash),
@@ -577,22 +615,44 @@ def main() -> int:
 
         first_semantic = None
         first_semantic_classification = None
-        for frame in range(1, length + 1):
+        first_actor_bookkeeping = None
+        first_actor_bookkeeping_classification = None
+        first_scene_outcome = None
+        first_scene_outcome_classification = None
+        for frame in range(args.start_frame, length + 1):
             if (frame not in semantic_dumps["stock"] or
                     frame not in semantic_dumps["wide"]):
                 continue
             classification = classify(
                 semantic_dumps["stock"][frame],
                 semantic_dumps["wide"][frame])
-            if classification["gameplay_critical"]:
+            if (first_actor_bookkeeping is None and
+                    classification["actor_bookkeeping_critical"]):
+                first_actor_bookkeeping = frame
+                first_actor_bookkeeping_classification = classification
+            if (first_scene_outcome is None and
+                    classification["scene_outcome_critical"]):
+                first_scene_outcome = frame
+                first_scene_outcome_classification = classification
+            if (first_semantic is None and
+                    classification["gameplay_critical"]):
                 first_semantic = frame
                 first_semantic_classification = classification
-                break
         report["semantic_scan"]["first_gameplay_critical_frame"] = (
             first_semantic)
         if first_semantic_classification is not None:
             report["semantic_scan"]["first_gameplay_critical"] = (
                 first_semantic_classification)
+        report["semantic_scan"]["first_actor_bookkeeping_critical_frame"] = (
+            first_actor_bookkeeping)
+        if first_actor_bookkeeping_classification is not None:
+            report["semantic_scan"]["first_actor_bookkeeping_critical"] = (
+                first_actor_bookkeeping_classification)
+        report["semantic_scan"]["first_scene_outcome_critical_frame"] = (
+            first_scene_outcome)
+        if first_scene_outcome_classification is not None:
+            report["semantic_scan"]["first_scene_outcome_critical"] = (
+                first_scene_outcome_classification)
 
     text = json.dumps(report, indent=1)
     print(text)

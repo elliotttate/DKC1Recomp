@@ -10,6 +10,7 @@
  */
 #include "dkc1_blank_scan.h"
 #include "dkc1_game.h"
+#include "dkc1_invariant_monitor.h"
 #include "dkc1_debug_dump.h"
 #include "dkc1_flight_recorder.h"
 #include "dkc1_script.h"
@@ -115,6 +116,14 @@ static char s_pending_state_path[1024];
 static int s_pending_state_op;  /* 0 none, 1 save-as, 2 load-from */
 static int s_show_fps;
 static double s_fps_value;
+static int s_inspect_x = -1;
+static int s_inspect_y = -1;
+static int s_inspect_pending;
+static char s_pixel_report[640] = "(click any pixel)";
+static int s_auto_export_fired;
+static char s_tail_bundle[1024];
+static long s_tail_export_frame;
+static long s_tail_deadline;
 static char s_host_status[512] = "manual play";
 static Dkc1InputPlayback s_input_playback;
 static Dkc1WramDump s_wram_dump;
@@ -234,18 +243,31 @@ static void MaybeAutoExport(void) {
     return;
   if ((s_host_frame & 15) != 0)
     return; /* poll every 16 frames; counters are cumulative */
-  long total = Dkc1BlankScanEventCount();
+  long total = Dkc1BlankScanEventCount() +
+               Dkc1InvariantMonitorTotal();
   for (int layer = 0; layer < 2; layer++) {
     WsShadowMarginStat stat;
     WsShadowGetMarginStats(layer, &stat);
     total += (long)(stat.outOfRangeRead + stat.outOfRangeWrite +
                     stat.retrodictMismatch);
   }
+  /* Shadow counters are cumulative, but transitions deliberately tear down
+   * and rebuild scene-local presentation state.  Consume any diagnostics
+   * accumulated while extended terrain is unavailable so a later poll (or
+   * the first gameplay frame after a fade) cannot export an all-black
+   * transition and mislabel it as a widescreen cull.  Rendered blank events
+   * already apply this same terrain-ready policy in dkc1_blank_scan.c. */
+  if (!Dkc1VideoTerrainReady()) {
+    if (total > s_seen_total)
+      s_seen_total = total;
+    return;
+  }
   if (total > s_seen_total) {
     s_seen_total = total;
     if (s_host_frame >= s_cooldown_until) {
       s_cooldown_until = s_host_frame + 600;
       s_export_requested = 1;
+      s_auto_export_fired = 1;
       snprintf(s_host_status, sizeof s_host_status,
                "integrity detector fired (total %ld) — auto-exporting",
                total);
@@ -582,6 +604,102 @@ static void UpdateDebugTitle(void) {
   RefreshMenuChecks();
 }
 
+/* Click-to-provenance: resolve a queued click one frame later, when the
+ * provenance surface has been filled by a render pass with capture armed.
+ * Everything here is read-only against emulated state. */
+static void ResolvePixelInspect(void) {
+  if (!s_inspect_pending || s_inspect_x < 0)
+    return;
+  if (--s_inspect_pending)
+    return;
+  static const char *const kProvNames[] = {
+      "none", "captured", "prefill", "fold", "blank", "raw-cont",
+      "raw-fallback", "OUT-OF-RANGE"};
+  const int extra = Dkc1VideoIsWidescreen() ? Dkc1VideoExtra() : 0;
+  const int native_x = s_inspect_x - extra;
+  const uint16_t cam_x = ReadWram16(0x088b);
+  const uint16_t cam_y = ReadWram16(0x0895);
+  int offset = snprintf(s_pixel_report, sizeof s_pixel_report,
+                        "px(%d,%d) native x=%d%s", s_inspect_x, s_inspect_y,
+                        native_x, "\r\n");
+  for (int layer = 0; layer < 2; layer++) {
+    if (!WsShadowLayerActive(layer))
+      continue;
+    const unsigned shift = PPU_bigTiles(g_ppu, layer) ? 4u : 3u;
+    const uint32_t world_x =
+        WsShadowWorldX(layer) + (uint32_t)native_x;
+    const uint32_t world_y =
+        WsShadowPresentWorldY(layer, native_x) + (uint32_t)s_inspect_y;
+    const uint32_t tile_x = world_x >> shift;
+    const uint32_t tile_y = world_y >> shift;
+    uint16_t entry = 0;
+    const int cell = WsShadowDebugCell(layer, tile_x, tile_y, &entry);
+    const uint8_t prov =
+        WsShadowDebugProvenanceAt(layer, native_x, s_inspect_y);
+    uint32_t writer_frame = 0;
+    const int writer =
+        WsShadowDebugLastWriter(layer, tile_x, tile_y, &writer_frame);
+    offset += snprintf(
+        s_pixel_report + offset,
+        sizeof s_pixel_report - (size_t)offset,
+        "L%d world(%u,%u) tile(%u,%u) e=%04X %s%s%s wr=%s@f%u%s",
+        layer, world_x, world_y, tile_x, tile_y, entry,
+        cell == 2 ? "guess " : cell == 1 ? "vram " : "empty ",
+        prov < 8 ? kProvNames[prov] : "?",
+        "", WsShadowWriteKindName(writer), writer_frame, "\r\n");
+    if ((size_t)offset >= sizeof s_pixel_report - 96)
+      break;
+  }
+  /* OAM entries near the pixel (WRAM shadow, native screen space). */
+  int oam_hits = 0;
+  for (int i = 0; i < 128 && oam_hits < 2; i++) {
+    const uint8_t *entry8 = g_ram + 0x0200 + i * 4;
+    const uint8_t hi =
+        (uint8_t)((g_ram[0x0400 + i / 4] >> ((i % 4) * 2)) & 3);
+    int sx = entry8[0] | ((hi & 1) << 8);
+    if (sx >= 256)
+      sx -= 512;
+    const int sy = entry8[1];
+    if (sy >= 0xF0)
+      continue;
+    if (native_x - sx >= -8 && native_x - sx < 40 &&
+        s_inspect_y - sy >= -8 && s_inspect_y - sy < 40) {
+      oam_hits++;
+      offset += snprintf(s_pixel_report + offset,
+                         sizeof s_pixel_report - (size_t)offset,
+                         "OAM#%d x=%d y=%d t=%02X a=%02X%s", i, sx, sy,
+                         entry8[2], entry8[3], "\r\n");
+    }
+  }
+  /* Nearest allocated actor by screen distance. */
+  int best_slot = -1, best_distance = 0x7fffffff;
+  for (unsigned index = 0x02; index <= 0x32; index += 2) {
+    if (!ReadWram16(0x0D45 + index))
+      continue;
+    int rel_x = (int)(uint16_t)(ReadWram16(0x0B19 + index) - cam_x);
+    if (rel_x >= 0x8000) rel_x -= 0x10000;
+    int rel_y = (int)(uint16_t)(ReadWram16(0x0BC1 + index) - cam_y);
+    if (rel_y >= 0x8000) rel_y -= 0x10000;
+    const int dx = rel_x - native_x, dy = rel_y - s_inspect_y;
+    const int distance = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+    if (distance < best_distance) {
+      best_distance = distance;
+      best_slot = (int)index;
+    }
+  }
+  if (best_slot >= 0 && best_distance < 160) {
+    offset += snprintf(
+        s_pixel_report + offset, sizeof s_pixel_report - (size_t)offset,
+        "actor idx%02X id=%u src=%d st=%04X d=%d", best_slot,
+        ReadWram16(0x0D45 + (unsigned)best_slot),
+        (int16_t)ReadWram16(0x15FD + (unsigned)best_slot),
+        ReadWram16(0x1029 + (unsigned)best_slot), best_distance);
+  }
+  (void)offset;
+  snprintf(s_host_status, sizeof s_host_status,
+           "pixel (%d,%d) inspected", s_inspect_x, s_inspect_y);
+}
+
 /* Host-side FPS badge, composed off-screen like the panel so nothing
  * flickers; never rendered into the framebuffer evidence. */
 static void DrawFpsBadge(HDC dc, int x, int y) {
@@ -676,6 +794,7 @@ static void PresentFrame(HDC dc) {
   HFONT font = (HFONT)GetStockObject(ANSI_FIXED_FONT);
   HFONT old_font = (HFONT)SelectObject(panel_dc, font);
 
+  char invariant_summary[160];
   char script[256] = "manual keyboard input";
   if (s_script_loaded) Dkc1ScriptStatus(script, sizeof script);
   else if (s_input_playback.count)
@@ -696,14 +815,17 @@ static void PresentFrame(HDC dc) {
            "$%04X / $%04X / $%04X\r\n"
            "Layer scroll X/Y: $%04X / $%04X\r\n"
            "Camera bounds: $%04X .. $%04X\r\n"
-           "Scanner: $%04X  range $%04X..$%04X\r\n"
-           "Section: $%04X\r\n"
+           "Scanner: rec $%02X  range $%04X..$%04X (%u px)\r\n"
+           "Section: state $%04X  records $%04X..$%04X  limit $%04X\r\n"
+           "Widescreen world: %s  extra %d px/side\r\n"
            "\r\n"
            "Evidence taps\r\n"
            "WS trace: %s\r\n"
            "OAM: %s   lifecycle: %s\r\n"
            "WRAM dump: %s   input record: %s\r\n"
            "Flight recorder: %s\r\n"
+           "Invariants: %s\r\n"
+           "Pixel inspect (click view):\r\n%s\r\n"
            "\r\n"
            "F1 provenance   F2 composite\r\n"
            "F3 BG1  F4 BG2  F5 BG3  F6 OBJ\r\n"
@@ -724,14 +846,22 @@ static void PresentFrame(HDC dc) {
            ReadWram16(0x0032), ReadWram16(0x0030), ReadWram16(0x003e),
            ReadWram16(0x088b), ReadWram16(0x0895),
            ReadWram16(0x1b23), ReadWram16(0x1b25),
+           (unsigned)g_ram[0x00a4], ReadWram16(0x00ef),
+           ReadWram16(0x00f1),
+           (unsigned)(uint16_t)(ReadWram16(0x00f1) - ReadWram16(0x00ef)),
            ReadWram16(0x1e03), ReadWram16(0x1e07), ReadWram16(0x1e09),
-           ReadWram16(0x05c1),
+           ReadWram16(0x1e0b),
+           Dkc1VideoTerrainReady() ? "READY" : "not ready",
+           Dkc1VideoExtra(),
            EnvironmentEnabled("DKC1_WS_TRACE") ? "ON" : "off",
            EnvironmentEnabled("DKC1_OAM_LOG") ? "ON" : "off",
            EnvironmentEnabled("DKC1_LIFECYCLE_TRACE") ? "ON" : "off",
            EnvironmentEnabled("DKC1_WRAM_DUMP") ? "ON" : "off",
            EnvironmentEnabled("DKC1_INPUT_RECORD") ? "ON" : "off",
-           Dkc1FlightRecorderEnabled() ? "ARMED (60 seconds)" : "off");
+           Dkc1FlightRecorderEnabled() ? "ARMED (60 seconds)" : "off",
+           Dkc1InvariantMonitorSummary(invariant_summary,
+                                       sizeof invariant_summary),
+           s_pixel_report);
   RECT text_rect = panel;
   text_rect.left += 12;
   text_rect.top += 12;
@@ -947,6 +1077,39 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
     }
+    case WM_LBUTTONDOWN: {
+      const int click_x = (int)(short)LOWORD(lp);
+      const int click_y = (int)(short)HIWORD(lp);
+      int game_x = -1, game_y = -1;
+      if (s_fullscreen) {
+        RECT client;
+        GetClientRect(hwnd, &client);
+        const int cw = client.right, ch = client.bottom;
+        if (cw > 0 && ch > 0) {
+          int dw = cw, dh = cw * s_height / s_width;
+          if (dh > ch) { dh = ch; dw = ch * s_width / s_height; }
+          const int dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+          if (click_x >= dx && click_x < dx + dw && click_y >= dy &&
+              click_y < dy + dh) {
+            game_x = (click_x - dx) * s_width / dw;
+            game_y = (click_y - dy) * s_height / dh;
+          }
+        }
+      } else if (click_x >= 0 && click_x < s_width * kScale &&
+                 click_y >= 0 && click_y < s_height * kScale) {
+        game_x = click_x / kScale;
+        game_y = click_y / kScale;
+      }
+      if (game_x >= 0) {
+        s_inspect_x = game_x;
+        s_inspect_y = game_y;
+        s_inspect_pending = 2; /* resolve after a provenance-armed render */
+        WsShadowDebugSetProvenanceEnabled(true);
+        if (s_paused) /* paused loop repaints but never re-renders */
+          s_inspect_pending = 1;
+      }
+      return 0;
+    }
     case WM_SYSKEYDOWN:
       if (wp == VK_RETURN) {  /* Alt+Enter toggles fullscreen */
         if (!(lp & (1u << 30))) SetFullscreen(!s_fullscreen);
@@ -1140,6 +1303,7 @@ int main(int argc, char **argv) {
     const char *panel_text = getenv("DKC1_DESKTOP_DEBUG_PANEL");
     s_panel_enabled = !(panel_text && *panel_text == '0');
   }
+  s_paused = EnvironmentEnabled("DKC1_START_PAUSED") ? 1 : 0;
   {
     const char *autoclose = getenv("DKC1_ROUTE_AUTOCLOSE_MS");
     if (autoclose && *autoclose) {
@@ -1277,6 +1441,11 @@ int main(int argc, char **argv) {
   s_width = Dkc1VideoWidth();
   s_height = kDkc1VideoHeight;
   Dkc1BeginDrawing(s_pixels, (size_t)s_width * 4);
+  /* A diagnostic snapshot may be launched paused. Render its exact machine
+   * state without advancing CPU/APU/PPU time so the first visible window is
+   * useful immediately and the user does not have to race an F7 keypress. */
+  if (s_paused)
+    Dkc1DrawPpuFrame();
 
   EnableDarkMenus();
 
@@ -1337,6 +1506,14 @@ int main(int argc, char **argv) {
       if (Dkc1FlightRecorderExport(s_host_frame, bundle, sizeof bundle,
                                    error, sizeof error)) {
         SpawnLayerCapture(bundle);
+        if (s_auto_export_fired) {
+          /* Keep recording: a post-failure tail shows how the failure
+           * evolved, not just the moment it was detected. */
+          snprintf(s_tail_bundle, sizeof s_tail_bundle, "%s", bundle);
+          s_tail_export_frame = s_host_frame;
+          s_tail_deadline = s_host_frame + 120;
+        }
+        s_auto_export_fired = 0;
         snprintf(s_host_status, sizeof s_host_status,
                  "repro exported (+layer captures): %.450s", bundle);
       } else
@@ -1346,16 +1523,32 @@ int main(int argc, char **argv) {
     }
 
     /* Quick save/load: native full-machine snapshots, handled at the frame
-     * boundary like script state ops. Loading resets the widescreen shadow
-     * (loaded-state evidence discipline); margins rebuild within a frame. */
+     * boundary like script state ops. State v8 includes the sparse host-only
+     * widescreen shadow and actor-phase decisions, while the recorder export
+     * preserves the causal input history and same-frame raw planes. Older
+     * v4-v7 states remain loadable and intentionally rebuild host history. */
     if (s_quicksave_requested) {
+      char bundle[1024] = {0};
+      char export_error[256] = {0};
       s_quicksave_requested = 0;
       const int saved = RtlSaveSnapshot("quicksave.state");
       if (saved)
         WriteStateBuildInfo("quicksave.state");
-      snprintf(s_host_status, sizeof s_host_status,
-               saved ? "quick save -> quicksave.state"
-                     : "quick save FAILED");
+      const int exported = saved && Dkc1FlightRecorderEnabled() &&
+          Dkc1FlightRecorderExport(s_host_frame, bundle, sizeof bundle,
+                                   export_error, sizeof export_error);
+      if (exported) {
+        SpawnLayerCapture(bundle);
+        snprintf(s_host_status, sizeof s_host_status,
+                 "quick save + live repro (+layers): %.430s", bundle);
+      } else if (saved && Dkc1FlightRecorderEnabled()) {
+        snprintf(s_host_status, sizeof s_host_status,
+                 "quick save OK; live repro FAILED: %.390s", export_error);
+      } else {
+        snprintf(s_host_status, sizeof s_host_status,
+                 saved ? "quick save -> quicksave.state"
+                       : "quick save FAILED");
+      }
       UpdateDebugTitle();
     }
     if (s_quickload_requested) {
@@ -1364,10 +1557,17 @@ int main(int argc, char **argv) {
         snprintf(s_host_status, sizeof s_host_status,
                  "quick load declined (build mismatch)");
       } else {
+        const int loaded = RtlLoadSnapshot("quicksave.state");
+        char recorder_error[256];
+        const int reanchored = !loaded ||
+            Dkc1FlightRecorderReanchorAfterStateLoad(
+                s_host_frame, recorder_error, sizeof recorder_error);
         snprintf(s_host_status, sizeof s_host_status,
-                 RtlLoadSnapshot("quicksave.state")
-                     ? "quick load <- quicksave.state"
-                     : "quick load FAILED (no quicksave.state?)");
+                 !loaded ? "quick load FAILED (no quicksave.state?)"
+                         : reanchored
+                               ? "quick load <- quicksave.state"
+                               : "quick load succeeded; recorder reanchor FAILED: %.180s",
+                 recorder_error);
       }
       UpdateDebugTitle();
     }
@@ -1384,10 +1584,20 @@ int main(int argc, char **argv) {
                                    : RtlLoadSnapshot(s_pending_state_path);
       if (save_op && accepted)
         WriteStateBuildInfo(s_pending_state_path);
-      snprintf(s_host_status, sizeof s_host_status, "state %s %s %.400s",
-               save_op ? "save" : "load",
-               accepted ? (save_op ? "->" : "<-") : "FAILED:",
-               s_pending_state_path);
+      char recorder_error[256];
+      const int reanchored = save_op || !accepted ||
+          Dkc1FlightRecorderReanchorAfterStateLoad(
+              s_host_frame, recorder_error, sizeof recorder_error);
+      if (!reanchored) {
+        snprintf(s_host_status, sizeof s_host_status,
+                 "state load succeeded; recorder reanchor FAILED: %.180s",
+                 recorder_error);
+      } else {
+        snprintf(s_host_status, sizeof s_host_status, "state %s %s %.400s",
+                 save_op ? "save" : "load",
+                 accepted ? (save_op ? "->" : "<-") : "FAILED:",
+                 s_pending_state_path);
+      }
       UpdateDebugTitle();
     }
 
@@ -1398,6 +1608,7 @@ int main(int argc, char **argv) {
     }
 
     if (s_paused && !s_step_once) {
+      ResolvePixelInspect();
       HDC dc = GetDC(s_window);
       PresentFrame(dc);
       ReleaseDC(s_window, dc);
@@ -1425,12 +1636,23 @@ int main(int argc, char **argv) {
         SetRouteTerminal(1, "script_failed", Dkc1ScriptError());
         continue;
       }
-      if (script_ops.state_load && !RtlLoadSnapshot(script_ops.state_load)) {
+      if (script_ops.state_load) {
         char message[512];
-        snprintf(message, sizeof message,
-                 "unable to load snapshot: %.430s", script_ops.state_load);
-        SetRouteTerminal(1, "state_load_failed", message);
-        continue;
+        char recorder_error[256];
+        if (!RtlLoadSnapshot(script_ops.state_load)) {
+          snprintf(message, sizeof message,
+                   "unable to load snapshot: %.430s", script_ops.state_load);
+          SetRouteTerminal(1, "state_load_failed", message);
+          continue;
+        }
+        if (!Dkc1FlightRecorderReanchorAfterStateLoad(
+                s_host_frame, recorder_error, sizeof recorder_error)) {
+          snprintf(message, sizeof message,
+                   "state loaded but recorder reanchor failed: %.380s",
+                   recorder_error);
+          SetRouteTerminal(1, "state_load_reanchor_failed", message);
+          continue;
+        }
       }
       if (script_ops.checkpoint &&
           !Dkc1DebugCheckpoint(script_ops.checkpoint, (int)s_host_frame)) {
@@ -1482,7 +1704,23 @@ int main(int argc, char **argv) {
     }
     Dkc1DrawPpuFrame();
     s_host_frame++;
-    Dkc1BlankScanFrame(s_host_frame, s_pixels, s_width, s_height);
+    Dkc1BlankScanFrame(s_host_frame, s_pixels, s_width, s_height,
+                       Dkc1VideoTerrainReady());
+    Dkc1InvariantMonitorFrame(s_host_frame);
+    ResolvePixelInspect();
+    if (s_tail_bundle[0] && s_host_frame >= s_tail_deadline) {
+      char tail_error[256];
+      if (Dkc1FlightRecorderExportTail(s_tail_bundle, s_tail_export_frame,
+                                       s_host_frame, tail_error,
+                                       sizeof tail_error))
+        snprintf(s_host_status, sizeof s_host_status,
+                 "post-failure tail saved into bundle");
+      else
+        snprintf(s_host_status, sizeof s_host_status,
+                 "post-tail failed: %.400s", tail_error);
+      s_tail_bundle[0] = 0;
+      UpdateDebugTitle();
+    }
     MaybeAutoExport();
     {
       char error[256];

@@ -1,10 +1,12 @@
 #include "dkc1_video.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "cpu_state.h"
 #include "dkc1_debug_dump.h"
+#include "dkc1_margin_proxy.h"
 
 bool g_ws_active;
 int g_ws_extra;
@@ -37,22 +39,171 @@ enum { kDkc1WramSize = 0x20000 };
 
 static uint8_t s_prefetch_wram[kDkc1WramSize];
 static bool s_prefetch_dispatch_active;
+static uint16_t Dkc1ReadWram16(const uint8_t *wram, uint16_t address);
+static uint16_t s_prefetch_actor_index;
+static bool s_prefetch_transaction_detail_reported[0x1a];
+
+typedef struct Dkc1StreamCoverage {
+  uint16_t mode;
+  uint16_t level;
+  uint16_t entrance;
+  uint64_t columns;
+  uint8_t unique_columns;
+  uint8_t required_columns;
+  uint16_t last_layer_x;
+  uint16_t last_selected_x;
+  uint32_t initial_count_calls;
+  uint32_t initial_count_rejected;
+  uint32_t selector_calls;
+  uint32_t observed_columns;
+  bool context_valid;
+  bool ready;
+} Dkc1StreamCoverage;
+
+static Dkc1StreamCoverage s_stream_coverage;
+
+enum {
+  kDkc1VideoSnapshotMagic = 0x31535644u, /* "DVS1" */
+  kDkc1VideoSnapshotVersion = 2,
+  kDkc1MarginProxySnapshotCapacity = 2048,
+};
+
+typedef struct Dkc1VideoHostSnapshotV1 {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t size;
+  uint8_t terrainReady;
+  uint8_t phasesSeeded;
+  uint8_t contextValid;
+  uint8_t reserved;
+  int32_t presentationBias;
+  Dkc1PlacedActorPhase phases[0x1a];
+  Dkc1PlacedActorContext context;
+  Dkc1StreamCoverage streamCoverage;
+} Dkc1VideoHostSnapshotV1;
+
+typedef struct Dkc1VideoHostSnapshot {
+  Dkc1VideoHostSnapshotV1 legacy;
+  uint32_t marginProxySize;
+  uint8_t marginProxy[kDkc1MarginProxySnapshotCapacity];
+} Dkc1VideoHostSnapshot;
+
+size_t Dkc1VideoSnapshotSize(void) {
+  return sizeof(Dkc1VideoHostSnapshot);
+}
+
+bool Dkc1VideoSnapshotSave(void *data, size_t size) {
+  if (!data || size < sizeof(Dkc1VideoHostSnapshot))
+    return false;
+  Dkc1VideoHostSnapshot snapshot;
+  memset(&snapshot, 0, sizeof snapshot);
+  snapshot.legacy.magic = kDkc1VideoSnapshotMagic;
+  snapshot.legacy.version = kDkc1VideoSnapshotVersion;
+  snapshot.legacy.size = sizeof snapshot;
+  snapshot.legacy.terrainReady = s_terrain_ready ? 1u : 0u;
+  snapshot.legacy.phasesSeeded = s_placed_actor_phases_seeded ? 1u : 0u;
+  snapshot.legacy.contextValid = s_placed_actor_context_valid ? 1u : 0u;
+  snapshot.legacy.presentationBias = s_presentation_bias;
+  memcpy(snapshot.legacy.phases, s_placed_actor_phases,
+         sizeof snapshot.legacy.phases);
+  snapshot.legacy.context = s_placed_actor_context;
+  snapshot.legacy.streamCoverage = s_stream_coverage;
+  snapshot.marginProxySize = (uint32_t)Dkc1MarginProxySnapshotSize();
+  if (snapshot.marginProxySize > sizeof snapshot.marginProxy ||
+      !Dkc1MarginProxySnapshotSave(snapshot.marginProxy,
+                                   snapshot.marginProxySize))
+    return false;
+  memcpy(data, &snapshot, sizeof snapshot);
+  return true;
+}
+
+bool Dkc1VideoSnapshotLoad(const void *data, size_t size) {
+  if (!data)
+    return false;
+  Dkc1VideoHostSnapshotV1 legacy;
+  if (size == sizeof legacy) {
+    memcpy(&legacy, data, sizeof legacy);
+    if (legacy.magic != kDkc1VideoSnapshotMagic || legacy.version != 1u ||
+        legacy.size != sizeof legacy)
+      return false;
+    Dkc1MarginProxyReset();
+  } else if (size == sizeof(Dkc1VideoHostSnapshot)) {
+    Dkc1VideoHostSnapshot snapshot;
+    memcpy(&snapshot, data, sizeof snapshot);
+    legacy = snapshot.legacy;
+    if (legacy.magic != kDkc1VideoSnapshotMagic ||
+        legacy.version != kDkc1VideoSnapshotVersion ||
+        legacy.size != sizeof snapshot ||
+        snapshot.marginProxySize != Dkc1MarginProxySnapshotSize() ||
+        snapshot.marginProxySize > sizeof snapshot.marginProxy)
+      return false;
+    /* Validate every legacy-owned field before allowing the proxy loader to
+     * mutate its host-side state.  A corrupt snapshot must be rejected as a
+     * transaction, not leave valid proxy data paired with invalid video
+     * history. */
+    if (legacy.streamCoverage.unique_columns > 64u ||
+        legacy.streamCoverage.required_columns > 64u)
+      return false;
+    if (!Dkc1MarginProxySnapshotLoad(snapshot.marginProxy,
+                                     snapshot.marginProxySize))
+      return false;
+  } else {
+    return false;
+  }
+  if (legacy.streamCoverage.unique_columns > 64u ||
+      legacy.streamCoverage.required_columns > 64u)
+    return false;
+  memcpy(s_placed_actor_phases, legacy.phases,
+         sizeof s_placed_actor_phases);
+  s_placed_actor_phases_seeded = legacy.phasesSeeded != 0;
+  s_placed_actor_context = legacy.context;
+  s_placed_actor_context_valid = legacy.contextValid != 0;
+  s_stream_coverage = legacy.streamCoverage;
+  s_terrain_ready = g_ws_active && legacy.terrainReady != 0;
+  s_presentation_bias = legacy.presentationBias;
+  if (s_presentation_bias < -g_ws_extra) s_presentation_bias = -g_ws_extra;
+  if (s_presentation_bias > g_ws_extra) s_presentation_bias = g_ws_extra;
+  s_prefetch_dispatch_active = false;
+  s_prefetch_actor_index = 0;
+  memset(s_prefetch_transaction_detail_reported, 0,
+         sizeof s_prefetch_transaction_detail_reported);
+  return true;
+}
+
+static bool Dkc1StreamDebugEnabled(void) {
+  const char *value = getenv("DKC1_STREAM_DEBUG");
+  return value && value[0] == '1' && value[1] == '\0';
+}
 
 static bool Dkc1PrefetchPhaseGuardEnabled(void) {
   const char *value = getenv("DKC1_PREFETCH_PHASE_GUARD");
   return value && value[0] == '1' && value[1] == '\0';
 }
 
+static bool Dkc1PrefetchTransactionDebugEnabled(void) {
+  const char *value = getenv("DKC1_PREFETCH_TRANSACTION_DEBUG");
+  return value && value[0] == '1' && value[1] == '\0';
+}
+
+static void Dkc1VideoClearPrefetchTransactionDebug(void) {
+  s_prefetch_actor_index = 0;
+  memset(s_prefetch_transaction_detail_reported, 0,
+         sizeof s_prefetch_transaction_detail_reported);
+}
+
 static void Dkc1VideoClearPlacedActorPhases(void) {
   memset(s_placed_actor_phases, 0, sizeof s_placed_actor_phases);
   s_placed_actor_phases_seeded = false;
   s_prefetch_dispatch_active = false;
+  Dkc1VideoClearPrefetchTransactionDebug();
 }
 
 void Dkc1VideoResetPlacedActorPhases(void) {
   Dkc1VideoClearPlacedActorPhases();
+  Dkc1MarginProxyReset();
   memset(&s_placed_actor_context, 0, sizeof s_placed_actor_context);
   s_placed_actor_context_valid = false;
+  memset(&s_stream_coverage, 0, sizeof s_stream_coverage);
 }
 
 void Dkc1VideoSetWidescreen(bool enabled) {
@@ -105,6 +256,16 @@ uint16_t Dkc1VideoExpandCullSpan(uint16_t native_span) {
                     (Dkc1VideoTerrainReady() ? 2 * g_ws_extra : 0));
 }
 
+uint16_t Dkc1VideoObjectScannerCullLeft(uint16_t native_margin) {
+  return Dkc1MarginProxyEnabled()
+             ? native_margin : Dkc1VideoExpandCullLeft(native_margin);
+}
+
+uint16_t Dkc1VideoObjectScannerCullSpan(uint16_t native_span) {
+  return Dkc1MarginProxyEnabled()
+             ? native_span : Dkc1VideoExpandCullSpan(native_span);
+}
+
 uint16_t Dkc1VideoPromoteOamXHigh(uint16_t screen_x) {
   /* Several DKC1 direct OAM writers derive X-high from the sign bit because
    * stock play only presents negative off-left coordinates.  Positive
@@ -133,6 +294,273 @@ void Dkc1VideoSetPresentationBias(int bias) {
 
 int Dkc1VideoPresentationBias(void) {
   return g_ws_active ? s_presentation_bias : 0;
+}
+
+enum {
+  /* The visible 16:9 extension is 43 pixels per side. DKC streams whole
+   * 8-pixel columns, so retain one tile-aligned 48-pixel guard. */
+  kDkc1StreamMargin =
+      (kDkc1VideoWidescreenExtra + 7) & ~7,
+};
+
+static bool Dkc1VideoStreamWideningEligible(const struct CpuState *cpu) {
+  if (!cpu || !Dkc1VideoIsWidescreen())
+    return false;
+  const uint16_t lower = Dkc1ReadWram16(cpu->ram, 0x1b23u);
+  const uint16_t upper = Dkc1ReadWram16(cpu->ram, 0x1b25u);
+  return upper >= lower &&
+         (uint16_t)(upper - lower) >=
+             (uint16_t)(2 * kDkc1VideoWidescreenExtra);
+}
+
+static void Dkc1VideoSyncStreamContext(const uint8_t *wram) {
+  if (!wram)
+    return;
+  const uint16_t mode = Dkc1ReadWram16(wram, 0x0032u);
+  const uint16_t level = Dkc1ReadWram16(wram, 0x0030u);
+  const uint16_t entrance = Dkc1ReadWram16(wram, 0x003eu);
+  if (s_stream_coverage.context_valid &&
+      s_stream_coverage.mode == mode &&
+      s_stream_coverage.level == level &&
+      s_stream_coverage.entrance == entrance)
+    return;
+  /* Some underwater entrances build the new level's complete cartridge
+   * tile ring before publishing its final level number.  The entrance ID is
+   * already final and the world-map path cannot start coverage because its
+   * camera span is 0. Preserve an in-flight, observed fill across that one
+   * level/mode publication boundary; save-state loads and real entrance
+   * changes still reset through ResetPlacedActorPhases or the branch below. */
+  if (s_stream_coverage.context_valid &&
+      s_stream_coverage.entrance == entrance &&
+      s_stream_coverage.required_columns != 0 &&
+      !s_stream_coverage.ready) {
+    /* Preserve only an initializer that is still in flight. A completed
+     * fill belongs to the mode/level identity under which it was observed.
+     * Bonus exits can finish a provisional fill while the old level number
+     * is still published; carrying that ready proof into the returned level
+     * makes the first visible frame trust stale edge columns instead of
+     * performing the clean ROM-prefill bootstrap. */
+    s_stream_coverage.mode = mode;
+    s_stream_coverage.level = level;
+    return;
+  }
+  memset(&s_stream_coverage, 0, sizeof s_stream_coverage);
+  s_stream_coverage.mode = mode;
+  s_stream_coverage.level = level;
+  s_stream_coverage.entrance = entrance;
+  s_stream_coverage.context_valid = true;
+}
+
+static void Dkc1VideoBeginStreamCoverage(struct CpuState *cpu,
+                                         uint8_t required_columns) {
+  if (!cpu)
+    return;
+  const uint32_t count_calls = s_stream_coverage.initial_count_calls;
+  const uint32_t count_rejected = s_stream_coverage.initial_count_rejected;
+  const uint32_t selector_calls = s_stream_coverage.selector_calls;
+  memset(&s_stream_coverage, 0, sizeof s_stream_coverage);
+  s_stream_coverage.initial_count_calls = count_calls;
+  s_stream_coverage.initial_count_rejected = count_rejected;
+  s_stream_coverage.selector_calls = selector_calls;
+  s_stream_coverage.required_columns = required_columns;
+  if (Dkc1StreamDebugEnabled())
+    fprintf(stderr, "stream: begin required=%u mode=%04x level=%04x entrance=%04x\n",
+            required_columns, Dkc1ReadWram16(cpu->ram, 0x0032u),
+            Dkc1ReadWram16(cpu->ram, 0x0030u),
+            Dkc1ReadWram16(cpu->ram, 0x003eu));
+  /* Do not bind mode/level/entrance inside the initializer transaction.
+   * Underwater transitions can mutate those words between count setup,
+   * individual column passes, and the completed frame.  A complete fill is
+   * attached to the stable frame-boundary identity below. */
+}
+
+static void Dkc1VideoObserveStreamColumn(struct CpuState *cpu,
+                                         uint16_t world_x) {
+  if (!cpu || s_stream_coverage.required_columns == 0)
+    return;
+  const uint64_t bit = UINT64_C(1) << ((world_x >> 3) & 0x3fu);
+  if (!(s_stream_coverage.columns & bit)) {
+    s_stream_coverage.columns |= bit;
+    s_stream_coverage.unique_columns++;
+  }
+  if (s_stream_coverage.unique_columns >=
+      s_stream_coverage.required_columns) {
+    s_stream_coverage.ready = true;
+    if (Dkc1StreamDebugEnabled() &&
+        s_stream_coverage.unique_columns ==
+            s_stream_coverage.required_columns)
+      fprintf(stderr, "stream: complete required=%u selected=%04x\n",
+              s_stream_coverage.required_columns, world_x);
+  }
+}
+
+bool Dkc1VideoCartridgeTerrainReady(const uint8_t *wram) {
+  if (!Dkc1VideoIsWidescreen() || !wram)
+    return false;
+  if (!s_stream_coverage.ready)
+    return false;
+  if (!s_stream_coverage.context_valid) {
+    s_stream_coverage.mode = Dkc1ReadWram16(wram, 0x0032u);
+    s_stream_coverage.level = Dkc1ReadWram16(wram, 0x0030u);
+    s_stream_coverage.entrance = Dkc1ReadWram16(wram, 0x003eu);
+    s_stream_coverage.context_valid = true;
+    if (Dkc1StreamDebugEnabled())
+      fprintf(stderr,
+              "stream: bind-complete mode=%04x level=%04x entrance=%04x\n",
+              s_stream_coverage.mode, s_stream_coverage.level,
+              s_stream_coverage.entrance);
+    return true;
+  }
+  if (Dkc1StreamDebugEnabled())
+    fprintf(stderr,
+            "stream: query mode=%04x/%04x level=%04x/%04x entrance=%04x/%04x ready=%u\n",
+            s_stream_coverage.mode, Dkc1ReadWram16(wram, 0x0032u),
+            s_stream_coverage.level, Dkc1ReadWram16(wram, 0x0030u),
+            s_stream_coverage.entrance, Dkc1ReadWram16(wram, 0x003eu),
+            s_stream_coverage.ready ? 1u : 0u);
+  Dkc1VideoSyncStreamContext(wram);
+  return s_stream_coverage.ready;
+}
+
+void Dkc1VideoInvalidateStreamCoverage(void) {
+  /* Keep lifetime counters for diagnostics, but discard the alleged fill.
+   * A later checksum-locked initializer can establish a new proof from an
+   * empty transaction. */
+  s_stream_coverage.columns = 0;
+  s_stream_coverage.unique_columns = 0;
+  s_stream_coverage.required_columns = 0;
+  s_stream_coverage.last_layer_x = 0;
+  s_stream_coverage.last_selected_x = 0;
+  s_stream_coverage.observed_columns = 0;
+  s_stream_coverage.context_valid = false;
+  s_stream_coverage.ready = false;
+}
+
+void Dkc1VideoGetStreamCoverageStats(Dkc1VideoStreamCoverageStats *stats) {
+  if (!stats)
+    return;
+  memset(stats, 0, sizeof *stats);
+  stats->mode = s_stream_coverage.mode;
+  stats->level = s_stream_coverage.level;
+  stats->entrance = s_stream_coverage.entrance;
+  stats->last_layer_x = s_stream_coverage.last_layer_x;
+  stats->last_selected_x = s_stream_coverage.last_selected_x;
+  stats->unique_columns = s_stream_coverage.unique_columns;
+  stats->required_columns = s_stream_coverage.required_columns;
+  stats->initial_count_calls = s_stream_coverage.initial_count_calls;
+  stats->initial_count_rejected = s_stream_coverage.initial_count_rejected;
+  stats->selector_calls = s_stream_coverage.selector_calls;
+  stats->observed_columns = s_stream_coverage.observed_columns;
+  stats->context_valid = s_stream_coverage.context_valid;
+  stats->ready = s_stream_coverage.ready;
+}
+
+static int Dkc1VideoAlignedStreamBias(const struct CpuState *cpu,
+                                      uint16_t camera) {
+  if (!Dkc1VideoStreamWideningEligible(cpu))
+    return 0;
+  const uint16_t lower = Dkc1ReadWram16(cpu->ram, 0x1b23u);
+  const uint16_t upper = Dkc1ReadWram16(cpu->ram, 0x1b25u);
+  int32_t target = camera;
+  if (target < (int32_t)lower + kDkc1VideoWidescreenExtra)
+    target = (int32_t)lower + kDkc1VideoWidescreenExtra;
+  if (target > (int32_t)upper - kDkc1VideoWidescreenExtra)
+    target = (int32_t)upper - kDkc1VideoWidescreenExtra;
+  const int bias = (int)(target - camera);
+  if (bias > 0)
+    return (bias + 7) & ~7;
+  if (bias < 0)
+    return -(((-bias) + 7) & ~7);
+  return 0;
+}
+
+uint16_t Dkc1VideoInitialBackstep(struct CpuState *cpu,
+                                  uint16_t native_backstep) {
+  if (Dkc1StreamDebugEnabled())
+    fprintf(stderr, "stream: backstep native=%04x wide=%u\n",
+            native_backstep, Dkc1VideoIsWidescreen() ? 1u : 0u);
+  /* These helpers are injected only into DKC's two complete rolling-map
+   * initializers. Underwater entrances reach them before final camera bounds
+   * are published, so the initializer itself is the capability boundary.
+   * Presentation stays centered until SelectStreamX proves every column. */
+  if (!cpu || !Dkc1VideoIsWidescreen())
+    return native_backstep;
+  if (native_backstep == 0x0100u)
+    return 0x0160u; /* 44 columns * 8 pixels. */
+  if (native_backstep == 0x0108u)
+    return 0x0168u; /* Preserve the alternate path's extra column. */
+  return native_backstep;
+}
+
+uint16_t Dkc1VideoInitialColumnCount(struct CpuState *cpu,
+                                     uint16_t native_count) {
+  if (Dkc1StreamDebugEnabled())
+    fprintf(stderr, "stream: count native=%04x wide=%u\n",
+            native_count, Dkc1VideoIsWidescreen() ? 1u : 0u);
+  s_stream_coverage.initial_count_calls++;
+  if (!cpu || !Dkc1VideoIsWidescreen()) {
+    s_stream_coverage.initial_count_rejected++;
+    return native_count;
+  }
+  if (native_count == 0x0020u) {
+    Dkc1VideoBeginStreamCoverage(cpu, 0x2cu);
+    return 0x002cu;
+  }
+  if (native_count == 0x0021u) {
+    Dkc1VideoBeginStreamCoverage(cpu, 0x2du);
+    return 0x002du;
+  }
+  return native_count;
+}
+
+uint16_t Dkc1VideoSelectStreamX(struct CpuState *cpu,
+                                uint16_t stock_stream_x) {
+  s_stream_coverage.selector_calls++;
+  const bool initialization_active =
+      cpu && Dkc1VideoIsWidescreen() &&
+      s_stream_coverage.required_columns != 0 &&
+      !s_stream_coverage.ready;
+  if (!Dkc1VideoStreamWideningEligible(cpu) && !initialization_active)
+    return stock_stream_x;
+
+  const uint16_t layer_x = Dkc1ReadWram16(cpu->ram, 0x088bu);
+  const uint16_t step = Dkc1ReadWram16(cpu->ram, 0x0a75u);
+  const uint16_t init_kind = Dkc1ReadWram16(cpu->ram, 0x1a5bu);
+  const uint16_t target_x = Dkc1ReadWram16(cpu->ram, 0x1a5eu);
+  const uint16_t upper = Dkc1ReadWram16(cpu->ram, 0x1b25u);
+  s_stream_coverage.last_layer_x = layer_x;
+
+  /* Standard initial fill. With the widened 352-pixel backstep, +304 starts
+   * 48 pixels left of the final camera while preserving its final value. */
+  if (init_kind == 1u && step == 8u) {
+    const int bias = Dkc1VideoAlignedStreamBias(cpu, target_x);
+    const uint16_t selected =
+        (uint16_t)(stock_stream_x + kDkc1StreamMargin + bias);
+    s_stream_coverage.last_selected_x = selected;
+    s_stream_coverage.observed_columns++;
+    Dkc1VideoObserveStreamColumn(cpu, selected);
+    return selected;
+  }
+
+  /* The alternate fill uses one additional column. Its temporary Layer1 X
+   * sits outside the current upper bound; ordinary high-world camera values
+   * remain inside the bound and must not be mistaken for initialization. */
+  if (init_kind == 0u && step == 8u &&
+      (initialization_active ||
+       (layer_x > upper && layer_x != target_x))) {
+    const int bias = Dkc1VideoAlignedStreamBias(cpu, target_x);
+    const uint16_t selected =
+        (uint16_t)(stock_stream_x + kDkc1StreamMargin + 8 + bias);
+    s_stream_coverage.last_selected_x = selected;
+    s_stream_coverage.observed_columns++;
+    Dkc1VideoObserveStreamColumn(cpu, selected);
+    return selected;
+  }
+
+  const int bias = Dkc1VideoAlignedStreamBias(cpu, layer_x);
+  if ((int16_t)step < 0)
+    return (uint16_t)(stock_stream_x - kDkc1StreamMargin + bias);
+  return (uint16_t)(stock_stream_x + kDkc1StreamMargin + bias);
 }
 
 uint16_t Dkc1VideoPromoteOamSizeMask(uint16_t size_mask,
@@ -198,8 +626,33 @@ static void Dkc1VideoObservePlacedActorContext(const uint8_t *wram) {
 
 void Dkc1VideoObserveActorPool(const uint8_t *wram) {
   Dkc1VideoObservePlacedActorContext(wram);
-  if (!wram || !s_placed_actor_phases_seeded)
+  if (!wram)
     return;
+
+  /* This observer runs at the frame boundary before the cartridge scanner.
+   * Seed only identities that already exist at that boundary.  That makes a
+   * loaded save state left-censored (its actors are trusted), while actors
+   * allocated by the widened scanner later in this same frame remain new and
+   * must pass the reconstructed stock window.
+   *
+   * Do not defer this seed until the first actor dispatch: on a fresh level
+   * the widened scanner may allocate a margin-only actor between this
+   * boundary and that dispatch.  The old deferred seed incorrectly marked
+   * that new actor stock-started and let its AI run many frames early. */
+  if (!s_placed_actor_phases_seeded) {
+    for (uint16_t actor_index = 0x0002u; actor_index <= 0x0032u;
+         actor_index = (uint16_t)(actor_index + 2u)) {
+      Dkc1PlacedActorPhase *phase =
+          &s_placed_actor_phases[(actor_index - 2u) >> 1];
+      phase->id = Dkc1ReadWram16(
+          wram, (uint16_t)(0x0d45u + actor_index));
+      phase->source = Dkc1ReadWram16(
+          wram, (uint16_t)(0x15fdu + actor_index));
+      phase->stock_started = phase->id != 0;
+    }
+    s_placed_actor_phases_seeded = true;
+    return;
+  }
 
   /* Observe the completed previous frame before this frame's scanner can
    * allocate anything. Dispatch-only tracking cannot see a free slot because
@@ -228,24 +681,12 @@ bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu) {
 
   Dkc1VideoObservePlacedActorContext(cpu->ram);
 
-  /* A loaded snapshot is left-censored: actors already present may have run
-   * for hundreds of frames before host-only phase tracking existed.  Seed
-   * the whole normal pool on the first dispatch after a reset and treat
-   * those identities as started.  Only identities allocated afterwards are
-   * eligible for the widened-prefetch delay. */
+  /* Dkc1VideoObserveActorPool normally seeds the pool before the scanner.
+   * If an integration ever dispatches without that required frame-boundary
+   * observation, prefer an empty seeded baseline.  Suppressing a newly seen
+   * wide-prefetched actor is safer than silently advancing its gameplay AI;
+   * loaded states use the normal pre-scanner path above and remain trusted. */
   if (!s_placed_actor_phases_seeded) {
-    for (uint16_t seeded_index = 0x0002u; seeded_index <= 0x0032u;
-         seeded_index = (uint16_t)(seeded_index + 2u)) {
-      const unsigned seeded_ordinal =
-          (unsigned)((seeded_index - 2u) >> 1);
-      Dkc1PlacedActorPhase *seeded =
-          &s_placed_actor_phases[seeded_ordinal];
-      seeded->id = cpu_read16(
-          cpu, 0x7e, (uint16_t)(0x0d45u + seeded_index));
-      seeded->source = cpu_read16(
-          cpu, 0x7e, (uint16_t)(0x15fdu + seeded_index));
-      seeded->stock_started = seeded->id != 0;
-    }
     s_placed_actor_phases_seeded = true;
   }
 
@@ -346,12 +787,12 @@ bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu) {
 }
 
 bool Dkc1VideoBeginPlacedActorDispatch(struct CpuState *cpu) {
-  /* A prefetched actor is allowed to execute its authentic routine so the
-   * later cartridge presentation pass can observe its authored pose. The
-   * matching end hook restores the complete 128 KiB WRAM image, preventing
-   * movement, collision, spawns, sound-command staging, scratch values, and
-   * object bookkeeping from escaping before stock eligibility. This is a
-   * transaction around one dispatch, not an alternate actor implementation. */
+  /* A prefetched actor is allowed to execute its authentic routine inside a
+   * transaction. The matching end hook restores the complete 128 KiB WRAM
+   * image, preventing movement, collision, spawns, sound-command staging,
+   * scratch values, and object bookkeeping from escaping before stock
+   * eligibility. This keeps the cartridge dispatcher/control flow intact
+  * without inventing an alternate actor implementation. */
   s_prefetch_dispatch_active = false;
   if (!Dkc1PrefetchPhaseGuardEnabled() || !cpu ||
       Dkc1VideoShouldRunPlacedActor(cpu))
@@ -359,18 +800,74 @@ bool Dkc1VideoBeginPlacedActorDispatch(struct CpuState *cpu) {
 
   memcpy(s_prefetch_wram, cpu->ram, kDkc1WramSize);
   s_prefetch_dispatch_active = true;
+  s_prefetch_actor_index = cpu_read16(
+      cpu, 0x00, (uint16_t)(cpu->D + 0x0082u));
   return true;
 }
 
 void Dkc1VideoEndPlacedActorDispatch(struct CpuState *cpu) {
   if (!cpu || !s_prefetch_dispatch_active)
     return;
+
+  if (Dkc1PrefetchTransactionDebugEnabled()) {
+    const uint16_t index = s_prefetch_actor_index;
+    unsigned changed = 0;
+    for (unsigned i = 0; i < kDkc1WramSize; i++)
+      changed += s_prefetch_wram[i] != cpu->ram[i];
+    fprintf(stderr,
+            "DKC1 prefetch transaction: actor=$%04X id=$%04X source=$%04X "
+            "changed=%u pose=$%04X->$%04X current=$%04X->$%04X "
+            "state=$%04X->$%04X anim=$%04X->$%04X gfx=$%04X->$%04X "
+            "oam=$%04X->$%04X\n",
+            index,
+            Dkc1ReadWram16(s_prefetch_wram, (uint16_t)(0x0d45u + index)),
+            Dkc1ReadWram16(s_prefetch_wram, (uint16_t)(0x15fdu + index)),
+            changed,
+            Dkc1ReadWram16(s_prefetch_wram, (uint16_t)(0x0ae5u + index)),
+            Dkc1ReadWram16(cpu->ram, (uint16_t)(0x0ae5u + index)),
+            Dkc1ReadWram16(s_prefetch_wram, (uint16_t)(0x0d11u + index)),
+            Dkc1ReadWram16(cpu->ram, (uint16_t)(0x0d11u + index)),
+            Dkc1ReadWram16(s_prefetch_wram, (uint16_t)(0x1029u + index)),
+            Dkc1ReadWram16(cpu->ram, (uint16_t)(0x1029u + index)),
+            Dkc1ReadWram16(s_prefetch_wram, (uint16_t)(0x10d1u + index)),
+            Dkc1ReadWram16(cpu->ram, (uint16_t)(0x10d1u + index)),
+            Dkc1ReadWram16(s_prefetch_wram, (uint16_t)(0x0c69u + index)),
+            Dkc1ReadWram16(cpu->ram, (uint16_t)(0x0c69u + index)),
+            Dkc1ReadWram16(s_prefetch_wram, 0x008eu),
+            Dkc1ReadWram16(cpu->ram, 0x008eu));
+    if (index >= 2u && index <= 0x32u && (index & 1u) == 0) {
+      const unsigned ordinal = (index - 2u) >> 1;
+      if (!s_prefetch_transaction_detail_reported[ordinal]) {
+        Dkc1DebugTracePrefetchTransaction(
+            index,
+            Dkc1ReadWram16(s_prefetch_wram,
+                           (uint16_t)(0x0d45u + index)),
+            Dkc1ReadWram16(s_prefetch_wram,
+                           (uint16_t)(0x15fdu + index)),
+            s_prefetch_wram, cpu->ram, kDkc1WramSize);
+        fprintf(stderr, "DKC1 prefetch changed offsets:");
+        unsigned emitted = 0;
+        for (unsigned i = 0; i < kDkc1WramSize && emitted < 128u; i++) {
+          if (s_prefetch_wram[i] == cpu->ram[i])
+            continue;
+          fprintf(stderr, " %05X:%02X>%02X", i, s_prefetch_wram[i],
+                  cpu->ram[i]);
+          emitted++;
+        }
+        fprintf(stderr, "%s\n", changed > emitted ? " ..." : "");
+        s_prefetch_transaction_detail_reported[ordinal] = true;
+      }
+    }
+  }
+
   memcpy(cpu->ram, s_prefetch_wram, kDkc1WramSize);
   s_prefetch_dispatch_active = false;
 }
 
 bool Dkc1VideoPrepareType5ChildRetry(struct CpuState *cpu) {
-  if (!cpu || !Dkc1VideoTerrainReady())
+  /* Native scanner timing in margin-proxy mode never creates an early type-5
+   * parent, so the widened-prefetch recovery path must remain dormant. */
+  if (Dkc1MarginProxyEnabled() || !cpu || !Dkc1VideoTerrainReady())
     return false;
 
   const uint16_t parent_index =

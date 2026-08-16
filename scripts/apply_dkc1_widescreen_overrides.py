@@ -2,9 +2,9 @@
 """Apply source-owned DKC1 presentation-widescreen adaptations.
 
 The generated C is private/ignored and is recreated from the user's ROM.
-This fail-closed post-generation step changes only cull/visibility constants
-and direct-OAM packing.  Camera, collision, exits, boss bounds, and tilemap
-streaming remain the exact cartridge program.
+This fail-closed post-generation step adapts cull/visibility constants,
+direct-OAM packing, and DKC's cartridge tile-stream selectors. Camera,
+collision, exits, and boss bounds remain the exact cartridge program.
 """
 
 from __future__ import annotations
@@ -147,6 +147,20 @@ def adapt_function_constant(sources: dict[Path, str], symbol: str,
         if block.count(expression) != 1:
             raise ValueError(f"ambiguous existing {expression} in {start_label}")
         return
+    # Migrate generated trees adapted by the earlier global object-window
+    # experiment. Proxy mode needs scanner-only helpers so normal sprite,
+    # banana, and rope presentation remain wide.
+    if helper.startswith("Dkc1VideoObjectScanner"):
+        legacy_helper = ("Dkc1VideoExpandCullLeft" if helper.endswith("Left")
+                         else "Dkc1VideoExpandCullSpan")
+        legacy = f"{legacy_helper}({literal})"
+        if legacy in block:
+            if block.count(legacy) != 1:
+                raise ValueError(
+                    f"ambiguous legacy {legacy} in {symbol}/{start_label}")
+            block = block.replace(legacy, expression, 1)
+            sources[path] = add_include(text[:start] + block + text[end:])
+            return
     pattern = rf"(uint16\s+\w+\s*=\s*){re.escape(literal)};"
     block, count = re.subn(pattern, rf"\1{expression};", block)
     if count != 1:
@@ -154,6 +168,53 @@ def adapt_function_constant(sources: dict[Path, str], symbol: str,
             f"expected one {literal} constant in {symbol}/{start_label}; "
             f"found {count}")
     sources[path] = add_include(text[:start] + block + text[end:])
+
+
+def adapt_function_cpu_constant(sources: dict[Path, str], symbol: str,
+                                start_label: str, literal: str,
+                                helper: str) -> None:
+    path, text = locate_function(sources, symbol)
+    function_start, function_end = function_span(text, symbol)
+    start = text.find(start_label, function_start, function_end)
+    if start < 0:
+        raise ValueError(f"{symbol} does not contain {start_label}")
+    match = re.search(r"\n\s*(L_[0-9A-F]+_M[01]X[01]:)",
+                      text[start + len(start_label):function_end])
+    end = (start + len(start_label) + match.start(1)
+           if match else function_end)
+    block = text[start:end]
+    expression = f"{helper}(cpu, {literal})"
+    if expression in block:
+        if block.count(expression) != 1:
+            raise ValueError(f"ambiguous existing {expression} in {start_label}")
+        return
+    pattern = rf"(uint16\s+\w+\s*=\s*){re.escape(literal)};"
+    block, count = re.subn(pattern, rf"\1{expression};", block)
+    if count != 1:
+        raise ValueError(
+            f"expected one {literal} constant in {symbol}/{start_label}; "
+            f"found {count}")
+    sources[path] = add_include(text[:start] + block + text[end:])
+
+
+def adapt_stream_selector(sources: dict[Path, str], symbol: str,
+                          convergence_label: str) -> None:
+    path, text = locate_function(sources, symbol)
+    function_start, function_end = function_span(text, symbol)
+    start = text.find(convergence_label, function_start, function_end)
+    if start < 0:
+        raise ValueError(f"{symbol} does not contain {convergence_label}")
+    insert_at = start + len(convergence_label)
+    call = "Dkc1VideoSelectStreamX(cpu, cpu_read_a16(cpu))"
+    tail = text[insert_at:function_end]
+    if call in tail:
+        if tail.count(call) != 1:
+            raise ValueError(f"ambiguous existing selector in {symbol}")
+        return
+    injection = (
+        "\n    cpu_write_a_m(cpu, (uint16)("
+        "Dkc1VideoSelectStreamX(cpu, cpu_read_a16(cpu))));")
+    sources[path] = add_include(text[:insert_at] + injection + text[insert_at:])
 
 
 def adapt_nth_accumulator_write(sources: dict[Path, str], start_label: str,
@@ -413,6 +474,77 @@ def adapt_placed_actor_phase_guard(sources: dict[Path, str]) -> None:
         sources[path] = add_include(text[:start] + block + text[end:])
 
 
+def adapt_margin_proxy_render_calls(sources: dict[Path, str]) -> None:
+    """Borrow host proxies only for the exact CODE_BBA849 call duration.
+
+    Every abnormal return in the call block receives the matching cleanup, so
+    an interpreter yield or propagated non-local return cannot leave borrowed
+    actor slots in cartridge WRAM.  The hook belongs immediately before the
+    JSL call, not merely at the containing block's first label: CODE_80C96F's
+    block resets the OAM pointer and clears the upper table before that JSL,
+    which would otherwise erase every proxy sprite just injected.
+    """
+    for owner, start_label, end_label in (
+            ("OAM_BeginFrameAndDrawHUD_M0X0", "L_A1B9_M0X0:",
+             "L_A1BD_M0X0:"),
+            ("CODE_80C96F_M0X0", "L_C973_M0X0:", "L_C9B1_M0X0:")):
+        path, text, start, end = locate_function_block(
+            sources, owner, start_label, end_label)
+        block = text[start:end]
+        begin = "Dkc1MarginProxyBeginRender(cpu);"
+        finish = "Dkc1MarginProxyEndRender(cpu);"
+        call_anchor = (
+            "    {\n"
+            "      /* JSL return frame -> cpu->S (Option-1) */\n"
+        )
+        if block.count(call_anchor) != 1:
+            raise ValueError(
+                f"expected one renderer JSL call in {owner}; "
+                f"found {block.count(call_anchor)}")
+        if begin in block or finish in block:
+            if block.count(begin) != 1 or block.count(finish) < 1:
+                raise ValueError(
+                    f"ambiguous margin-proxy renderer hook in {owner}")
+            # Migrate trees generated by the earlier label-entry hook.  In
+            # CODE_80C96F that placement preceded the OAM reset/clear block,
+            # so the renderer did real work that was immediately discarded.
+            begin_line = "    Dkc1MarginProxyBeginRender(cpu);\n"
+            if block.count(begin_line) != 1:
+                raise ValueError(
+                    f"unexpected margin-proxy begin indentation in {owner}")
+            block = block.replace(begin_line, "", 1)
+            block = block.replace(call_anchor, begin_line + call_anchor, 1)
+            sources[path] = add_include(text[:start] + block + text[end:])
+            continue
+
+        block = block.replace(
+            call_anchor,
+            "    Dkc1MarginProxyBeginRender(cpu);\n" + call_anchor,
+            1)
+
+        # Cleanup before every return reachable after injection.
+        return_pattern = re.compile(r"(?m)^(\s*)(return\s+[^;]+;)$")
+        block, return_count = return_pattern.subn(
+            lambda match: (match.group(1) +
+                           "Dkc1MarginProxyEndRender(cpu);\n" +
+                           match.group(1) + match.group(2)), block)
+        if return_count < 1:
+            raise ValueError(f"expected abnormal return path in {owner}")
+
+        gotos = list(re.finditer(r"(?m)^(\s*)(goto\s+L_[0-9A-F]+_M0X0;)",
+                                 block))
+        if len(gotos) != 1:
+            raise ValueError(
+                f"expected one normal post-render goto in {owner}; "
+                f"found {len(gotos)}")
+        match = gotos[0]
+        replacement = (match.group(1) +
+                       "Dkc1MarginProxyEndRender(cpu);\n" +
+                       match.group(1) + match.group(2))
+        block = block[:match.start()] + replacement + block[match.end():]
+        sources[path] = add_include(text[:start] + block + text[end:])
+
+
 LEFT_BLOCKS = (
     ("CODE_BDF502_M0X0", "F5AA"), ("CODE_BDF502_M0X0", "F5F8"),
     ("CODE_BDF6FF_M0X0", "F6FF"), ("CODE_BDF751_M0X0", "F751"),
@@ -443,6 +575,30 @@ def apply_overrides(generated_dir: Path) -> list[Path]:
     sources = load_sources(generated_dir)
     original = dict(sources)
 
+    # Widen DKC's own rolling-tilemap initializers and horizontal stream
+    # selectors. This is required for private ice/underwater builders that the
+    # host's generic ROM decoder cannot reproduce. The helpers fail closed in
+    # title/map/narrow scenes and retain stock logical camera bounds.
+    adapt_function_cpu_constant(
+        sources, "CODE_809E32_M0X0", "L_9E9C_M0X0:",
+        "0x100", "Dkc1VideoInitialBackstep")
+    adapt_function_cpu_constant(
+        sources, "CODE_809E32_M0X0", "L_9E9C_M0X0:",
+        "0x20", "Dkc1VideoInitialColumnCount")
+    adapt_function_cpu_constant(
+        sources, "CODE_80C501_M0X0", "L_C53A_M0X0:",
+        "0x108", "Dkc1VideoInitialBackstep")
+    adapt_function_cpu_constant(
+        sources, "CODE_80C501_M0X0", "L_C53A_M0X0:",
+        "0x21", "Dkc1VideoInitialColumnCount")
+    for symbol, label in (
+        ("Level_BuildTilemapColumn_TypeA_M0X0", "L_8722_M0X0:"),
+        ("Level_DMATilemapColumnToVRAM_M0X0", "L_8868_M0X0:"),
+        ("CODE_8188A8_M0X0", "L_88CE_M0X0:"),
+        ("Level_BuildTilemapColumn_TypeB_M0X0", "L_8E17_M0X0:"),
+    ):
+        adapt_stream_selector(sources, symbol, label)
+
     # Shared world-sprite renderer: the two authentic windows are
     # [-48,303] and [-88,343].
     adapt_two_constants(
@@ -453,23 +609,23 @@ def apply_overrides(generated_dir: Path) -> list[Path]:
         sources, "L_A904_M0X0:", "L_A915_M0X0:",
         (("0x58", "Dkc1VideoExpandCullLeft"),
          ("0x1b0", "Dkc1VideoExpandCullSpan")))
-
     # Placed-object activation windows, including the two type-$09 vertical
     # section-controller spans that caused Slipslide Ride softlocks.
     for symbol, block in LEFT_BLOCKS:
         adapt_function_constant(
             sources, symbol, f"L_{block}_M0X0:",
-            "0x20", "Dkc1VideoExpandCullLeft")
+            "0x20", "Dkc1VideoObjectScannerCullLeft")
     for symbol, block in SPAN_BLOCKS:
         adapt_function_constant(
             sources, symbol, f"L_{block}_M0X0:",
-            "0x140", "Dkc1VideoExpandCullSpan")
+            "0x140", "Dkc1VideoObjectScannerCullSpan")
     for symbol, block in PREFETCH_BLOCKS:
         adapt_function_constant(
             sources, symbol, f"L_{block}_M0X0:",
-            "0x120", "Dkc1VideoExpandCullLeft")
+            "0x120", "Dkc1VideoObjectScannerCullLeft")
     adapt_placed_actor_phase_guard(sources)
     adapt_type5_child_retry(sources)
+    adapt_margin_proxy_render_calls(sources)
 
     # Banana formations have a private candidate window and direct OAM
     # writer.  No camera correction is required: the host leaves the logical

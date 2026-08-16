@@ -1,4 +1,5 @@
 #include "dkc1_blank_scan.h"
+#include "dkc1_invariant_monitor.h"
 #include "dkc1_game.h"
 #include "dkc1_video.h"
 #include "input_playback.h"
@@ -86,8 +87,8 @@ int main(int argc, char **argv) {
     return 2;
   }
   long frame_limit = argc == 3 ? strtol(argv[2], NULL, 10) : 600;
-  if (frame_limit < 1 || frame_limit > 1000000) {
-    fprintf(stderr, "frames must be between 1 and 1000000\n");
+  if (frame_limit < 0 || frame_limit > 1000000) {
+    fprintf(stderr, "frames must be between 0 and 1000000\n");
     return 2;
   }
 
@@ -192,10 +193,25 @@ int main(int argc, char **argv) {
   const size_t frame_bytes = frame_width * kHeight * kBytesPerPixel;
   Dkc1BeginDrawing(pixels, frame_width * kBytesPerPixel);
 
+  /* A zero-frame run is a diagnostic render of the exact loaded machine
+   * state.  It deliberately does not execute CPU/APU/PPU time.  Loading a
+   * snapshot resets the host-only widescreen shadow, so this provides a
+   * fresh-history presentation oracle for transition-contamination tests:
+   * the cartridge WRAM/VRAM/OAM and PPU registers are identical to the saved
+   * path frame, while retained margin history is rebuilt from scratch. */
+  if (frame_limit == 0)
+    Dkc1DrawPpuFrame();
+
   const char *frame_sequence_prefix = getenv("DKC1_FRAME_PPM_PREFIX");
   long frame_sequence_start = 0;
   long frame_sequence_end = frame_limit - 1;
   long frame_sequence_step = 1;
+  if (frame_limit == 0 && frame_sequence_prefix && *frame_sequence_prefix) {
+    fprintf(stderr,
+            "DKC1_FRAME_PPM_PREFIX is unavailable for a zero-frame render\n");
+    free(rom);
+    return 18;
+  }
   if (frame_sequence_prefix && *frame_sequence_prefix &&
       (!ParseFrameNumber(getenv("DKC1_FRAME_PPM_START"), 0,
                          &frame_sequence_start) ||
@@ -402,7 +418,8 @@ int main(int argc, char **argv) {
     }
     Dkc1DrawPpuFrame();
     Dkc1BlankScanFrame(frame + 1, pixels, Dkc1VideoWidth(),
-                       kDkc1VideoHeight);
+                       kDkc1VideoHeight, Dkc1VideoTerrainReady());
+    Dkc1InvariantMonitorFrame(frame + 1);
     if (g_ppu->rangeOver) obj_range_over_frames++;
     if (g_ppu->timeOver) obj_time_over_frames++;
     {

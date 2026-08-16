@@ -72,6 +72,99 @@ def load_metadata(path: Path) -> dict[int, dict]:
     return result
 
 
+def analyze_oam_pipeline(path: Path, *, extra: int = 43) -> dict:
+    """Return the evidence-grade OAM pipeline/wrap verdict.
+
+    Unlike the retired frame-to-frame slot heuristic, this compares a PPU
+    entry with the current/recent WRAM shadows and requires matching low X,
+    Y, tile, and attributes before calling a missing X-high bit. DKC's OAM
+    allocator freely reuses an index for a different object on the next
+    frame, so index continuity alone is not object identity.
+    """
+    metadata = load_metadata(path)
+    shadow_history = deque(maxlen=4)
+    mismatch_streak = 0
+    max_streak = 0
+    streak_start = None
+    worst_streak = None
+    active_grace = 2
+    frames = 0
+    active_frames = 0
+    excluded_forced_blank = 0
+    excluded_outside_gameplay = 0
+    right_margin_entries = 0
+    left_margin_entries = 0
+    xhigh_loss_suspects: list[dict] = []
+
+    for frame, shadow, ppu in load_records(path):
+        frames += 1
+        meta = metadata.get(frame)
+        forced_blank = bool(meta and meta.get("forced_blank"))
+        outside_gameplay = bool(meta and not meta.get("gameplay"))
+        if forced_blank or outside_gameplay:
+            excluded_forced_blank += int(forced_blank)
+            excluded_outside_gameplay += int(outside_gameplay)
+            active_grace = 2
+            shadow_history.append(shadow)
+            mismatch_streak = 0
+            continue
+
+        active_frames += 1
+        normal_pipeline = ppu == shadow or ppu in shadow_history
+        if active_grace:
+            active_grace -= 1
+            mismatch_streak = 0
+        elif not normal_pipeline:
+            if mismatch_streak == 0:
+                streak_start = frame
+            mismatch_streak += 1
+            if mismatch_streak > max_streak:
+                max_streak = mismatch_streak
+                worst_streak = (streak_start, frame)
+        else:
+            mismatch_streak = 0
+
+        candidates = [decode_entries(shadow)]
+        candidates.extend(decode_entries(blob) for blob in shadow_history)
+        for entry in decode_entries(ppu):
+            if not visible(entry):
+                continue
+            if 256 <= entry["x"] < 256 + extra:
+                right_margin_entries += 1
+            elif 512 - extra <= entry["x"] < 512:
+                left_margin_entries += 1
+            if 0 <= entry["x"] < extra:
+                for candidate_set in candidates:
+                    candidate = candidate_set[entry["index"]]
+                    if (candidate["x"] >= 256 and
+                            (candidate["x"] & 0xFF) == entry["x"] and
+                            all(candidate[key] == entry[key]
+                                for key in ("y", "tile", "attr"))):
+                        xhigh_loss_suspects.append({
+                            "frame": frame, "index": entry["index"],
+                            "x": entry["x"], "shadow_x": candidate["x"],
+                            "y": entry["y"], "tile": entry["tile"],
+                        })
+                        break
+        shadow_history.append(shadow)
+
+    return {
+        "frames": frames,
+        "active_frames": active_frames,
+        "forced_blank_frames_excluded": excluded_forced_blank,
+        "outside_gameplay_frames_excluded": excluded_outside_gameplay,
+        "metadata_available": bool(metadata),
+        "max_shadow_ppu_mismatch_streak": max_streak,
+        "worst_streak_frames": worst_streak,
+        "verdict": ("persistent_mismatch" if max_streak > 1 else
+                    "pipeline_lag_only" if max_streak == 1 else "clean"),
+        "right_margin_entries": right_margin_entries,
+        "left_margin_entries": left_margin_entries,
+        "xhigh_loss_suspects": len(xhigh_loss_suspects),
+        "samples": xhigh_loss_suspects[:40],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log", type=Path, help="DKC1_OAM_LOG prefix or .bin")

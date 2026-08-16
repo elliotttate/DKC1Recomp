@@ -34,7 +34,7 @@ def record(frame: int, left: str, vram: str = "1" * 16) -> dict:
             "left": left, "center": "0" * 16, "right": "2" * 16,
             "bg1_left": "3" * 16, "bg1_right": "4" * 16,
             "bg2_left": "5" * 16, "bg2_right": "6" * 16,
-            "vram": vram, "cgram": "9" * 16,
+            "wram": "a" * 16, "vram": vram, "cgram": "9" * 16,
             "ppu_oam": "7" * 16,
             "wram_oam": "8" * 16,
         },
@@ -73,7 +73,7 @@ class AnalyzeWsTraceTests(unittest.TestCase):
         summary = MODULE.analyze([first, second])
         self.assertEqual(summary["stable_input_margin_changes"], [])
 
-    def test_legacy_trace_marks_margin_lead_unproven_without_cgram(self):
+    def test_legacy_trace_marks_margin_lead_unproven_without_full_hash(self):
         first = record(14, "a" * 16)
         second = record(15, "b" * 16)
         del first["hash"]["cgram"]
@@ -82,7 +82,22 @@ class AnalyzeWsTraceTests(unittest.TestCase):
         self.assertEqual(summary["stable_input_margin_changes"], [])
         self.assertEqual(
             summary["stable_input_unproven_margin_changes"][0]["reason"],
-            "trace_missing_cgram_hash")
+            "trace_missing_full_machine_hash")
+
+    def test_wram_source_change_is_not_stable_input(self):
+        first = record(16, "a" * 16)
+        second = record(17, "b" * 16)
+        second["hash"]["wram"] = "b" * 16
+        summary = MODULE.analyze([first, second])
+        self.assertEqual(summary["stable_input_margin_changes"], [])
+
+    def test_identity_reset_is_not_stable_input(self):
+        first = record(18, "a" * 16)
+        second = record(19, "b" * 16)
+        second["identity"] = {"hash": "c" * 16, "change_mask": 8}
+        second["decision"].update({"reset": 1, "identity_reset": 1})
+        summary = MODULE.analyze([first, second])
+        self.assertEqual(summary["stable_input_margin_changes"], [])
 
     def test_loader_tracks_counter_reset_as_new_epoch(self):
         with tempfile.TemporaryDirectory() as directory:

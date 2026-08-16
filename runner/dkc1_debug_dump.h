@@ -2,6 +2,7 @@
 #define DKC1_DEBUG_DUMP_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Default-off headless evidence taps, all env-gated and inert when unset:
@@ -52,6 +53,15 @@ void Dkc1DebugTracePlacedActorPhase(const char *event,
                                     uint16_t stock_right,
                                     bool terrain_ready);
 
+/* Record the complete write set made by one prefetched actor dispatch before
+ * the transaction is rolled back.  The lifecycle JSON separates writes to
+ * the actor's own indexed fields from other actor slots, OAM, source-record
+ * bookkeeping, and global WRAM.  This is the fail-closed evidence used to
+ * decide whether a sprite class can become a presentation-only margin proxy. */
+void Dkc1DebugTracePrefetchTransaction(uint16_t actor_index, uint16_t id,
+                                       uint16_t source,
+                                       const uint8_t *before,
+                                       const uint8_t *after, size_t size);
 void Dkc1DebugDumpClose(void);
 
 #endif
