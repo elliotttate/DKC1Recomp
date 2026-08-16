@@ -91,6 +91,9 @@ class SSA:
     problems: list[str] = field(default_factory=list)
 
 
+VIRTUAL = -1  # synthetic root joining the entry and external entries
+
+
 def build(graph: Graph) -> SSA:
     ssa = SSA(graph=graph)
     reachable = [a for a in sorted(graph.blocks)
@@ -98,18 +101,27 @@ def build(graph: Graph) -> SSA:
     if not reachable:
         return ssa
     blocks = {a: graph.blocks[a] for a in reachable}
+    # multiple roots (entry + externally-entered blocks) hang off one
+    # virtual root so dominators/phis stay well-defined even when a
+    # rescued region rejoins the main body
+    roots = [graph.entry] + [a for a in graph.external_entries
+                             if a in blocks]
     preds = {a: [p for p in blocks[a].preds if p in blocks]
              for a in reachable}
+    for root in roots:
+        preds[root] = [VIRTUAL] + preds[root]
 
-    idom = _dominators(graph, blocks, preds)
+    idom = _dominators(blocks, preds, roots)
     frontier = _frontiers(blocks, preds, idom)
     children: dict[int, list[int]] = {a: [] for a in blocks}
+    children[VIRTUAL] = []
     for addr, dom in idom.items():
-        if dom is not None and dom != addr:
+        if addr != VIRTUAL and dom is not None and dom != addr:
             children[dom].append(addr)
 
-    # phi placement (Cytron worklist), unpruned
-    def_blocks: dict[str, set[int]] = {v: {graph.entry} for v in VARS}
+    # phi placement (Cytron worklist), unpruned; version 0 of every
+    # variable is defined at the virtual root (ambient entry value)
+    def_blocks: dict[str, set[int]] = {v: {VIRTUAL} for v in VARS}
     for addr, block in blocks.items():
         for op in block.ops:
             _, writes = op_def_use(op)
@@ -144,6 +156,15 @@ def build(graph: Graph) -> SSA:
         return counter[var]
 
     def rename(addr: int) -> None:
+        if addr == VIRTUAL:
+            # no ops; supply version 0 to every root's phis, then
+            # rename the dominator-tree children (the roots)
+            for root in roots:
+                for var, record in ssa.phis[root].items():
+                    record["in"][VIRTUAL] = stacks[var][-1]
+            for child in sorted(children[VIRTUAL]):
+                rename(child)
+            return
         block = blocks[addr]
         pushed: list[str] = []
         for var, record in ssa.phis[addr].items():
@@ -179,7 +200,7 @@ def build(graph: Graph) -> SSA:
     old_limit = sys.getrecursionlimit()
     sys.setrecursionlimit(max(old_limit, 2 * len(blocks) + 100))
     try:
-        rename(graph.entry)
+        rename(VIRTUAL)
     finally:
         sys.setrecursionlimit(old_limit)
 
@@ -192,41 +213,41 @@ def build(graph: Graph) -> SSA:
                 continue
             for p in preds[addr]:
                 if p not in record["in"]:
+                    where = "virtual root" if p == VIRTUAL else f"{p:06X}"
                     ssa.problems.append(
                         f"phi {var}v{record['ver']} at {addr:06X} missing "
-                        f"incoming from {p:06X}")
+                        f"incoming from {where}")
     return ssa
 
 
-def _dominators(graph: Graph, blocks: dict, preds: dict) -> dict:
-    """Cooper-Harvey-Kennedy iterative dominators on reverse postorder."""
+def _dominators(blocks: dict, preds: dict, roots: list[int]) -> dict:
+    """Cooper-Harvey-Kennedy iterative dominators on reverse postorder,
+    rooted at the VIRTUAL node whose successors are the real roots."""
+    def succs_of(addr: int) -> list[int]:
+        if addr == VIRTUAL:
+            return list(roots)
+        return [t for k, t in blocks[addr].succs if t in blocks]
+
     order: list[int] = []
-    seen: set[int] = set()
+    seen: set[int] = {VIRTUAL}
+    stack = [(VIRTUAL, iter(succs_of(VIRTUAL)))]
+    while stack:
+        node, it = stack[-1]
+        advanced = False
+        for succ in it:
+            if succ not in seen:
+                seen.add(succ)
+                stack.append((succ, iter(succs_of(succ))))
+                advanced = True
+                break
+        if not advanced:
+            order.append(node)
+            stack.pop()
 
-    def post(addr: int) -> None:
-        stack = [(addr, iter([t for k, t in blocks[addr].succs
-                              if t in blocks]))]
-        seen.add(addr)
-        while stack:
-            node, it = stack[-1]
-            advanced = False
-            for succ in it:
-                if succ not in seen:
-                    seen.add(succ)
-                    stack.append(
-                        (succ, iter([t for k, t in blocks[succ].succs
-                                     if t in blocks])))
-                    advanced = True
-                    break
-            if not advanced:
-                order.append(node)
-                stack.pop()
-
-    post(graph.entry)
     rpo = list(reversed(order))
     number = {a: i for i, a in enumerate(rpo)}
     idom: dict[int, int | None] = {a: None for a in rpo}
-    idom[graph.entry] = graph.entry
+    idom[VIRTUAL] = VIRTUAL
 
     def intersect(a: int, b: int) -> int:
         while a != b:
@@ -240,7 +261,7 @@ def _dominators(graph: Graph, blocks: dict, preds: dict) -> dict:
     while changed:
         changed = False
         for addr in rpo:
-            if addr == graph.entry:
+            if addr == VIRTUAL:
                 continue
             candidates = [p for p in preds[addr] if idom.get(p) is not None]
             if not candidates:
@@ -256,6 +277,7 @@ def _dominators(graph: Graph, blocks: dict, preds: dict) -> dict:
 
 def _frontiers(blocks: dict, preds: dict, idom: dict) -> dict:
     frontier: dict[int, set[int]] = {a: set() for a in blocks}
+    frontier[VIRTUAL] = set()
     for addr in blocks:
         ps = [p for p in preds[addr] if idom.get(p) is not None]
         if len(ps) < 2:
@@ -264,6 +286,8 @@ def _frontiers(blocks: dict, preds: dict, idom: dict) -> dict:
             runner = p
             while runner is not None and runner != idom[addr]:
                 frontier[runner].add(addr)
+                if runner == VIRTUAL:
+                    break
                 runner = idom[runner]
     return frontier
 

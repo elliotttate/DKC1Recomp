@@ -116,6 +116,29 @@ def stage2() -> bool:
             stats["phis"] += ssa.phi_count
             for problem in ssa.problems:
                 ssa_fail.append(f"{name}: {problem}")
+            # structural invariant: every recorded use/def version has a
+            # def site, and partial-A links reference real versions
+            unreachable = set(graph.unreachable)
+            for addr, block in graph.blocks.items():
+                if addr in unreachable:
+                    continue
+                for op in block.ops:
+                    for var, ver in ssa.uses.get(op.addr, {}).items():
+                        if (var, ver) not in ssa.def_site:
+                            ssa_fail.append(
+                                f"{name}: use {var}v{ver} at "
+                                f"{op.addr:06X} has no def site")
+                    for var, ver in ssa.defs.get(op.addr, {}).items():
+                        if (var, ver) not in ssa.def_site:
+                            ssa_fail.append(
+                                f"{name}: def {var}v{ver} at "
+                                f"{op.addr:06X} unregistered")
+                    stats["use_sites"] += len(ssa.uses.get(op.addr, {}))
+            for (var, ver), prev in ssa.partial.items():
+                if (var, prev) not in ssa.def_site:
+                    ssa_fail.append(
+                        f"{name}: partial {var}v{ver} links missing "
+                        f"v{prev}")
         except Exception as exc:  # noqa: BLE001
             ssa_fail.append(f"{name}: SSA build raised {exc}")
 

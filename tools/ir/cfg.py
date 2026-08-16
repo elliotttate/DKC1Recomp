@@ -42,6 +42,10 @@ class Graph:
     op_at: dict[int, IROp] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
     external_targets: list[int] = field(default_factory=list)
+    # labeled blocks with no intra-function path from entry: live code
+    # entered from OUTSIDE this (coarse) index function — dispatch/table
+    # targets, alternate entries. Secondary roots for widths and SSA.
+    external_entries: list[int] = field(default_factory=list)
     unreachable: list[int] = field(default_factory=list)
     indirect_unresolved: int = 0
     # width accounting (filled by a post-fixpoint pass, per op — never
@@ -132,17 +136,33 @@ def build(name: str, ops: list[IROp], functions: dict[str, list[IROp]],
             if target in graph.blocks:
                 graph.blocks[target].preds.append(blk.start)
 
-    # reachability from entry (dead islands exist in the listing)
-    seen = set()
-    stack = [graph.entry]
-    while stack:
-        addr = stack.pop()
-        if addr in seen or addr not in graph.blocks:
-            continue
-        seen.add(addr)
-        for kind, target in graph.blocks[addr].succs:
-            if target in graph.blocks:
-                stack.append(target)
+    # reachability from entry, then rescue externally-entered code:
+    # a labeled block with no intra-function path from entry is
+    # referenced from OUTSIDE (branch, table, dispatch) — a live
+    # secondary root, not dead code. Only unlabeled, unreferenced
+    # residue is a true dead island.
+    seen: set[int] = set()
+
+    def closure(root: int) -> None:
+        stack = [root]
+        while stack:
+            addr = stack.pop()
+            if addr in seen or addr not in graph.blocks:
+                continue
+            seen.add(addr)
+            for kind, target in graph.blocks[addr].succs:
+                if target in graph.blocks:
+                    stack.append(target)
+
+    closure(graph.entry)
+    while True:
+        rescued = next(
+            (a for a in sorted(graph.blocks) if a not in seen and
+             graph.blocks[a].ops[0].label), None)
+        if rescued is None:
+            break
+        graph.external_entries.append(rescued)
+        closure(rescued)
     graph.unreachable = [a for a in graph.blocks if a not in seen]
     return graph
 
@@ -187,6 +207,12 @@ def propagate_widths(graph: Graph, facts: dict[int, dict]) -> None:
     for addr, block_fact in facts.items():
         if addr != graph.entry and addr in graph.blocks:
             in_state[addr] = block_fact["entry_mx"] + (False,)
+            worklist.append(addr)
+    # Externally-entered blocks without facts: live code, entry widths
+    # unknown — visited so REP/SEP and immediate suffixes can re-anchor.
+    for addr in graph.external_entries:
+        if addr not in in_state:
+            in_state[addr] = (None, None, False)
             worklist.append(addr)
     visited_out: dict[int, tuple] = {}
 

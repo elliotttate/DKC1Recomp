@@ -88,14 +88,18 @@ anything that severs the 1:1 link back to exact assembly and ROM bytes.
   actual ROM byte through the HiROM mirror fold on every row. (The
   ROM-byte gate is strictly stronger than text round-trip: it proves the
   addressing-mode classifier against silicon truth.)
-- **Stage 2 PASS** — 2,557 functions, 11,401 blocks, 9,773 phis, zero
-  CFG/SSA invariant failures. M/X widths: 99.84% of width-sensitive ops
-  proven from the cfg entry facts (REP/SEP flow + immediate-suffix
-  anchors + variant-relative callee exit facts), 0.16% unknown, zero
-  conflicts outside `tools/ir/known_discrepancies.json` — which
-  documents ONE real find: the listing decodes B8:BAB9 in its M=0 view,
-  while the recomp's proven M1X1 variant executes those bytes as
-  different instructions.
+- **Stage 2 PASS** — 2,557 functions, 11,401 blocks, 10,778 phis, zero
+  CFG/SSA invariant failures (including the per-op use/def structural
+  invariant). Labeled blocks with no intra-function path are rescued as
+  externally-entered secondary roots (multi-root SSA via a virtual
+  root); only 13 width-sensitive ops remain in truly dead unreferenced
+  islands. M/X widths per op: 29,013 proven (REP/SEP flow +
+  immediate-suffix anchors + variant-relative callee exit facts), 3,127
+  call-assumed, 556 unknown (1.7% — rescued regions without anchors,
+  honestly unknown-entry). Zero conflicts outside
+  `tools/ir/known_discrepancies.json` — which documents ONE real find:
+  the listing decodes B8:BAB9 in its M=0 view, while the recomp's
+  proven M1X1 variant executes those bytes as different instructions.
 - **Stage 3 PASS** — 100% of 19,949 memory operands resolved and
   classified (17,378 wram / 1,498 mmio / 738 rom / 332 indirect);
   defines resolved to fixpoint across DKC1/ + Global/ asm sources;
@@ -109,11 +113,13 @@ anything that severs the 1:1 link back to exact assembly and ROM bytes.
   result. Wired into `tools/atlas.py` (IR-proven writers on WRAM view)
   and `tools/impact.py` (write set + data-coupled readers).
 - **Stage 5 host side DONE** — `tools/oracle_spec.py` emits per-function
-  capture/compare manifests from call-closed effects (2,080
-  oracle-ready by state diff; 477 need an LLE shadow due to indirect
-  writes / MMIO order / deep calls). Engine-side remainder: entry-state
-  snapshot in the SNESRECOMP_FUNC_ENTRY_HOOK path, interpreter
-  re-execution, exit diff.
+  capture/compare manifests from control-flow-closed effects. Calls,
+  dispatch contracts, external seed fallthroughs, and direct tail jumps
+  are followed; unresolved continuations fail closed (1,066 oracle-ready
+  by state diff; 1,491 need an LLE shadow due to indirect writes, MMIO
+  order, deep calls, or unresolved control flow). Engine-side remainder:
+  entry-state snapshot in the SNESRECOMP_FUNC_ENTRY_HOOK path,
+  interpreter re-execution, exit diff.
 
 Consumer #1 is `tools/irview.py`: structured pseudocode with proven
 widths, typed operands, and recovered branch conditions, 1:1 asm links

@@ -262,6 +262,11 @@ def render_view(function: str, ops: list[IROp],
         output.append(f"WARNING: CFG: {problem}")
     for problem in ssa.problems:
         output.append(f"WARNING: SSA: {problem}")
+    if graph.external_entries:
+        output.append(
+            "externally-entered blocks (live secondary roots — labeled, "
+            "referenced from outside this seed): "
+            f"{[hex(address) for address in graph.external_entries]}")
     if graph.unreachable:
         output.append(
             "unreachable blocks (listed separately, never implied reachable): "
@@ -270,11 +275,15 @@ def render_view(function: str, ops: list[IROp],
 
     labels = set(graph.blocks)
     unreachable = set(graph.unreachable)
+    external_entries = set(graph.external_entries)
     for block in graph.order():
         preds = f"  ; preds: {', '.join(f'L_{p & 0xFFFF:04X}' for p in block.preds)}" \
             if block.preds else ""
         reachability = "  ; UNREACHABLE FROM ENTRY" \
             if block.start in unreachable else ""
+        if block.start in external_entries:
+            reachability = "  ; EXTERNAL ENTRY (entered from outside " \
+                "this seed)"
         output.append(f"L_{block.start & 0xFFFF:04X}:{preds}{reachability}")
         if show_ssa and ssa.phis.get(block.start):
             for var, record in ssa.phis[block.start].items():

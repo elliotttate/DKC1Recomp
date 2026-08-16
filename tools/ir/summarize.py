@@ -6,8 +6,9 @@ Indirect accesses and stack traffic are COUNTED, never guessed — a
 function with indirect writes has an honestly-unbounded write set and
 its summary says so.
 
-Transitive (call-closed) effects are computed on demand with cycle
-guards; dispatch sites expand through their runtime-proven contracts.
+Transitive (control-flow-closed) effects are computed on demand with
+cycle guards; calls, dispatch sites, and external tail continuations
+all expand through their source-backed targets.
 Serialized to build/ir/summaries.json for impact.py / oracle specs.
 """
 from __future__ import annotations
@@ -28,7 +29,7 @@ from ir import decode  # noqa: E402
 REPO = TOOLS.parent
 OUT = REPO / "build" / "ir" / "summaries.json"
 
-# actor SoA arrays are indexed by slot ($02..$32 step 4): an indexed
+# actor SoA arrays are indexed by slot ($02..$32 step 2): an indexed
 # access to base B covers [B, B+0x33]
 SOA_SPAN = 0x33
 
@@ -62,6 +63,7 @@ class Summary:
     calls: list[int] = field(default_factory=list)
     external: list[int] = field(default_factory=list)
     dispatch_targets: list[int] = field(default_factory=list)
+    body_addrs: set[int] = field(default_factory=set)
 
 
 def _width_of(op) -> int | None:
@@ -84,10 +86,13 @@ def build_summaries(functions=None, resolver=None,
     facts = decode.load_func_facts()
     summaries: dict[str, Summary] = {}
     for name, ops in functions.items():
+        graph = ircfg.build(name, ops, functions, dispatches)
         if ops[0].mw is None and ops[0].xw is None:
-            graph = ircfg.build(name, ops, functions, dispatches)
             ircfg.propagate_widths(graph, facts)
-        summary = Summary(function=name, entry=ops[0].addr)
+        summary = Summary(
+            function=name, entry=ops[0].addr,
+            external=list(dict.fromkeys(graph.external_targets)),
+            body_addrs={op.addr for op in ops})
         for op in ops:
             if op.ea is None and op.region == "":
                 resolver.annotate(op)
@@ -136,6 +141,7 @@ def write_json(summaries: dict[str, Summary], out: Path = OUT) -> None:
             "indirect_reads": s.indirect_reads,
             "indirect_writes": s.indirect_writes,
             "calls": [f"0x{c:06X}" for c in s.calls],
+            "external": [f"0x{t:06X}" for t in s.external],
             "dispatch_targets": [f"0x{t:06X}"
                                  for t in s.dispatch_targets],
         }
@@ -175,13 +181,15 @@ def readers_of(summaries: dict[str, Summary],
 
 def transitive_effects(summaries: dict[str, Summary], name: str,
                        max_depth: int = 8) -> dict:
-    """Call-closed read/write sets with honest unboundedness flags."""
+    """Control-flow-closed effects with honest unboundedness flags."""
     by_entry = {s.entry: s for s in summaries.values()}
+    by_body_addr = {addr: s for s in summaries.values()
+                    for addr in s.body_addrs}
     seen: set[str] = set()
     reads: list[Access] = []
     writes: list[Access] = []
     unbounded = {"indirect_reads": 0, "indirect_writes": 0,
-                 "unresolved_calls": 0}
+                 "unresolved_calls": 0, "unresolved_external": 0}
 
     def walk(fn: str, depth: int) -> None:
         if fn in seen or depth > max_depth:
@@ -203,6 +211,12 @@ def transitive_effects(summaries: dict[str, Summary], name: str,
                 walk(callee.function, depth + 1)
             else:
                 unbounded["unresolved_calls"] += 1
+        for target in s.external:
+            continuation = by_entry.get(target) or by_body_addr.get(target)
+            if continuation is not None:
+                walk(continuation.function, depth + 1)
+            else:
+                unbounded["unresolved_external"] += 1
 
     walk(name, 0)
     return {"functions_visited": len(seen), "reads": reads,
