@@ -18,6 +18,7 @@
 #include "common_rtl.h"
 #include "snes/snes.h"
 
+#include <direct.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,13 @@ static int WriteMask(const char *path, const uint8_t *bgra,
 }
 
 int main(int argc, char **argv) {
+  /* Contain default-named tier2 discovery captures instead of littering
+   * the working directory; explicit env settings are respected. */
+  if (!getenv("SNESRECOMP_TIER2_DIR") && !getenv("SNESRECOMP_TIER2_MANIFEST")) {
+    _mkdir("build");
+    _mkdir("build/tier2");
+    _putenv("SNESRECOMP_TIER2_DIR=build/tier2");
+  }
   if (argc != 4) {
     fprintf(stderr,
             "usage: dkc1_layer_capture <rom.sfc> <snapshot.state> <outdir>\n");

@@ -218,9 +218,14 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("(kDkc1VideoWidescreenExtra + 7) & ~7", video)
         self.assertIn("native_backstep == 0x0100u", video)
         self.assertIn("the initializer itself is the capability boundary", video)
-        self.assertIn("return 0x0160u", video)
+        self.assertIn("return 0x0170u", video)
+        self.assertIn("return 0x0178u", video)
+        self.assertIn("return 0x002eu", video)
+        self.assertIn("return 0x002fu", video)
+        self.assertIn("samples seven complete margin tiles", video)
         self.assertIn("native_count == 0x0020u", video)
-        self.assertIn("Dkc1VideoBeginStreamCoverage(cpu, 0x2cu)", video)
+        self.assertIn("Dkc1VideoBeginStreamCoverage(cpu, 0x2eu)", video)
+        self.assertIn("Dkc1VideoBeginStreamCoverage(cpu, 0x2fu)", video)
         self.assertIn(
             "stock_stream_x + kDkc1StreamMargin + bias", video)
         self.assertIn(

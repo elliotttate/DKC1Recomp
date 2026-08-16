@@ -86,6 +86,14 @@ uint16_t Dkc1VideoMergeOamSizeAndXHigh(uint16_t existing_word,
                                       uint16_t screen_x);
 
 struct CpuState;
+/* The stock vertical row builder refreshes only 36 tile entries before its
+ * full 64-entry ring DMA.  That is enough for the native viewport, but wide
+ * vertical motion can expose stale entries beyond it.  Generated wrappers
+ * call Begin at the authentic row-body entry and Advance immediately after
+ * CODE_818A18 has copied the staged row.  Advance requests one tail-call for
+ * the second pass, then restores the cartridge's Layer1 X exactly. */
+void Dkc1VideoBeginWideRowBuild(struct CpuState *cpu, bool alternate);
+uint8_t Dkc1VideoAdvanceWideRowBuild(struct CpuState *cpu);
 /* Exact CODE_BBA849 call-site hooks. They borrow only currently free actor
  * slots and restore every normal-actor word after OAM generation. */
 void Dkc1MarginProxyBeginRender(struct CpuState *cpu);

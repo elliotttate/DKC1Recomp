@@ -72,6 +72,11 @@ VRAM/CGRAM/dual OAM, PPU regs, manifest w/ hashes + build id, layer
 captures, post-failure tail). `DKC1_AUTO_EXPORT`=1 — any detector hit
 triggers the export. `DKC1_DESKTOP_DEBUG_PANEL`=0 hides the panel.
 
+**Tier2 discovery captures:** default-named `tier2_*.json(l)` files land
+in `build/tier2/` (hosts set `SNESRECOMP_TIER2_DIR` automatically);
+`SNESRECOMP_TIER2_MANIFEST`/`_JOURNAL` override paths explicitly;
+`SNESRECOMP_TIER2_VERBOSE` for detail.
+
 **Engine diagnostics:** `SNESRECOMP_DSPOUT`, `SNESRECOMP_*_TRACE_FILE`,
 `SNESRECOMP_OFFRAILS_STDERR`, `SNESRECOMP_APU_TOUCH_CYCLES`.
 

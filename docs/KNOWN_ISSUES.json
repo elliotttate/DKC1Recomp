@@ -69,6 +69,15 @@
       "expected": "Both authentic vertical row builders execute two overlapping stock passes in eligible wide gameplay, restore Layer1X exactly, and keep the native path unchanged.",
       "first_seen": "2026-08-16",
       "fixed_note": "fixed 2026-08-16; the 809-frame raw-BG1 zero groups now match the native oracle, the later 3559-frame route is clean and byte-identical across three repeats, and the seven-sample retained/cold transition sentinel passes"
+    },
+    {
+      "id": "wide-seven-tile-stream-guard-gap",
+      "status": "fixed",
+      "summary": "The host renderer sampled seven complete margin tiles at arbitrary sub-tile scroll phases, but the cartridge initializer and moving-row sweep prepared only six. The uninitialized seventh physical BG1 ring column could later rotate into the native center as one 8-pixel vertical strip of stale terrain.",
+      "repro": "build/visible-rowfix-flight-20260816/capture-f00005014-20260816-084158-p69336",
+      "expected": "Cartridge initialization and moving-row coverage include the same seven tile columns consumed by the renderer; post-corruption save states remain historical evidence and are not treated as fresh-entry proof.",
+      "first_seen": "2026-08-16",
+      "fixed_note": "fixed 2026-08-16 by restoring the proven 56-pixel cartridge stream margin, $0170/$0178 initializer backsteps, and $002E/$002F column counts. The bad snapshot isolates BG1 physical ring column 59 with 29/32 wrong entries; rightward streaming repairs it. Three 3559-frame margin-7 replays are deterministic and preserve the accepted framebuffer hash, and the six-boundary/39-sample retained-vs-cold sentinel passes."
     }
   ]
 }

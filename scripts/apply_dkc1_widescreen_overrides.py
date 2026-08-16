@@ -217,6 +217,76 @@ def adapt_stream_selector(sources: dict[Path, str], symbol: str,
     sources[path] = add_include(text[:insert_at] + injection + text[insert_at:])
 
 
+def adapt_vertical_row_builds(sources: dict[Path, str]) -> None:
+    """Run DKC's 36-entry vertical row builder twice in wide gameplay.
+
+    The row body tail-calls CODE_818A18, which copies the staging buffer into
+    the 64-entry WRAM row ring and consumes the original JSL return with RTL.
+    Rather than duplicating generated instruction semantics, begin the first
+    biased pass at the two authentic body labels.  Immediately before either
+    CODE_818A18 RTL, Advance requests one generated tail-call back through the
+    correct outer row entry.  The second pass then restores Layer1 X and the
+    original hardware return frame is consumed exactly once.
+    """
+    for symbol, label, alternate in (
+            ("CODE_81890E_M0X0", "L_891A_M0X0:", "false"),
+            ("CODE_818CEF_M0X0", "L_8CFB_M0X0:", "true")):
+        path, text = locate_function(sources, symbol)
+        function_start, function_end = function_span(text, symbol)
+        start = text.find(label, function_start, function_end)
+        if start < 0:
+            raise ValueError(f"{symbol} does not contain {label}")
+        insert_at = start + len(label)
+        call = f"Dkc1VideoBeginWideRowBuild(cpu, {alternate});"
+        block = text[insert_at:function_end]
+        if call not in block:
+            injection = (
+                "\n    /* Wide-only second row-window transaction. */\n"
+                f"    {call}")
+            text = text[:insert_at] + injection + text[insert_at:]
+            sources[path] = add_include(text)
+        elif block.count(call) != 1:
+            raise ValueError(f"ambiguous wide row begin in {symbol}")
+
+    symbol = "CODE_818A18_M0X0"
+    path, text = locate_function(sources, symbol)
+    function_start, function_end = function_span(text, symbol)
+    block = text[function_start:function_end]
+    marker = "{ uint16 _ret_s = cpu->S;  /* RTL pop hardware return frame */"
+    dispatch = "Dkc1VideoAdvanceWideRowBuild(cpu)"
+    if dispatch not in block:
+        if block.count(marker) != 2:
+            raise ValueError(
+                "expected exactly two CODE_818A18 RTL sites; "
+                f"found {block.count(marker)}")
+        injection = (
+            "{\n"
+            "      const uint8_t _ws_row_next = "
+            "Dkc1VideoAdvanceWideRowBuild(cpu);\n"
+            "      if (_ws_row_next != 0) {\n"
+            "        cpu->PB = 0x81;\n"
+            "        cpu->host_return_valid = _hrv;\n"
+            "        cpu_tailcall_inherit_return_context(_entry_s, _hrv);\n"
+            "        RecompReturn _tc;\n"
+            "        if (_ws_row_next == 1) {\n"
+            "          extern RecompReturn CODE_81890E_M0X0(CpuState *cpu);\n"
+            "          _tc = CODE_81890E_M0X0(cpu);\n"
+            "        } else {\n"
+            "          extern RecompReturn CODE_818CEF_M0X0(CpuState *cpu);\n"
+            "          _tc = CODE_818CEF_M0X0(cpu);\n"
+            "        }\n"
+            "        RecompStackPop();\n"
+            "        return _tc;\n"
+            "      }\n"
+            "    }\n"
+            "    ")
+        block = block.replace(marker, injection + marker)
+        sources[path] = add_include(
+            text[:function_start] + block + text[function_end:])
+    elif block.count(dispatch) != 2:
+        raise ValueError("ambiguous wide row continuation in CODE_818A18")
+
+
 def adapt_nth_accumulator_write(sources: dict[Path, str], start_label: str,
                                 end_label: str, write_index: int,
                                 helper: str) -> None:
@@ -598,6 +668,7 @@ def apply_overrides(generated_dir: Path) -> list[Path]:
         ("Level_BuildTilemapColumn_TypeB_M0X0", "L_8E17_M0X0:"),
     ):
         adapt_stream_selector(sources, symbol, label)
+    adapt_vertical_row_builds(sources)
 
     # Shared world-sprite renderer: the two authentic windows are
     # [-48,303] and [-88,343].

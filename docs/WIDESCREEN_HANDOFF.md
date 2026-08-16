@@ -1027,6 +1027,100 @@ stream-only revalidations with zero policy violations, raw fallbacks,
 stable-input margin changes, or nonblack centered margins. That regression is
 `build/post-bonus-fix-snowbarrel-route-20260816/`.
 
+## Wide vertical-row staging corruption (2026-08-16)
+
+The black and mixed-color rectangular terrain blocks seen after the Jungle
+bonus return were genuine cartridge BG1 corruption, not retained host history
+or a composite artifact. They were present in isolated BG1, survived a cold
+render of the exact snapshot, and appeared in native presentation after the
+wide run had already written the bad VRAM. Replaying the same flight-recorder
+anchor and 809 inputs in native mode remained clean while wide mode produced
+zero tilemap entries in three diagonal groups:
+
+- row 19, ring columns 45..50;
+- row 20, ring columns 46..51;
+- row 21, ring columns 47..52.
+
+The root cause is the stock `$81890E/$818CEF` vertical row builder. One call
+stages only 36 tile entries in WRAM, but `$818A18` publishes the result into a
+64-entry ring row that is subsequently transferred as two full 32-entry
+halves. That is sufficient for the native viewport and insufficient for the
+widened viewport during simultaneous horizontal/vertical movement.
+
+`Dkc1VideoBeginWideRowBuild` and `Dkc1VideoAdvanceWideRowBuild` now wrap both
+authentic row builders. In eligible wide gameplay they execute the unchanged
+stock body twice: first with Layer1X biased left by 56 pixels, then 144 pixels
+to the right of that first pass. The union covers 54 tile entries. The exact
+original `$088B` is restored before the caller resumes and the ordinary full
+row DMA still runs once. Native/ineligible execution remains a direct stock
+path. The generated-code override preserves the inherited hardware return
+context while tail-calling the second pass, so the original return is consumed
+only after both stock bodies finish.
+
+Evidence:
+
+- the original 809-frame repro is visually clean and the formerly zero cells
+  now equal the native raw-BG1 oracle;
+- the later 3,559-frame route that produced mixed-color rectangles is clean in
+  three independent replays;
+- all three longer replays have identical frame SHA-256
+  `7aaeed6679d9d09dbba9934bfc9733fcf2d87cffb15abb21855f395ad9d1080f`,
+  WRAM SHA-256
+  `c1acb48f01660565db725e0175717cfa93f002fbe554780a0fb014147cd87714`,
+  and VRAM SHA-256
+  `63c807972d4b59c36f59fd0c73118e93f7688df02b76f259302eef345f849778`;
+- the automatic transition sentinel sampled the detected boundary at relative
+  frames 1, 2, 3, 5, 9, 17, and 33. Retained/cold WRAM, VRAM, CGRAM, both OAM
+  copies, and all five isolated/final surfaces were identical at every sample;
+- all 156 Python tests pass.
+
+The accepted evidence is under `build/black-box-rowfix-long-r1/` through
+`-r3/`, `build/black-box-rowfix-layers/`, and
+`build/transition-sentinel-rowfix-long-20260816/`. A window that was already
+running before the build continued to show the defect because Windows kept
+the old executable image mapped; visual QA must verify the build identity in
+the title or executable hash after a restart.
+
+## Seven-tile cartridge stream guard gap (2026-08-16)
+
+The later one-tile-wide vertical strip near the middle of the screen is a
+separate BG1 defect. The saved state contains the bad data in VRAM, so retained
+and cold host rendering, isolated BG1, composite, and even native-width
+presentation all reproduce it. At Layer1X `$075D`, the strip maps to physical
+BG1 tilemap ring column 59. Compared with the clean oracle, 29 of its 32 entries
+are wrong while every neighboring column is complete. The column survives
+neutral and vertical-only branches, but ordinary rightward streaming rewrites
+all 32 entries and repairs it.
+
+The renderer consumes seven complete margin tiles to cover the 43-pixel 16:9
+extension at every sub-tile phase. The cartridge hooks had been scaled to a
+48-pixel/six-tile margin, leaving exactly one physical ring column outside the
+initializer and moving-row coverage. The fix restores the cartridge contract
+used by the proven ROM patch: a 56-pixel margin, `$0170/$0178` initializer
+backsteps, and `$002E/$002F` initial column counts. The host still crops the
+unused guard pixels to 342x224.
+
+Evidence:
+
+- exact affected snapshot and isolated planes:
+  `build/visible-rowfix-flight-20260816/capture-f00005014-20260816-084158-p69336`;
+- retained versus cold and wide versus native renders are byte-identical,
+  proving the defect is guest BG1 state rather than shadow provenance;
+- three 3,559-frame margin-7 replays are byte-identical and retain the accepted
+  framebuffer SHA-256
+  `7aaeed6679d9d09dbba9934bfc9733fcf2d87cffb15abb21855f395ad9d1080f`;
+- their WRAM and VRAM hashes are respectively
+  `b52f79bae703e5470daaa90663212a3e18d4d349dd2a426f277d13e78059389b`
+  and
+  `1394609a461d0081423bd59e46908a73c5583ede24059e2c70a5de439afd90eb`;
+- `build/transition-sentinel-margin7-20260816/report.html` passes all six
+  discovered transitions and 39 retained/cold samples without a raw-state,
+  layer, center, or margin divergence.
+
+Loading the original post-corruption snapshot is intentionally not accepted as
+proof of the initializer fix: save states serialize the already-bad VRAM. Use a
+fresh-entry route or a repaired later checkpoint for visual QA.
+
 ## Release gates
 
 Widescreen is not release-ready until all of the following are true:

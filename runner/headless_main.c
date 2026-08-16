@@ -1,4 +1,5 @@
 #include "dkc1_blank_scan.h"
+#include <direct.h>
 #include "dkc1_invariant_monitor.h"
 #include "dkc1_game.h"
 #include "dkc1_video.h"
@@ -82,6 +83,13 @@ static void TracePc(CpuState *cpu, uint32_t pc24) {
 }
 
 int main(int argc, char **argv) {
+  /* Contain default-named tier2 discovery captures instead of littering
+   * the working directory; explicit env settings are respected. */
+  if (!getenv("SNESRECOMP_TIER2_DIR") && !getenv("SNESRECOMP_TIER2_MANIFEST")) {
+    _mkdir("build");
+    _mkdir("build/tier2");
+    _putenv("SNESRECOMP_TIER2_DIR=build/tier2");
+  }
   if (argc < 2 || argc > 3) {
     fprintf(stderr, "usage: dkc1_snesrecomp_headless <rom.sfc> [frames]\n");
     return 2;

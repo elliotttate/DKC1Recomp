@@ -27,6 +27,7 @@
 
 #include <windows.h>
 #include <commdlg.h>
+#include <direct.h>
 #include <mmsystem.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1271,6 +1272,13 @@ static void AudioPump(void) {
 
 int main(int argc, char **argv) {
   InitBuildIdentity();
+  /* Contain default-named tier2 discovery captures instead of littering
+   * the working directory; explicit env settings are respected. */
+  if (!getenv("SNESRECOMP_TIER2_DIR") && !getenv("SNESRECOMP_TIER2_MANIFEST")) {
+    _mkdir("build");
+    _mkdir("build/tier2");
+    _putenv("SNESRECOMP_TIER2_DIR=build/tier2");
+  }
   Dkc1FlightRecorderSetBuildInfo(s_build_id);
   const char *rom_path = argc > 1 ? argv[1] : "dkc1.sfc";
   snprintf(s_rom_path, sizeof s_rom_path, "%s", rom_path);

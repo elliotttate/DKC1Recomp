@@ -62,6 +62,14 @@ typedef struct Dkc1StreamCoverage {
 
 static Dkc1StreamCoverage s_stream_coverage;
 
+typedef struct Dkc1WideRowBuild {
+  uint16_t original_layer_x;
+  uint8_t kind;   /* 1 = standard $81890E, 2 = alternate $818CEF. */
+  uint8_t phase;  /* 1 = left pass, 2 = right pass. */
+} Dkc1WideRowBuild;
+
+static Dkc1WideRowBuild s_wide_row_build;
+
 enum {
   kDkc1VideoSnapshotMagic = 0x31535644u, /* "DVS1" */
   kDkc1VideoSnapshotVersion = 2,
@@ -204,6 +212,7 @@ void Dkc1VideoResetPlacedActorPhases(void) {
   memset(&s_placed_actor_context, 0, sizeof s_placed_actor_context);
   s_placed_actor_context_valid = false;
   memset(&s_stream_coverage, 0, sizeof s_stream_coverage);
+  memset(&s_wide_row_build, 0, sizeof s_wide_row_build);
 }
 
 void Dkc1VideoSetWidescreen(bool enabled) {
@@ -297,10 +306,18 @@ int Dkc1VideoPresentationBias(void) {
 }
 
 enum {
-  /* The visible 16:9 extension is 43 pixels per side. DKC streams whole
-   * 8-pixel columns, so retain one tile-aligned 48-pixel guard. */
+  /* The visible 16:9 extension is 43 pixels per side, but the renderer
+   * samples seven complete margin tiles so arbitrary sub-tile scroll phases
+   * always have a populated neighbor.  Six tiles (48 pixels) leave one
+   * physical ring column outside the cartridge initializer/row sweep; it can
+   * later cross the native center as an 8-pixel vertical seam.  Match the
+   * renderer and the proven ROM patch with seven tiles (56 pixels), then let
+   * the host crop the unused guard pixels. */
   kDkc1StreamMargin =
-      (kDkc1VideoWidescreenExtra + 7) & ~7,
+      ((kDkc1VideoWidescreenExtra + 7) & ~7) + 8,
+  /* Each stock pass stages 36 entries.  Offset the second pass by 18 tiles
+   * so the two windows overlap by half and cover 54 coherent columns. */
+  kDkc1WideRowPassSeparation = 18 * 8,
 };
 
 static bool Dkc1VideoStreamWideningEligible(const struct CpuState *cpu) {
@@ -311,6 +328,39 @@ static bool Dkc1VideoStreamWideningEligible(const struct CpuState *cpu) {
   return upper >= lower &&
          (uint16_t)(upper - lower) >=
              (uint16_t)(2 * kDkc1VideoWidescreenExtra);
+}
+
+void Dkc1VideoBeginWideRowBuild(struct CpuState *cpu, bool alternate) {
+  if (!cpu || s_wide_row_build.phase != 0 ||
+      !Dkc1VideoStreamWideningEligible(cpu))
+    return;
+
+  const uint16_t layer_x = Dkc1ReadWram16(cpu->ram, 0x088bu);
+  s_wide_row_build.original_layer_x = layer_x;
+  s_wide_row_build.kind = alternate ? 2u : 1u;
+  s_wide_row_build.phase = 1u;
+  cpu_write16(cpu, 0x7e, 0x088bu,
+              (uint16_t)(layer_x - kDkc1StreamMargin));
+}
+
+uint8_t Dkc1VideoAdvanceWideRowBuild(struct CpuState *cpu) {
+  if (!cpu || s_wide_row_build.phase == 0)
+    return 0;
+
+  const uint8_t kind = s_wide_row_build.kind;
+  if (s_wide_row_build.phase == 1u) {
+    s_wide_row_build.phase = 2u;
+    cpu_write16(cpu, 0x7e, 0x088bu,
+                (uint16_t)(s_wide_row_build.original_layer_x +
+                           kDkc1WideRowPassSeparation -
+                           kDkc1StreamMargin));
+    return kind;
+  }
+
+  cpu_write16(cpu, 0x7e, 0x088bu,
+              s_wide_row_build.original_layer_x);
+  memset(&s_wide_row_build, 0, sizeof s_wide_row_build);
+  return 0;
 }
 
 static void Dkc1VideoSyncStreamContext(const uint8_t *wram) {
@@ -486,9 +536,9 @@ uint16_t Dkc1VideoInitialBackstep(struct CpuState *cpu,
   if (!cpu || !Dkc1VideoIsWidescreen())
     return native_backstep;
   if (native_backstep == 0x0100u)
-    return 0x0160u; /* 44 columns * 8 pixels. */
+    return 0x0170u; /* 46 columns * 8 pixels. */
   if (native_backstep == 0x0108u)
-    return 0x0168u; /* Preserve the alternate path's extra column. */
+    return 0x0178u; /* Preserve the alternate path's extra column. */
   return native_backstep;
 }
 
@@ -503,12 +553,12 @@ uint16_t Dkc1VideoInitialColumnCount(struct CpuState *cpu,
     return native_count;
   }
   if (native_count == 0x0020u) {
-    Dkc1VideoBeginStreamCoverage(cpu, 0x2cu);
-    return 0x002cu;
+    Dkc1VideoBeginStreamCoverage(cpu, 0x2eu);
+    return 0x002eu;
   }
   if (native_count == 0x0021u) {
-    Dkc1VideoBeginStreamCoverage(cpu, 0x2du);
-    return 0x002du;
+    Dkc1VideoBeginStreamCoverage(cpu, 0x2fu);
+    return 0x002fu;
   }
   return native_count;
 }
@@ -530,8 +580,8 @@ uint16_t Dkc1VideoSelectStreamX(struct CpuState *cpu,
   const uint16_t upper = Dkc1ReadWram16(cpu->ram, 0x1b25u);
   s_stream_coverage.last_layer_x = layer_x;
 
-  /* Standard initial fill. With the widened 352-pixel backstep, +304 starts
-   * 48 pixels left of the final camera while preserving its final value. */
+  /* Standard initial fill. With the widened 368-pixel backstep, +312 starts
+   * 56 pixels left of the final camera while preserving its final value. */
   if (init_kind == 1u && step == 8u) {
     const int bias = Dkc1VideoAlignedStreamBias(cpu, target_x);
     const uint16_t selected =

@@ -90,6 +90,30 @@ non-conclusion vocabulary, and 3x byte-identical repeat gates.
   `analysis_valid` separate from the release-gate `passed`: deterministic
   contamination is valid evidence but still fails the gate. Reports use
   `docs/schemas/dkc1-transition-contamination-v1.schema.json`.
+- **The transition sentinel is implemented.**
+  `tools/transition_contamination_sentinel.py` turns that single-window
+  bisector into a route-wide regression gate. It discovers hard scene,
+  source, identity, reset, and cold-start boundaries from `DKC1_WS_TRACE`,
+  samples each boundary at configurable follow-up offsets, and renders the
+  exact same snapshot with retained and cold host history. Every sample
+  compares WRAM, VRAM, CGRAM, PPU OAM, and WRAM OAM before independently
+  hashing BG1, BG2, BG3, OBJ, and composite across left margin, native center,
+  and right margin. Machine-state or center differences fail closed; a
+  margin-only difference is reported as retained-layer contamination. The
+  first failure preserves the snapshot, raw planes, traces, isolated layers,
+  logs, JSON, and an HTML timeline. Schema:
+  `docs/schemas/dkc1-transition-sentinel-v1.schema.json`.
+
+  Example:
+
+  ```powershell
+  python tools\transition_contamination_sentinel.py `
+    --runner build\dkc1_headless_tools.exe `
+    --layer-capture build\dkc1_layer_capture.exe `
+    --rom D:\private\DKC1_USA1.sfc `
+    --bundle build\visible-flight\capture-f00000464-... `
+    --output build\transition-sentinel
+  ```
 
 Provenance colors are: green = captured/authentic history, cyan = ROM
 prefill, magenta = proven periodic fold, gray = verified transparent blank,

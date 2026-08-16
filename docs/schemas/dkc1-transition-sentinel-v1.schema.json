@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dkc1-transition-sentinel-v1.schema.json",
+  "title": "DKC1 automatic transition contamination sentinel",
+  "type": "object",
+  "required": [
+    "schema", "inputs", "offsets", "transitions", "samples",
+    "first_failure", "passed", "truncated"
+  ],
+  "properties": {
+    "schema": {"const": "dkc1.transition-sentinel.v1"},
+    "inputs": {"type": "object"},
+    "offsets": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+    "transitions": {"type": "array", "items": {"type": "object"}},
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["relative_frame", "classification", "raw", "layers"],
+        "properties": {
+          "relative_frame": {"type": "integer", "minimum": 1},
+          "classification": {
+            "enum": ["identical", "retained_layer_contamination",
+                     "native_center_mismatch", "machine_state_mismatch"]
+          },
+          "raw": {"type": "object"},
+          "layers": {"type": "object"}
+        }
+      }
+    },
+    "first_failure": {"type": ["integer", "null"], "minimum": 1},
+    "passed": {"type": "boolean"},
+    "truncated": {"type": "boolean"}
+  }
+}

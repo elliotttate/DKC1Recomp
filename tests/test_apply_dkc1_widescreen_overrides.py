@@ -55,6 +55,24 @@ class WidescreenOverrideTests(unittest.TestCase):
                     (label, "cpu_write_a_m(cpu, (uint16)(stream_x));"),
                 ])
 
+        self.write_function(
+            generated, "row_standard.c", "CODE_81890E_M0X0", [
+                ("L_891A_M0X0:", "cpu_trace_block(cpu, 0x81891A);"),
+            ])
+        self.write_function(
+            generated, "row_alternate.c", "CODE_818CEF_M0X0", [
+                ("L_8CFB_M0X0:", "cpu_trace_block(cpu, 0x818CFB);"),
+            ])
+        self.write_function(
+            generated, "row_copy.c", "CODE_818A18_M0X0", [
+                ("L_8A30_M0X0:",
+                 "{ uint16 _ret_s = cpu->S;  /* RTL pop hardware return frame */\n"
+                 "      return RECOMP_RETURN_NORMAL; }"),
+                ("L_8A59_M0X0:",
+                 "{ uint16 _ret_s = cpu->S;  /* RTL pop hardware return frame */\n"
+                 "      return RECOMP_RETURN_NORMAL; }"),
+            ])
+
         self.write_function(generated, "shared.c", "SHARED_M0X0", [
             ("L_A8D4_M0X0:", "uint16 left_a = 0x30; uint16 span_a = 0x160;"),
             ("L_A8E5_M0X0:", "cpu_trace_block(cpu, 0xBBA8E5);"),
@@ -214,6 +232,17 @@ class WidescreenOverrideTests(unittest.TestCase):
             self.assertEqual(
                 combined.count("Dkc1VideoSelectStreamX(cpu, cpu_read_a16(cpu))"),
                 4)
+            self.assertIn(
+                "Dkc1VideoBeginWideRowBuild(cpu, false)",
+                first["row_standard.c"])
+            self.assertIn(
+                "Dkc1VideoBeginWideRowBuild(cpu, true)",
+                first["row_alternate.c"])
+            self.assertEqual(
+                first["row_copy.c"].count(
+                    "Dkc1VideoAdvanceWideRowBuild(cpu)"), 2)
+            self.assertIn("CODE_81890E_M0X0(cpu)", first["row_copy.c"])
+            self.assertIn("CODE_818CEF_M0X0(cpu)", first["row_copy.c"])
             self.assertEqual(
                 first["banana_draw.c"].count("Dkc1VideoPromoteOamXHigh"), 2)
             self.assertIn("Dkc1VideoBiasCullX", first["rope.c"])
