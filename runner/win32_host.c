@@ -47,6 +47,9 @@ enum {
   kMenuFullscreen,
   kMenuTogglePanel,
   kMenuProvenance,
+  kMenuFpsCounter,
+  kMenuAspectNative,  /* kMenuAspect* stay contiguous for the radio group */
+  kMenuAspectWidescreen,
   kMenuLayerComposite,  /* kMenuLayer* stay contiguous for the radio group */
   kMenuLayerBg1,
   kMenuLayerBg2,
@@ -56,6 +59,14 @@ enum {
 
 static const DWORD kWindowedStyle =
     WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX;
+
+/* Dark theme palette. The debug panel already uses 18,21,25; the menu bar
+ * sits slightly lighter so the strips read as distinct surfaces. */
+#define DKC1_DARK_CLIENT RGB(18, 21, 25)
+#define DKC1_DARK_MENUBAR RGB(24, 26, 30)
+#define DKC1_DARK_MENUBAR_HOT RGB(58, 63, 72)
+#define DKC1_DARK_TEXT RGB(222, 230, 238)
+#define DKC1_DARK_TEXT_DIM RGB(128, 134, 142)
 
 static uint8_t s_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
 static BITMAPINFO s_bmi;
@@ -84,6 +95,8 @@ static int s_fullscreen;
 static WINDOWPLACEMENT s_windowed_placement;
 static char s_pending_state_path[1024];
 static int s_pending_state_op;  /* 0 none, 1 save-as, 2 load-from */
+static int s_show_fps;
+static double s_fps_value;
 static char s_host_status[512] = "manual play";
 static Dkc1InputPlayback s_input_playback;
 static Dkc1WramDump s_wram_dump;
@@ -95,6 +108,154 @@ static uint16_t ReadWram16(unsigned address) {
 static int EnvironmentEnabled(const char *name) {
   const char *value = getenv(name);
   return value && *value && *value != '0';
+}
+
+/* ---- dark theme ------------------------------------------------------ */
+
+static HBRUSH MenubarBrush(void) {
+  static HBRUSH brush;
+  if (!brush) brush = CreateSolidBrush(DKC1_DARK_MENUBAR);
+  return brush;
+}
+
+static HBRUSH MenubarHotBrush(void) {
+  static HBRUSH brush;
+  if (!brush) brush = CreateSolidBrush(DKC1_DARK_MENUBAR_HOT);
+  return brush;
+}
+
+static HFONT MenuFont(void) {
+  static HFONT font;
+  if (!font) {
+    NONCLIENTMETRICSA metrics;
+    memset(&metrics, 0, sizeof metrics);
+    metrics.cbSize = sizeof metrics;
+    if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof metrics,
+                              &metrics, 0))
+      font = CreateFontIndirectA(&metrics.lfMenuFont);
+    if (!font) font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+  }
+  return font;
+}
+
+/* Documented on Windows 10 1809+ (attribute 19) / 20H1+ (attribute 20). */
+static void EnableDarkTitleBar(HWND hwnd) {
+  HMODULE dwm = LoadLibraryA("dwmapi.dll");
+  if (!dwm) return;
+  typedef HRESULT(WINAPI * SetAttrFn)(HWND, DWORD, LPCVOID, DWORD);
+  SetAttrFn set_attr = (SetAttrFn)GetProcAddress(dwm, "DwmSetWindowAttribute");
+  if (set_attr) {
+    BOOL dark = TRUE;
+    if (FAILED(set_attr(hwnd, 20, &dark, sizeof dark)))
+      set_attr(hwnd, 19, &dark, sizeof dark);
+  }
+}
+
+/* Dark popup menus: uxtheme ordinal 135 = SetPreferredAppMode(2 =
+ * ForceDark), 136 = FlushMenuThemes. Undocumented but stable since
+ * Windows 10 1903 and used by mainstream apps; degrades to light menus
+ * if either export is missing. */
+static void EnableDarkMenus(void) {
+  HMODULE uxtheme = LoadLibraryA("uxtheme.dll");
+  if (!uxtheme) return;
+  typedef int(WINAPI * SetModeFn)(int);
+  typedef void(WINAPI * FlushFn)(void);
+  SetModeFn set_mode =
+      (SetModeFn)GetProcAddress(uxtheme, MAKEINTRESOURCEA(135));
+  FlushFn flush = (FlushFn)GetProcAddress(uxtheme, MAKEINTRESOURCEA(136));
+  if (set_mode) set_mode(2);
+  if (flush) flush();
+}
+
+/* The classic menu BAR ignores dark app mode entirely; the shell instead
+ * sends these undocumented-but-stable UAH messages that let the window
+ * paint the bar itself (the standard Win32 dark-menubar technique). */
+#define WM_UAHDRAWMENU 0x0091
+#define WM_UAHDRAWMENUITEM 0x0092
+
+typedef struct {
+  HMENU hmenu;
+  HDC hdc;
+  DWORD dwFlags;
+} UahMenu;
+
+typedef struct {
+  DWORD rgSize[8];  /* item metrics union; layout not needed for drawing */
+  DWORD rgcx[4];
+  DWORD fUpdateMaxWidths : 2;
+} UahMenuItemMetrics;
+
+typedef struct {
+  int iPosition;
+  UahMenuItemMetrics umim;
+} UahMenuItem;
+
+typedef struct {
+  DRAWITEMSTRUCT dis;
+  UahMenu um;
+  UahMenuItem umi;
+} UahDrawMenuItem;
+
+static int DrawDarkMenuBarBackground(HWND hwnd, const UahMenu *menu) {
+  MENUBARINFO bar;
+  memset(&bar, 0, sizeof bar);
+  bar.cbSize = sizeof bar;
+  if (!GetMenuBarInfo(hwnd, OBJID_MENU, 0, &bar)) return 0;
+  RECT window_rect;
+  GetWindowRect(hwnd, &window_rect);
+  RECT rect = bar.rcBar;
+  OffsetRect(&rect, -window_rect.left, -window_rect.top);
+  FillRect(menu->hdc, &rect, MenubarBrush());
+  return 1;
+}
+
+static int DrawDarkMenuBarItem(const UahDrawMenuItem *item) {
+  char text[64] = "";
+  MENUITEMINFOA info;
+  memset(&info, 0, sizeof info);
+  info.cbSize = sizeof info;
+  info.fMask = MIIM_STRING;
+  info.dwTypeData = text;
+  info.cch = sizeof text - 1;
+  if (!GetMenuItemInfoA(item->um.hmenu, (UINT)item->umi.iPosition, TRUE,
+                        &info))
+    return 0;
+  const UINT state = item->dis.itemState;
+  HDC dc = item->um.hdc;
+  RECT rect = item->dis.rcItem;
+  FillRect(dc, &rect,
+           (state & (ODS_HOTLIGHT | ODS_SELECTED)) ? MenubarHotBrush()
+                                                   : MenubarBrush());
+  SetBkMode(dc, TRANSPARENT);
+  SetTextColor(dc, (state & (ODS_GRAYED | ODS_DISABLED | ODS_INACTIVE))
+                       ? DKC1_DARK_TEXT_DIM
+                       : DKC1_DARK_TEXT);
+  HFONT old_font = (HFONT)SelectObject(dc, MenuFont());
+  /* '&' marks the Alt accelerator; DT_HIDEPREFIX consumes it like the
+   * native menu bar does instead of printing it literally. */
+  DrawTextA(dc, text, -1, &rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_HIDEPREFIX);
+  SelectObject(dc, old_font);
+  return 1;
+}
+
+/* DefWindowProc redraws a light 1px separator under the bar during
+ * non-client painting; paint it back over in bar color. */
+static void PaintOverMenuBarLine(HWND hwnd) {
+  MENUBARINFO bar;
+  memset(&bar, 0, sizeof bar);
+  bar.cbSize = sizeof bar;
+  if (!GetMenuBarInfo(hwnd, OBJID_MENU, 0, &bar)) return;
+  RECT window_rect;
+  GetWindowRect(hwnd, &window_rect);
+  RECT line = bar.rcBar;
+  OffsetRect(&line, -window_rect.left, -window_rect.top);
+  line.top = line.bottom;
+  line.bottom = line.top + 1;
+  HDC dc = GetWindowDC(hwnd);
+  if (!dc) return;
+  FillRect(dc, &line, MenubarBrush());
+  ReleaseDC(hwnd, dc);
 }
 
 static void UpdateDebugTitle(void);
@@ -182,10 +343,16 @@ static HMENU BuildMenuBar(void) {
   AppendMenuA(layers, MF_STRING, kMenuLayerBg2, "BG&2 only\tF4");
   AppendMenuA(layers, MF_STRING, kMenuLayerBg3, "BG&3 only\tF5");
   AppendMenuA(layers, MF_STRING, kMenuLayerObj, "&Sprites only\tF6");
+  HMENU aspect = CreatePopupMenu();
+  AppendMenuA(aspect, MF_STRING, kMenuAspectNative, "Native &4:3 (256x224)");
+  AppendMenuA(aspect, MF_STRING, kMenuAspectWidescreen,
+              "Widescreen &16:9 (342x224)");
   HMENU view = CreatePopupMenu();
   AppendMenuA(view, MF_STRING, kMenuFullscreen, "&Fullscreen\tAlt+Enter");
   AppendMenuA(view, MF_STRING, kMenuTogglePanel, "Debug &Panel");
   AppendMenuA(view, MF_STRING, kMenuProvenance, "Pro&venance Overlay\tF1");
+  AppendMenuA(view, MF_STRING, kMenuFpsCounter, "FPS &Counter");
+  AppendMenuA(view, MF_POPUP, (UINT_PTR)aspect, "&Aspect Ratio");
   AppendMenuA(view, MF_POPUP, (UINT_PTR)layers, "&Layers");
   HMENU bar = CreateMenu();
   AppendMenuA(bar, MF_POPUP, (UINT_PTR)file, "&File");
@@ -206,6 +373,12 @@ static void RefreshMenuChecks(void) {
                 MF_BYCOMMAND |
                     (Dkc1DebugProvenanceOverlay() ? MF_CHECKED
                                                   : MF_UNCHECKED));
+  CheckMenuItem(s_menu, kMenuFpsCounter,
+                MF_BYCOMMAND | (s_show_fps ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuRadioItem(s_menu, kMenuAspectNative, kMenuAspectWidescreen,
+                     Dkc1VideoIsWidescreen() ? kMenuAspectWidescreen
+                                             : kMenuAspectNative,
+                     MF_BYCOMMAND);
   UINT layer_item;
   switch (Dkc1DebugLayerMask()) {
     case 0x01: layer_item = kMenuLayerBg1; break;
@@ -222,12 +395,38 @@ static void UpdateDebugTitle(void) {
   if (!s_window) return;
   char title[320];
   snprintf(title, sizeof title,
-           "DKC1Recomp | frame %ld | %s | %s | provenance %s",
+           "DKC1Recomp | frame %ld | %s | %s | %s | provenance %s",
            s_host_frame, s_paused ? "PAUSED" : "running",
+           Dkc1VideoIsWidescreen() ? "16:9" : "4:3",
            LayerModeName(Dkc1DebugLayerMask()),
            Dkc1DebugProvenanceOverlay() ? "ON" : "off");
   SetWindowTextA(s_window, title);
   RefreshMenuChecks();
+}
+
+/* Host-side FPS badge, composed off-screen like the panel so nothing
+ * flickers; never rendered into the framebuffer evidence. */
+static void DrawFpsBadge(HDC dc, int x, int y) {
+  enum { kBadgeWidth = 96, kBadgeHeight = 22 };
+  static HDC badge_dc;
+  static HBITMAP badge_bitmap;
+  if (!badge_dc) {
+    badge_dc = CreateCompatibleDC(dc);
+    badge_bitmap = CreateCompatibleBitmap(dc, kBadgeWidth, kBadgeHeight);
+    SelectObject(badge_dc, badge_bitmap);
+  }
+  RECT rect = {0, 0, kBadgeWidth, kBadgeHeight};
+  FillRect(badge_dc, &rect, MenubarBrush());
+  SetBkMode(badge_dc, TRANSPARENT);
+  SetTextColor(badge_dc, RGB(126, 217, 87));
+  HFONT old_font =
+      (HFONT)SelectObject(badge_dc, GetStockObject(ANSI_FIXED_FONT));
+  char text[32];
+  snprintf(text, sizeof text, "%5.1f FPS", s_fps_value);
+  DrawTextA(badge_dc, text, -1, &rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  SelectObject(badge_dc, old_font);
+  BitBlt(dc, x, y, kBadgeWidth, kBadgeHeight, badge_dc, 0, 0, SRCCOPY);
 }
 
 static void PresentFrame(HDC dc) {
@@ -264,11 +463,13 @@ static void PresentFrame(HDC dc) {
     SetStretchBltMode(dc, COLORONCOLOR);  /* crisp pixels, no smoothing */
     StretchDIBits(dc, dx, dy, dw, dh, 0, 0, s_width, s_height,
                   s_pixels, &s_bmi, DIB_RGB_COLORS, SRCCOPY);
+    if (s_show_fps) DrawFpsBadge(dc, dx + 8, dy + 8);
     return;
   }
   StretchDIBits(dc, 0, 0, s_width * kScale, s_height * kScale,
                 0, 0, s_width, s_height, s_pixels, &s_bmi,
                 DIB_RGB_COLORS, SRCCOPY);
+  if (s_show_fps) DrawFpsBadge(dc, 8, 8);
   if (!s_panel_enabled) return;
 
   /* Compose the panel off-screen: FillRect-then-DrawText straight onto the
@@ -439,6 +640,18 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       s_running = 0;
       PostQuitMessage(0);
       return 0;
+    case WM_UAHDRAWMENU:
+      if (DrawDarkMenuBarBackground(hwnd, (const UahMenu *)lp)) return 1;
+      break;
+    case WM_UAHDRAWMENUITEM:
+      if (DrawDarkMenuBarItem((const UahDrawMenuItem *)lp)) return 1;
+      break;
+    case WM_NCPAINT:
+    case WM_NCACTIVATE: {
+      LRESULT result = DefWindowProc(hwnd, msg, wp, lp);
+      if (s_menu && !s_fullscreen) PaintOverMenuBarLine(hwnd);
+      return result;
+    }
     case WM_KILLFOCUS:
       /* Never carry a held SNES button across a focus transition.  Global
        * asynchronous polling could leave a button latched when the desktop
@@ -562,6 +775,9 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           break;
         case kMenuProvenance:
           Dkc1DebugSetProvenanceOverlay(!Dkc1DebugProvenanceOverlay());
+          break;
+        case kMenuFpsCounter:
+          s_show_fps = !s_show_fps;
           break;
         case kMenuLayerComposite: Dkc1DebugSetLayerMask(0xff); break;
         case kMenuLayerBg1: Dkc1DebugSetLayerMask(0x01); break;
@@ -811,11 +1027,14 @@ int main(int argc, char **argv) {
   s_height = kDkc1VideoHeight;
   Dkc1BeginDrawing(s_pixels, (size_t)s_width * 4);
 
+  EnableDarkMenus();
+
   WNDCLASSA wc;
   memset(&wc, 0, sizeof wc);
   wc.lpfnWndProc = WindowProc;
   wc.hInstance = GetModuleHandle(NULL);
   wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+  wc.hbrBackground = CreateSolidBrush(DKC1_DARK_CLIENT);
   wc.lpszClassName = "DKC1RecompWindow";
   RegisterClassA(&wc);
 
@@ -831,6 +1050,10 @@ int main(int argc, char **argv) {
       CW_USEDEFAULT, CW_USEDEFAULT,
       rect.right - rect.left, rect.bottom - rect.top,
       NULL, s_menu, wc.hInstance, NULL);
+  EnableDarkTitleBar(s_window);
+  SetWindowPos(s_window, NULL, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                   SWP_FRAMECHANGED);
   UpdateDebugTitle();
 
   memset(&s_bmi, 0, sizeof s_bmi);
@@ -1005,6 +1228,24 @@ int main(int argc, char **argv) {
     Dkc1DebugDumpFrame((int)s_host_frame);
     Dkc1FlightRecorderRecord(s_host_frame, input);
     AudioPump();
+
+    {
+      /* Emulated-frame rate over a rolling half-second window. */
+      static LARGE_INTEGER fps_anchor;
+      static int fps_frames;
+      fps_frames++;
+      LARGE_INTEGER fps_now;
+      QueryPerformanceCounter(&fps_now);
+      if (!fps_anchor.QuadPart) fps_anchor = fps_now;
+      const double elapsed =
+          (double)(fps_now.QuadPart - fps_anchor.QuadPart) /
+          (double)freq.QuadPart;
+      if (elapsed >= 0.5) {
+        s_fps_value = fps_frames / elapsed;
+        fps_frames = 0;
+        fps_anchor = fps_now;
+      }
+    }
 
     HDC dc = GetDC(s_window);
     PresentFrame(dc);
