@@ -77,6 +77,14 @@ in `build/tier2/` (hosts set `SNESRECOMP_TIER2_DIR` automatically);
 `SNESRECOMP_TIER2_MANIFEST`/`_JOURNAL` override paths explicitly;
 `SNESRECOMP_TIER2_VERBOSE` for detail.
 
+**Trace-hook build** (`build_host_trace.bat` -> `dkc1_headless_trace.exe`,
+lean `SNESRECOMP_FUNC_ENTRY_HOOK` mode): `SNESRECOMP_FUNC_PROFILE`=jsonl
+per-function call counts/frames/contexts (+`SNESRECOMP_PROFILE_CONTEXT_ADDR`,
+DKC1 uses 0032); `SNESRECOMP_WATCH`=addr:len[,...] +
+`SNESRECOMP_WATCH_LOG` — WRAM watchpoints attributing every change to the
+traced function that executed it (solves same-frame set/consume
+blindness; instruction-level via force_lle escalation).
+
 **Engine diagnostics:** `SNESRECOMP_DSPOUT`, `SNESRECOMP_*_TRACE_FILE`,
 `SNESRECOMP_OFFRAILS_STDERR`, `SNESRECOMP_APU_TOUCH_CYCLES`.
 
@@ -97,6 +105,19 @@ expectations, ws-trace assertions, integrity `budgets` (ratchets), and an
 optional `quickload` leg seeded by a state the entry route itself saves.
 
 ## Tool catalog (`tools/`)
+
+**Understanding / naming**
+- `structure.py ADDR|NAME` — symbolized 1:1 listing (curated RAM names,
+  define annotations, local labels); display aid, no semantic claims.
+- `sync_names.py` — derive `<Base>_StateN` names for dispatch-contract
+  targets (provenance-tagged, curated map always wins) ->
+  derived_names.json consumed by atlas.
+- `state_catalog.py` — docs/STATE_MACHINES.md: per state machine, each
+  state's anims/sounds/$1595 events/$1029 transitions (static mining).
+- `profile_diff.py A [B]` — coverage + "functions exclusive to run A"
+  behavioral isolation from trace-build profiles.
+- `poke_test.py --state S --set ADDR=HEX --run N --expect EXPR` — WRAM
+  fault injection (proves downstream reaction, not natural production).
 
 **Navigation / knowledge**
 - `atlas.py ADDR|7EXXXX|name:TERM [--callers] [--json]` — unified query

@@ -43,6 +43,17 @@ def load_rename_map():
     code = {int(entry["ea"], 16): entry for entry in data.get("code", [])}
     ram = {int(entry["ea"], 16) & 0x1FFFF: entry
            for entry in data.get("ram", [])}
+    # Mechanically derived names (tools/sync_names.py) as a fallback layer:
+    # curated entries always win; derived ones carry their provenance.
+    derived_path = RENAME_MAP.parent / "derived_names.json"
+    try:
+        derived = json.loads(derived_path.read_text(encoding="utf-8"))
+        for entry in derived.get("code", []):
+            ea = int(entry["ea"], 16)
+            if ea not in code:
+                code[ea] = entry
+    except OSError:
+        pass
     return code, ram
 
 
@@ -142,6 +153,8 @@ def show_code(address: int, want_callers: bool, out: dict):
     if entry:
         out["name"] = entry.get("name")
         out["description"] = entry.get("desc")
+        if entry.get("provenance"):
+            out["name_provenance"] = entry["provenance"]
 
     if containing:
         func_rows = [r for r in rows if r["function"] == containing]
@@ -264,7 +277,9 @@ def print_report(out: dict):
 
     line(f"=== {out['address']} ({out['kind']}) ===")
     if out.get("name"):
-        line(f"name: {out['name']}")
+        provenance = out.get("name_provenance")
+        line(f"name: {out['name']}" +
+             (f"  [{provenance}]" if provenance else ""))
     if out.get("description"):
         line(f"desc: {out['description']}")
     if out.get("ram_map_labels"):
