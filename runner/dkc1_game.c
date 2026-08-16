@@ -1662,9 +1662,14 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
    * outside the stock viewport fully transparent because the cartridge could
    * never display them. Continue only a proven lateral wall boundary into a
    * presentation margin. The target metatile must be wholly transparent and
-   * the nearest native-edge metatile must have pixels in all 16 characters;
-   * partial openings and decorative edges therefore remain untouched. This
-   * does not alter VRAM, WRAM, collision, streaming, or any native pixel. */
+   * a fully populated source metatile. On the left, retain the previously
+   * proven native-edge source. On the right, use the nearest complete block
+   * back toward the native viewport: some fixed-width vertical rooms contain
+   * one complete authored wall block just outside the stock viewport followed
+   * by unused map cells, and skipping that nearer block made the outer margin
+   * alternate between wall fragments and water. Partial openings and
+   * decorative edges remain untouched. This does not alter VRAM, WRAM,
+   * collision, streaming, or any native pixel. */
   const bool allow_underwater_boundary =
       s_ws_layout == kDkc1LayoutVertical &&
       Dkc1ReadWram16(0x0032) == 0x0003u &&
@@ -1716,7 +1721,6 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
             signed_decode_wtx >= 0 && signed_decode_wty >= 0 &&
             signed_decode_edge_wtx >= 0) {
           bool target_empty = false, target_full = false;
-          bool edge_empty = false, edge_full = false;
           const uint32_t decode_metatile_x =
               (uint32_t)signed_decode_wtx >> 2;
           const uint32_t decode_metatile_y =
@@ -1726,19 +1730,38 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
           if (Dkc1VideoClassifyLevelMetatile(
                   s_ws_layout, map_bank, accepted_definition_bank, map_base,
                   metatile_base, decode_metatile_x, decode_metatile_y,
-                  g_ppu->vram,
-                  0x8000u, character_base, &target_empty, &target_full) &&
-              target_empty &&
-              Dkc1VideoClassifyLevelMetatile(
-                  s_ws_layout, map_bank, accepted_definition_bank, map_base,
-                  metatile_base, decode_edge_metatile_x,
-                  decode_metatile_y,
-                  g_ppu->vram, 0x8000u, character_base, &edge_empty,
-                  &edge_full) && edge_full) {
+                  g_ppu->vram, 0x8000u, character_base, &target_empty,
+                  &target_full) && target_empty) {
+            uint32_t source_decode_metatile_x = 0;
+            bool source_found = false;
+            int64_t candidate_metatile_x =
+                side == 0 ? (int64_t)decode_edge_metatile_x
+                          : (int64_t)decode_metatile_x - 1;
+            const int64_t candidate_step = side == 0 ? 1 : -1;
+            while (candidate_metatile_x >= 0 &&
+                   (side == 0
+                        ? candidate_metatile_x <=
+                              (int64_t)decode_edge_metatile_x
+                        : candidate_metatile_x >=
+                              (int64_t)decode_edge_metatile_x)) {
+              bool candidate_empty = false, candidate_full = false;
+              if (Dkc1VideoClassifyLevelMetatile(
+                      s_ws_layout, map_bank, accepted_definition_bank,
+                      map_base, metatile_base,
+                      (uint32_t)candidate_metatile_x, decode_metatile_y,
+                      g_ppu->vram, 0x8000u, character_base,
+                      &candidate_empty, &candidate_full) && candidate_full) {
+                source_decode_metatile_x =
+                    (uint32_t)candidate_metatile_x;
+                source_found = true;
+                break;
+              }
+              candidate_metatile_x += candidate_step;
+            }
             const uint32_t source_decode_wtx =
-                decode_edge_metatile_x * 4u +
+                source_decode_metatile_x * 4u +
                 ((uint32_t)signed_decode_wtx & 3u);
-            if (Dkc1VideoDecodeLevelTile(
+            if (source_found && Dkc1VideoDecodeLevelTile(
                     s_ws_layout, map_bank, accepted_definition_bank, map_base,
                     metatile_base, source_decode_wtx,
                     (uint32_t)signed_decode_wty, &entry) && trace)

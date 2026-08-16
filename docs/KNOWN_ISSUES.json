@@ -116,6 +116,15 @@
       "fixed_note": "fixed 2026-08-16 with a scene-locked, presentation-only vertical-boundary continuation. The exact frame replaces 96 transparent margin tiles; WRAM, VRAM, CGRAM, and both OAM copies remain byte-identical. The 256px native center matches its oracle at all 57,344 pixels, three frame captures are byte-identical (SHA-256 AAB0EF0B...), and three 3,551-frame input-history replays end at exact WRAM F5BCA064...."
     },
     {
+      "id": "croctopus-nearest-right-wall-source",
+      "status": "fixed",
+      "summary": "At Croctopus Chase level $0061/$00C0 near camera X $007F, BG1's first offscreen right metatile was a complete wall but the following unused metatile was empty. The continuation rule skipped the nearer complete block and tested only the native-edge block, leaving alternating water and rock fragments in the outermost right margin.",
+      "repro": "build/repros/underwater-right-20260816-1823/underwater-right.state (external evidence; not committed)",
+      "expected": "An empty right-margin metatile continues from the nearest fully populated metatile back toward the native viewport. The accepted left-boundary behavior, all native pixels, cartridge memory, partial openings, and other scenes remain unchanged.",
+      "first_seen": "2026-08-16",
+      "fixed_note": "fixed 2026-08-16 by searching inward only on the right for the nearest complete continuation source. The exact frame continues 93 tiles and changes 1,491 pixels, all in the 43-pixel right margin; the native center and every other plane are exact. Both previously fixed Croctopus boundary states are pixel-identical, native 4:3 is byte-identical on all five captured surfaces, and three candidate composites are byte-identical (SHA-256 0FDA2212...)."
+    },
+    {
       "id": "croctopus-authored-left-boundary-gap",
       "status": "fixed",
       "summary": "At world X $0241 in Croctopus Chase level $0061/$00BF, BG1's rock wall stopped 11 pixels inside the left widescreen margin and exposed BG2 water. The ROM map has a fully populated wall metatile at the stock left edge (metatile X $12) but a wholly transparent offscreen metatile at X $10.",

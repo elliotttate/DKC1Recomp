@@ -1276,6 +1276,32 @@ pre-change oracle (`340921CEE8B8D1B871578C02CC5F1FE9DE2B1CF5005423EE2D848832723C
 The 204-test offline suite completes in approximately four seconds; broad
 route replay is deliberately deferred until after this focused pixel gate.
 
+## Underwater right margins use the nearest proven wall source
+
+A later Croctopus Chase state at level `$0061`, entrance `$00C0`, camera X
+`$007F` exposed a second boundary case. The first 32-pixel block outside the
+stock right viewport is a complete authored wall, while the next map block is
+unused. The original scene-locked continuation always tested the native-edge
+metatile as its source. At this Y range that farther block is not complete, so
+only 15 tiles were continued and the outer-right margin alternated between
+water and disconnected rock fragments.
+
+Empty right-margin blocks now search back toward the native viewport and use
+the nearest completely populated metatile. The left path deliberately retains
+its previously accepted native-edge source. Target blocks must still be wholly
+transparent; partial openings and native pixels cannot be painted. This is
+presentation-only and does not modify WRAM, VRAM, CGRAM, OAM, collision, or
+streaming.
+
+Evidence is under `build/repros/underwater-right-20260816-1823/` (not
+committed). The exact state increases continuation from 15 to 93 tiles and
+changes 1,491 pixels, all in the 43-pixel right margin. The 256-pixel center,
+BG2/BG3/OBJ, and all cartridge memory hashes are unchanged. Both earlier
+Croctopus left/right boundary captures are pixel-identical to their accepted
+outputs. Native 4:3 is byte-identical across all five captured surfaces, and
+three candidate composites are byte-identical at SHA-256
+`0FDA2212C694F0E19487B29BA82C79C0525C9A2572D219E82D22AF40040ADF89`.
+
 ## Release gates
 
 Widescreen is not release-ready until all of the following are true:

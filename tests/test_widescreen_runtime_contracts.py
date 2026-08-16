@@ -456,11 +456,17 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("target_metatile_x > native_edge_metatile_x",
                       body[continuation:])
 
-        # Empty targets are filled only from a completely populated adjacent
-        # boundary metatile. Partial openings therefore cannot be painted.
+        # Empty right targets are filled from the nearest completely populated
+        # metatile back toward the native viewport. The already-proven left
+        # behavior deliberately remains anchored to the native edge.
         self.assertIn("Dkc1VideoClassifyLevelMetatile", video)
-        self.assertIn("target_empty &&", body[continuation:])
-        self.assertIn("&& edge_full", body[continuation:])
+        self.assertIn("&& target_empty", body[continuation:])
+        self.assertIn("candidate_metatile_x", body[continuation:])
+        self.assertIn("side == 0 ? (int64_t)decode_edge_metatile_x",
+                      body[continuation:])
+        self.assertIn("candidate_full", body[continuation:])
+        self.assertIn("source_found && Dkc1VideoDecodeLevelTile",
+                      body[continuation:])
         self.assertIn("tile_entry & 0x03ffu", video)
         self.assertIn("boundary_continuation_tiles", trace)
 
