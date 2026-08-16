@@ -152,8 +152,8 @@ def main() -> int:
                         help='JSON, e.g. {"addr":"0x057B","op":">=",'
                              '"value":"0x0003"}')
     parser.add_argument("--snapshot-input", type=Path,
-                        help="native snapshot to load before replaying (e.g. a
-                             flight-recorder bundle anchor)")
+                        help="native snapshot to load before replaying "
+                             "(e.g. a flight-recorder bundle anchor)")
     parser.add_argument("--settle", type=int, default=60)
     parser.add_argument("--confirm", type=int, default=3)
     parser.add_argument("--widescreen", action="store_true", default=True)

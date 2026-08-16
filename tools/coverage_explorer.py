@@ -36,6 +36,17 @@ from ir import memtype  # noqa: E402
 REPO = TOOLS.parent
 
 
+def aggregate_status(statuses: list[str]) -> str:
+    """Conservatively summarize every observed scene for an entrance."""
+    if statuses and all(status == "proven" for status in statuses):
+        return "proven"
+    if "degraded" in statuses:
+        return "degraded"
+    if "centered" in statuses or "centered-only" in statuses:
+        return "centered-only"
+    return "reached-unmeasured"
+
+
 def load_entrances() -> dict[int, list[str]]:
     resolver = memtype.Resolver()
     universe: dict[int, list[str]] = {}
@@ -96,14 +107,7 @@ def main() -> int:
         evidence = by_entrance.get(value)
         if evidence:
             statuses = evidence["statuses"]
-            if "proven" in statuses:
-                status = "proven"
-            elif "degraded" in statuses:
-                status = "degraded"
-            elif statuses:
-                status = "centered-only"
-            else:
-                status = "reached-unmeasured"
+            status = aggregate_status(statuses)
             routes = sorted(evidence["routes"])
         else:
             status = "never-observed"

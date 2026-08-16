@@ -3,12 +3,12 @@
 
 For a function, emit exactly WHAT the oracle harness must capture at a
 traced entry and compare at exit:
-  capture: A X Y S D DB P + every address in the call-closed read set
-  compare: exit registers/flags + the call-closed ordered write set
+  capture: A X Y S D DB P + every address in the control-flow-closed read set
+  compare: exit registers/flags + the control-flow-closed ordered write set
 Eligibility is honest: a function whose closure contains indirect
-writes, unresolved calls, or MMIO/DMA effects cannot be compared by
-state-diff alone and is marked accordingly (the harness must run it
-under an LLE shadow with a write log instead).
+writes, unresolved calls or continuations, or MMIO/DMA effects cannot
+be compared by state-diff alone and is marked accordingly (the harness
+must run it under an LLE shadow with a write log instead).
 
 The engine-side remainder (entry-state snapshot in the trace hook,
 interpreter re-execution, diff) consumes these specs; see
@@ -53,6 +53,10 @@ def spec_for(name: str, summaries: dict) -> dict:
     if effects["unresolved_calls"]:
         blockers.append(
             f"{effects['unresolved_calls']} unresolved/deep calls")
+    if effects["unresolved_external"]:
+        blockers.append(
+            f"{effects['unresolved_external']} unresolved/deep external "
+            "control-flow continuations")
     if mmio_writes:
         blockers.append(f"{len(mmio_writes)} MMIO writes "
                         "(order-sensitive; needs write-log compare)")

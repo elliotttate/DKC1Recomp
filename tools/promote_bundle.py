@@ -28,6 +28,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,6 +46,46 @@ def sha256(path: Path) -> str:
 
 def fail(message: str) -> None:
     sys.exit(f"promotion REFUSED: {message}")
+
+
+def validate_name(name: str) -> str:
+    """Return a path-safe local promotion slug or refuse it."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,95}", name):
+        fail("--name must be a 1-96 character slug containing only "
+             "letters, numbers, underscores, and hyphens")
+    return name
+
+
+def verify_manifest_files(bundle: Path, files: object) -> dict[str, str]:
+    """Verify every declared artifact and all promotion prerequisites."""
+    if not isinstance(files, dict):
+        fail("manifest files must be an object")
+    required = {"anchor.snapshot", "inputs.txt", "final.wram.bin"}
+    missing = sorted(required - set(files))
+    if missing:
+        fail("manifest omits required file hash(es): " + ", ".join(missing))
+    bundle_root = bundle.resolve()
+    verified: dict[str, str] = {}
+    for raw_name, raw_digest in files.items():
+        if not isinstance(raw_name, str) or not isinstance(raw_digest, str):
+            fail("manifest file names and hashes must be strings")
+        relative = Path(raw_name)
+        if relative.is_absolute() or ".." in relative.parts:
+            fail(f"unsafe manifest file path {raw_name!r}")
+        digest = raw_digest.lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            fail(f"invalid sha256 for {raw_name}")
+        path = (bundle_root / relative).resolve()
+        try:
+            path.relative_to(bundle_root)
+        except ValueError:
+            fail(f"manifest file escapes bundle root: {raw_name!r}")
+        if not path.is_file():
+            fail(f"missing manifested file {path}")
+        if sha256(path) != digest:
+            fail(f"{raw_name} hash differs from manifest (corrupt bundle)")
+        verified[raw_name] = digest
+    return verified
 
 
 def masks_to_dks(inputs: list[str], anchor_abs: Path) -> str:
@@ -78,6 +119,9 @@ def main() -> int:
                         default=REPO / "build" / "promote")
     args = parser.parse_args()
 
+    if args.repeats < 1:
+        fail("--repeats must be at least 1")
+
     manifest_path = args.bundle / "manifest.json"
     anchor = args.bundle / "anchor.snapshot"
     inputs_path = args.bundle / "inputs.txt"
@@ -91,11 +135,7 @@ def main() -> int:
         fail("bundle was captured against an unsupported ROM")
     if sha256(args.rom) != SUPPORTED_ROM_SHA:
         fail(f"{args.rom} is not the supported ROM")
-    files = manifest.get("files", {})
-    for name, path in (("anchor.snapshot", anchor),
-                       ("inputs.txt", inputs_path)):
-        if files.get(name) and sha256(path) != files[name]:
-            fail(f"{name} hash differs from manifest (corrupt bundle)")
+    files = verify_manifest_files(args.bundle, manifest.get("files"))
 
     inputs = inputs_path.read_text().splitlines()
     replay_frames = manifest.get("replay_frames", len(inputs))
@@ -106,7 +146,7 @@ def main() -> int:
     scene = manifest.get("scene", {})
     default_name = (f"promoted-e{scene.get('entrance', 0):02x}"
                     f"-f{manifest.get('current_frame', 0)}")
-    name = args.name or default_name
+    name = validate_name(args.name or default_name)
 
     # reproduce gate
     args.work.mkdir(parents=True, exist_ok=True)
@@ -136,7 +176,7 @@ def main() -> int:
         fail(f"replays are NOT byte-identical across {args.repeats} "
              f"runs: {hashes}")
     drift = None
-    captured = files.get("final.wram.bin")
+    captured = files["final.wram.bin"]
     if captured and hashes[0] != captured:
         if not args.allow_capture_drift:
             fail("replay end WRAM differs from the bundle's own "

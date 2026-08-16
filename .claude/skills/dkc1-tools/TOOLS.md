@@ -144,7 +144,9 @@ optional `quickload` leg seeded by a state the entry route itself saves.
   Validated: `--store 1595` reproduces the damage chain (BFC745 #$0001,
   SteelKeg BFD005 #$0040) that reverse_watch proved at runtime.
 - `oracle_spec.py NAME | --emit-all` — per-function differential-oracle
-  capture/compare manifests from call-closed IR effects
+  capture/compare manifests from control-flow-closed IR effects. Proven
+  external tail fallthroughs and direct tail jumps are followed; unresolved
+  continuations fail closed to `needs-lle-shadow`
   (build/ir/oracle_specs.json). Honest eligibility: indirect writes,
   MMIO ordering, or deep calls mark a function needs-lle-shadow instead
   of pretending state-diff suffices.
@@ -160,11 +162,14 @@ optional `quickload` leg seeded by a state the entry route itself saves.
   full 256-entrance universe joined against capabilities + sweep
   evidence, with a ranked next-evidence worklist (centered-only scenes
   first — a route already exists; then unobserved *_Main levels).
+  Multiple scene variants for one entrance aggregate conservatively: an
+  entrance is proven only when every observed variant is proven.
   never-observed = absence of evidence, never assumed-unreachable.
 - `promote_bundle.py BUNDLE --rom R [--name N]` — flight-recorder
   capture -> LOCAL regression asset (recipes/promoted/ +
   contracts/promoted/, both gitignored: snapshots are never committed).
-  Gates: manifest/ROM/file hashes, Nx byte-identical end-WRAM replay,
+  Gates: manifest/ROM/every-declared-file hashes, path-safe promotion name,
+  Nx byte-identical end-WRAM replay,
   and match against the bundle's own final.wram.bin
   (--allow-capture-drift records instead of refusing, for captures from
   older builds). Emits a state_load + run-length-MASK replay.dks and a
