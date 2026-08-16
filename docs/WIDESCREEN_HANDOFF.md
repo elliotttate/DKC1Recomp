@@ -1246,6 +1246,36 @@ VRAM remains
 and three zero-frame captures are byte-identical (SHA-256
 `96B1D386FBC7E64B2EEEF4FB42EC3162E1DEB71D032C2C41A8BB2975EFA6FD12`).
 
+## Presentation bias is not cartridge viewport ownership
+
+At the Jungle Hijinxs left boundary after leaving the banana hoard, the host
+presentation camera is shifted 43 pixels inward while the cartridge still
+populates the ordinary world-X `$0000..$00FF` viewport. The shadow previously
+used the shifted presentation X for both rendering and VRAM capture. It
+therefore mislabeled stale second-screen ring entries as world tiles 32..36,
+and the native fast path trusted them because their destination remained
+inside X=0..255. The result was a tall repeated vine strip on the right and,
+before the decoder-offset correction, missing west art.
+
+The shadow now carries two explicit coordinates: presentation world X for
+lookups and cartridge-authentic capture world X for VRAM ingestion. A host
+edge shift also supplies native left/right insets so tile chunks no longer
+take the raw-VRAM fast path outside the authentic 256-pixel source interval.
+ROM prefill is bounded by the rendered world span versus that authentic stock
+span, rather than assuming `presentationX + 32 tiles` is the east edge.
+Centered frames retain the previous path exactly.
+
+Pinned evidence is under
+`build/repros/edge-map-20260816-1433/` (not committed). Three exact-state
+captures are byte-identical: BG1 SHA-256
+`B16712301B9550633DD53A0F50D96E6FF9BDBD0331CDC7A163ADBF4F4053E573`
+and composite SHA-256
+`A7A223F28F40174B17AA8339FFE3EADCC7271BC6B8368A64A0250C5084A4D407`.
+The bias-zero 60-frame mid-level composite remains byte-identical to its
+pre-change oracle (`340921CEE8B8D1B871578C02CC5F1FE9DE2B1CF5005423EE2D848832723CB6D5`).
+The 204-test offline suite completes in approximately four seconds; broad
+route replay is deliberately deferred until after this focused pixel gate.
+
 ## Release gates
 
 Widescreen is not release-ready until all of the following are true:

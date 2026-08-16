@@ -355,8 +355,15 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             "(uint16_t)(g_ppu->hScroll[layer] + presentation_bias)", body)
         self.assertIn("const uint32_t calibration_x[2]", body)
         self.assertIn("const uint32_t calibration_y[2]", body)
-        self.assertIn("g_ppu->hScroll[terrain_layer], camera_x", body)
-        self.assertIn("g_ppu->vScroll[terrain_layer], camera_y", body)
+        self.assertIn("const uint32_t cartridge_ppu_x", body)
+        self.assertIn("const uint32_t cartridge_ppu_y", body)
+        self.assertIn("uint32_t capture_world_x[2]", body)
+        self.assertIn("uint32_t capture_world_y[2]", body)
+        self.assertIn("WsShadowSetCaptureWorld", body)
+        self.assertIn("WsShadowSetNativeViewportInset", body)
+        self.assertIn("capture_world_x[layer] = Dkc1VideoUnwrapPpuScroll", body)
+        self.assertIn("g_ppu->hScroll[layer], candidate_world_x[layer]", body)
+        self.assertIn("g_ppu->vScroll[layer], candidate_world_y[layer]", body)
         self.assertIn("camera_x,", body)
         self.assertIn("camera_y,", body)
         calibration = body.split("const uint32_t calibration_x", 1)[1].split(
@@ -378,6 +385,47 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("snapshot.definitionBank = s_ws_definition_bank", game)
         self.assertIn("s_ws_definition_bank == 0", game)
 
+        # A host-only edge bias must not become a ROM-map tile offset.  At the
+        # Jungle Hijinxs banana-hoard exit the logical/PPU X is 0 while the
+        # 16:9 presentation camera is biased inward by 43 pixels.  The old
+        # `(source >> 3) - (wx >> 3)` calculation produced -5 and decoded the
+        # wrong margin metatiles.  Both cartridge coordinates are 0 here, so
+        # the authored offset remains 0.  A real vertical-map phase difference
+        # is still retained independently of presentation.
+        ppu_x, presentation_bias, selected_x = 0, 43, 0
+        wx = ppu_x + presentation_bias
+        self.assertEqual((selected_x >> 3) - (ppu_x >> 3), 0)
+        self.assertEqual((selected_x >> 3) - (wx >> 3), -5)
+        ppu_y, selected_y = 0x100, 0
+        self.assertEqual((selected_y >> 3) - (ppu_y >> 3), -32)
+
+        offset_block = body.split("const int64_t best_offset_x", 1)[1].split(
+            "const bool calibrated", 1)[0]
+        self.assertIn("cartridge_ppu_x >> 3", offset_block)
+        self.assertIn("cartridge_ppu_y >> 3", offset_block)
+        self.assertNotIn("wx >> 3", offset_block)
+        self.assertNotIn("wy >> 3", offset_block)
+
+        # A +43 presentation shift leaves only destination X=0..212 backed
+        # by the cartridge's authentic 0..255 strip. World tiles 32 onward
+        # must come from the ROM/shadow path even though they are drawn inside
+        # the nominal native destination area.
+        stock_x, bias, extra, guard = 0, 43, 71, 8
+        presentation_x = stock_x + bias
+        rendered_right_tx = (
+            presentation_x + 255 + extra + guard) >> 3
+        stock_right_tx = (stock_x + 255) >> 3
+        self.assertEqual(256 - bias, 213)
+        self.assertEqual(stock_right_tx, 31)
+        self.assertGreater(rendered_right_tx, stock_right_tx)
+
+        prefill = body.split("Prefill every rendered column", 1)[1]
+        self.assertIn("stock_left_tx", prefill)
+        self.assertIn("stock_right_tx", prefill)
+        self.assertIn("left_margin_tiles", prefill)
+        self.assertIn("right_margin_tiles", prefill)
+        self.assertNotIn("(wx >> 3) + 32 + i", prefill)
+
     def test_underwater_boundary_continuation_is_margin_only(self):
         game = (ROOT / "runner" / "dkc1_game.c").read_text(
             encoding="utf-8")
@@ -392,7 +440,7 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         # The continuation is deliberately inside the ROM margin prefill,
         # after the native calibration/commit boundary. It is gated to the
         # exact mode/level and split-bank source proven by the repro.
-        prefill = body.index("/* Prefill the margin columns")
+        prefill = body.index("/* Prefill every rendered column")
         continuation = body.index("allow_underwater_boundary")
         self.assertLess(prefill, continuation)
         self.assertIn("Dkc1ReadWram16(0x0030) == 0x0061u", body)
@@ -631,6 +679,7 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             self.assertIn(symbol, shadow_h)
             self.assertIn(symbol, shadow_c)
         self.assertIn("kWsSnapshotMagic", shadow_c)
+        self.assertIn("kWsSnapshotVersion = 2", shadow_c)
         self.assertIn("SnapshotCellCount", shadow_c)
         self.assertIn("Validate the entire variable-length stream", shadow_c)
 

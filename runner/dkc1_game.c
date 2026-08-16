@@ -1251,6 +1251,8 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
   bool candidate_valid[2] = {false, false};
   uint32_t candidate_world_x[2] = {0, 0};
   uint32_t candidate_world_y[2] = {0, 0};
+  uint32_t capture_world_x[2] = {0, 0};
+  uint32_t capture_world_y[2] = {0, 0};
   for (int layer = 0; layer < 2; layer++) {
     const uint8_t bit = (uint8_t)(1u << layer);
     if (!(layer_mask & bit))
@@ -1270,6 +1272,14 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       candidate_world_y[layer] = Dkc1VideoUnwrapPpuScroll(
           (uint16_t)g_ppu->vScroll[layer], anchor_y);
     }
+    /* Presentation bias changes which world pixels the host displays; it
+     * does not change the 256-pixel strip the cartridge populated in VRAM.
+     * Resolve that authentic strip independently so stale rolling-map
+     * headroom cannot be captured under shifted world coordinates. */
+    capture_world_x[layer] = Dkc1VideoUnwrapPpuScroll(
+        g_ppu->hScroll[layer], candidate_world_x[layer]);
+    capture_world_y[layer] = Dkc1VideoUnwrapPpuScroll(
+        g_ppu->vScroll[layer], candidate_world_y[layer]);
     candidate_valid[layer] = true;
 
     if (trace) {
@@ -1296,12 +1306,14 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
    * with Layer1X/Layer1Y. Score both cartridge-authentic coordinate systems
    * against the native ring. The winning tile delta is then applied only to
    * ROM decoding; shadow placement remains in presentation coordinates. */
+  const uint32_t cartridge_ppu_x = capture_world_x[terrain_layer];
+  const uint32_t cartridge_ppu_y = capture_world_y[terrain_layer];
   const uint32_t calibration_x[2] = {
-      Dkc1VideoUnwrapPpuScroll(g_ppu->hScroll[terrain_layer], camera_x),
+      cartridge_ppu_x,
       camera_x,
   };
   const uint32_t calibration_y[2] = {
-      Dkc1VideoUnwrapPpuScroll(g_ppu->vScroll[terrain_layer], camera_y),
+      cartridge_ppu_y,
       camera_y,
   };
   Dkc1LevelLayout best = kDkc1LayoutUnknown;
@@ -1343,12 +1355,20 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       trace->calibration_decodable[index] = layout_decodable;
     }
   }
+  /* Decoder offsets describe an authored cartridge coordinate difference,
+   * never a host presentation-camera shift.  Near a level edge `wx` includes
+   * the up-to-43-pixel inward presentation bias.  Subtracting it here turned
+   * that pixel bias into a -5/-6 tile ROM-map offset: the west margin became
+   * blank and the east margin decoded unrelated jungle metatiles.  Compare
+   * the selected cartridge source against the unbiased PPU source instead.
+   * The shadow's `worldX + screenX` already accounts for the presentation
+   * shift exactly, including its sub-tile phase. */
   const int64_t best_offset_x =
       (int64_t)(calibration_x[best_coordinate_source] >> 3) -
-      (int64_t)(wx >> 3);
+      (int64_t)(cartridge_ppu_x >> 3);
   const int64_t best_offset_y =
       (int64_t)(calibration_y[best_coordinate_source] >> 3) -
-      (int64_t)(wy >> 3);
+      (int64_t)(cartridge_ppu_y >> 3);
   const bool calibrated =
       best_decodable >= 64 && best_matches * 10 >= best_decodable * 7 &&
       best_offset_x >= INT8_MIN && best_offset_x <= INT8_MAX &&
@@ -1424,6 +1444,8 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
           (uint64_t)kDkc1VideoNativeWidth + Dkc1VideoExtra() + 8u;
       uint64_t min_x = candidate_world_x[layer];
       uint64_t max_x = candidate_world_x[layer];
+      if (capture_world_x[layer] < min_x) min_x = capture_world_x[layer];
+      if (capture_world_x[layer] > max_x) max_x = capture_world_x[layer];
       if (layer == terrain_layer) {
         if (lower_bound < min_x) min_x = lower_bound;
         if (upper_bound > max_x) max_x = upper_bound;
@@ -1441,16 +1463,18 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
         if (base_x > wanted_lo)
           return false;
       }
-      const uint64_t wanted_y =
-          candidate_world_y[layer] > 8u
-              ? candidate_world_y[layer] - 8u : 0;
+      uint64_t min_y = candidate_world_y[layer];
+      if (capture_world_y[layer] < min_y) min_y = capture_world_y[layer];
+      const uint64_t wanted_y = min_y > 8u ? min_y - 8u : 0;
       s_ws_shadow_origin_x[layer] = (uint32_t)base_x;
       s_ws_shadow_origin_y[layer] =
           (uint32_t)(wanted_y & ~UINT64_C(0xff));
       s_ws_shadow_origin_valid[layer] = true;
     }
     if (candidate_world_x[layer] < s_ws_shadow_origin_x[layer] ||
-        candidate_world_y[layer] < s_ws_shadow_origin_y[layer])
+        candidate_world_y[layer] < s_ws_shadow_origin_y[layer] ||
+        capture_world_x[layer] < s_ws_shadow_origin_x[layer] ||
+        capture_world_y[layer] < s_ws_shadow_origin_y[layer])
       return false;
     shadow_world_x[layer] =
         candidate_world_x[layer] - s_ws_shadow_origin_x[layer];
@@ -1460,8 +1484,16 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
                             kDkc1VideoNativeWidth + Dkc1VideoExtra() + 8u;
     const uint64_t last_y = (uint64_t)shadow_world_y[layer] +
                             kDkc1VideoHeight + 8u;
+    const uint64_t capture_last_x =
+        (uint64_t)(capture_world_x[layer] - s_ws_shadow_origin_x[layer]) +
+        kDkc1VideoNativeWidth + 8u;
+    const uint64_t capture_last_y =
+        (uint64_t)(capture_world_y[layer] - s_ws_shadow_origin_y[layer]) +
+        kDkc1VideoHeight + 8u;
     if (last_x >= (uint64_t)kWsShadowXTiles * 8u ||
-        last_y >= (uint64_t)kWsShadowYTiles * 8u)
+        last_y >= (uint64_t)kWsShadowYTiles * 8u ||
+        capture_last_x >= (uint64_t)kWsShadowXTiles * 8u ||
+        capture_last_y >= (uint64_t)kWsShadowYTiles * 8u)
       return false;
   }
   if (trace) {
@@ -1501,9 +1533,15 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     s_ws_origin_valid[layer] = candidate_valid[layer];
 
     WsShadowSetWorld(layer, shadow_world_x[layer], shadow_world_y[layer]);
-    WsShadowSetScroll(layer,
-                      (uint16_t)(g_ppu->hScroll[layer] + presentation_bias),
-                      g_ppu->vScroll[layer]);
+    WsShadowSetCaptureWorld(
+        layer, capture_world_x[layer] - s_ws_shadow_origin_x[layer],
+        capture_world_y[layer] - s_ws_shadow_origin_y[layer]);
+    const int64_t presentation_delta =
+        (int64_t)candidate_world_x[layer] - (int64_t)capture_world_x[layer];
+    WsShadowSetNativeViewportInset(
+        layer, presentation_delta < 0 ? (int)-presentation_delta : 0,
+        presentation_delta > 0 ? (int)presentation_delta : 0);
+    WsShadowSetScroll(layer, g_ppu->hScroll[layer], g_ppu->vScroll[layer]);
     WsShadowSetCaptureCols(layer, 0);
     WsShadowSetWestKeep(layer, keep_tiles);
     WsShadowSetEastKeep(layer, keep_tiles);
@@ -1582,7 +1620,11 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
   if (cartridge_stream_ready || accepted_layout == kDkc1LayoutUnknown)
     return true;
 
-  /* Prefill the margin columns (plus one guard tile each side) from ROM. */
+  /* Prefill every rendered column outside the cartridge-authentic 256px
+   * viewport, plus one guard tile for fine scroll. Near a level boundary the
+   * host shifts presentation inward, so this includes part of destination
+   * X=0..255; treating that area as native was the edge-map vertical-repeat
+   * regression. */
   uint16_t blank_entry = 0;
   Dkc1VideoFindTransparent4bppTile(
       g_ppu->vram, 0x8000u,
@@ -1591,7 +1633,26 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
    * tile for fine scroll.  The old floor division seeded only six columns;
    * a nonzero scroll phase could sample the unseeded seventh column as the
    * thin black strip at the far-left edge. */
-  const int margin_tiles = (Dkc1VideoExtra() + 7) / 8 + 1;
+  const uint32_t guard = 8u;
+  const uint32_t rendered_left_px =
+      wx > (uint32_t)Dkc1VideoExtra() + guard
+          ? wx - (uint32_t)Dkc1VideoExtra() - guard : 0u;
+  const uint32_t rendered_right_px =
+      wx + kDkc1VideoNativeWidth - 1u +
+      (uint32_t)Dkc1VideoExtra() + guard;
+  const uint32_t rendered_left_tx = rendered_left_px >> 3;
+  const uint32_t rendered_right_tx = rendered_right_px >> 3;
+  const uint32_t stock_left_tx = cartridge_ppu_x >> 3;
+  const uint32_t stock_right_tx =
+      (cartridge_ppu_x + kDkc1VideoNativeWidth - 1u) >> 3;
+  const int left_margin_tiles =
+      stock_left_tx > rendered_left_tx
+          ? (int)(stock_left_tx - rendered_left_tx) : 0;
+  const int right_margin_tiles =
+      rendered_right_tx > stock_right_tx
+          ? (int)(rendered_right_tx - stock_right_tx) : 0;
+  const int margin_tiles = left_margin_tiles > right_margin_tiles
+                               ? left_margin_tiles : right_margin_tiles;
   if (trace) {
     trace->prefill = true;
     trace->margin_tiles = margin_tiles;
@@ -1611,16 +1672,18 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       map_bank == 0xe9u && alternate_definition_bank == 0xd0u &&
       accepted_definition_bank == 0xd0u;
   const uint32_t native_edge_tile_x[2] = {
-      wx >> 3,
-      (wx + kDkc1VideoNativeWidth - 1u) >> 3,
+      stock_left_tx,
+      stock_right_tx,
   };
   const uint16_t character_base =
       (uint16_t)PPU_bgTileAdr(g_ppu, terrain_layer);
   for (int side = 0; side < 2; side++) {
-    for (int i = 0; i < margin_tiles; i++) {
+    const int side_margin_tiles =
+        side == 0 ? left_margin_tiles : right_margin_tiles;
+    for (int i = 0; i < side_margin_tiles; i++) {
       const int64_t signed_wtx =
-          side == 0 ? (int64_t)(wx >> 3) - 1 - i
-                    : (int64_t)(wx >> 3) + 32 + i;
+          side == 0 ? (int64_t)stock_left_tx - 1 - i
+                    : (int64_t)stock_right_tx + 1 + i;
       if (signed_wtx < 0)
         continue;
       const uint32_t wtx = (uint32_t)signed_wtx;
