@@ -91,8 +91,12 @@ window are below this lean mode's resolution; use force_lle + `DKC1_TRACE_PC`
 for instruction/store-level attribution. Invalid/overlapping/out-of-WRAM specs
 fail closed, and `reverse_watch.py` refuses conclusions from truncated logs.
 
-**Engine diagnostics:** `SNESRECOMP_DSPOUT`, `SNESRECOMP_*_TRACE_FILE`,
+**Engine diagnostics:** `SNESRECOMP_PPU_PROFILE` (tool build only; aggregate
+per-stage renderer CPU time at exit), `SNESRECOMP_DSPOUT`, `SNESRECOMP_*_TRACE_FILE`,
 `SNESRECOMP_OFFRAILS_STDERR`, `SNESRECOMP_APU_TOUCH_CYCLES`.
+The tool build also retains `SNESRECOMP_STACKBAL_AUDIT`; normal player builds
+compile out its per-return hash-table update while preserving the semantic
+recomp call stack and interpreter/AOT return handling.
 
 ## Route DSL (`recipes/*.dks`)
 
