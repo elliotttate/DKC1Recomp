@@ -27,13 +27,13 @@ if ! compgen -G "$repo_dir/generated/snesrecomp/*.c" >/dev/null; then
   python3 "$repo_dir/scripts/generate_snesrecomp.py" --rom "$rom_path"
 fi
 
+# CMake writes Info.plist while generating the build tree. Remove the old
+# bundle before configure so a clean bundle gets fresh metadata and resources.
+cmake -E remove_directory "$build_dir/DKC1Recomp.app"
 cmake -S "$repo_dir" -B "$build_dir" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DSNESRECOMP_SDL_BACKEND=SDL2 \
   -DCMAKE_PREFIX_PATH="$(sdl2-config --prefix)"
-# Recreate the bundle itself so Finder never retains a resource-less
-# incremental app from an earlier build.
-cmake -E remove_directory "$build_dir/DKC1Recomp.app"
 cmake --build "$build_dir" --target dkc1_macos dkc1_snesrecomp_headless --parallel
 
 # Make the app bundle independent of the Homebrew install used to build it.
