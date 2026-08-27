@@ -103,8 +103,9 @@ brew install cmake ninja sdl2
 open build/macos/DKC1Recomp.app
 ```
 
-The arm64 app includes its SDL2 runtime and opens a native ROM picker when
-launched without arguments; the ROM is never copied into the app. Keyboard
+The arm64 app targets macOS 26 or newer, includes its SDL2 runtime, and opens a
+native ROM picker when launched without arguments; the ROM is never copied into
+the app. Keyboard
 controls match Windows (arrows, Z/X/S/A, Q/W, Return, Right Shift), and SDL
 game controllers are supported. F7 pauses, F8 steps, F9 exports an armed
 flight-recorder bundle, F11/F12 quick-save/load, and Option-Return toggles

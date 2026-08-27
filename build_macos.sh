@@ -32,6 +32,7 @@ fi
 cmake -E remove_directory "$build_dir/DKC1Recomp.app"
 cmake -S "$repo_dir" -B "$build_dir" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
   -DSNESRECOMP_SDL_BACKEND=SDL2 \
   -DCMAKE_PREFIX_PATH="$(sdl2-config --prefix)"
 cmake --build "$build_dir" --target dkc1_macos dkc1_snesrecomp_headless --parallel
