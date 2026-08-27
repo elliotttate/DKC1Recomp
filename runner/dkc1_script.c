@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define Dkc1StrDup _strdup
+#else
+#define Dkc1StrDup strdup
+#endif
+
 enum Dkc1ScriptOpKind {
   kOpInput,      /* mask for count frames */
   kOpWait,       /* neutral/held mask until predicate or timeout */
@@ -296,7 +302,7 @@ bool Dkc1ScriptLoad(const char *path, char *error, size_t error_size) {
         step.kind = strcmp(tokens[0], "checkpoint") == 0 ? kOpCheckpoint
                     : strcmp(tokens[0], "state_save") == 0 ? kOpStateSave
                                                            : kOpStateLoad;
-        step.text = _strdup(tokens[1]);
+        step.text = Dkc1StrDup(tokens[1]);
         ok = step.text && AppendStep(&step, line);
       }
     } else {

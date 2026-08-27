@@ -816,6 +816,34 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("case kMenuAspectWidescreen:", source)
         self.assertIn("SetAspectMode(1);", source)
 
+    def test_macos_host_presents_on_an_absolute_native_deadline(self):
+        source = (ROOT / "runner" / "sdl_host.c").read_text(
+            encoding="utf-8")
+        self.assertIn("mach_wait_until", source)
+        self.assertIn("kNativeFramesPerSecond = 60.098811862", source)
+        self.assertIn("FramePacerWaitForWorkWindow(&pacer);", source)
+        self.assertIn("lateness > pacer->frequency / 500.0", source)
+        self.assertNotIn("ticks_per_frame * 8.0", source)
+
+        loop = source.split("while (s_running) {", 1)[1]
+        self.assertLess(loop.index("FramePacerWaitForWorkWindow(&pacer);"),
+                        loop.index("const double work_start"))
+        active = loop.split("const double work_start", 1)[1].split(
+            "if (s_smoke_test_frames", 1)[0]
+        self.assertLess(active.index("PollInput()"),
+                        active.index("FramePacerRecordWork"))
+        self.assertLess(active.index(
+            "FramePacerWaitUntil(pacer.next_deadline"),
+            active.index("Present();"))
+
+        self.assertIn("s_reanchor_pacer = 1;", source.split(
+            "static void QuickLoad", 1)[1].split(
+                "static void ExportRepro", 1)[0])
+        pause = source.split("key == SDLK_F7", 1)[1].split(
+            "key == SDLK_F8", 1)[0]
+        self.assertIn("s_reanchor_pacer = 1;", pause)
+        self.assertIn('EnvironmentEnabled("DKC1_FPS_STATS")', source)
+
     def test_jump_animation_exit_callback_is_in_dispatch_contract(self):
         config = (ROOT / "recomp" / "bankbe.cfg").read_text(
             encoding="utf-8")

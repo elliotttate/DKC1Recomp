@@ -22,6 +22,8 @@ enum {
 extern bool g_ws_active;
 extern int g_ws_extra;
 
+struct CpuState;
+
 void Dkc1VideoSetWidescreen(bool enabled);
 bool Dkc1VideoIsWidescreen(void);
 void Dkc1VideoSetTerrainReady(bool ready);
@@ -85,7 +87,6 @@ uint16_t Dkc1VideoMergeOamSizeAndXHigh(uint16_t existing_word,
                                       uint16_t size_mask,
                                       uint16_t screen_x);
 
-struct CpuState;
 /* The stock vertical row builder refreshes only 36 tile entries before its
  * full 64-entry ring DMA.  That is enough for the native viewport, but wide
  * vertical motion can expose stale entries beyond it.  Generated wrappers

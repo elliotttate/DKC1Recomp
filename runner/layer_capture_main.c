@@ -18,10 +18,18 @@
 #include "common_rtl.h"
 #include "snes/snes.h"
 
-#include <direct.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <direct.h>
+#define Dkc1MakeDir(path) _mkdir(path)
+#define Dkc1SetEnv(name, value) _putenv_s((name), (value))
+#else
+#include <sys/stat.h>
+#define Dkc1MakeDir(path) mkdir((path), 0755)
+#define Dkc1SetEnv(name, value) setenv((name), (value), 0)
+#endif
 
 static uint8_t s_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
 static uint8_t s_backdrop[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
@@ -69,9 +77,9 @@ int main(int argc, char **argv) {
   /* Contain default-named tier2 discovery captures instead of littering
    * the working directory; explicit env settings are respected. */
   if (!getenv("SNESRECOMP_TIER2_DIR") && !getenv("SNESRECOMP_TIER2_MANIFEST")) {
-    _mkdir("build");
-    _mkdir("build/tier2");
-    _putenv("SNESRECOMP_TIER2_DIR=build/tier2");
+    Dkc1MakeDir("build");
+    Dkc1MakeDir("build/tier2");
+    Dkc1SetEnv("SNESRECOMP_TIER2_DIR", "build/tier2");
   }
   if (argc != 4) {
     fprintf(stderr,

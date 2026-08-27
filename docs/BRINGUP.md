@@ -141,3 +141,51 @@ camera/world, and center-pixel state before reporting a stable-input margin
 mutation. This is the causal substrate for the planned provenance
 overlay, first-divergence locator, and lifecycle tools. See
 `docs/WIDESCREEN_DEBUG_TOOLS.md` for usage and schema details.
+
+## 2026-08-27 — native macOS host and deadline frame pacing
+
+- **Symptom:** the first native SDL host presented each completed frame and
+  then used relative `SDL_Delay` calls. Variable emulation, AppKit, and
+  renderer cost therefore appeared as alternating short/long submissions.
+  Its eight-frame late guard could also burst several frames after a short
+  pause.
+- **Root cause/domain:** host presentation timing only. Cartridge state,
+  streaming, activation, gameplay coordinates, and generated code were not
+  involved.
+- **Change:** the arm64 macOS host now schedules the native NTSC cadence
+  (60.098811862 Hz) on absolute Mach deadlines. It coarse-waits until an
+  adaptive measured-work window, samples input, runs one cartridge frame,
+  fine-waits, and presents. A miss over 2 ms re-anchors instead of catching
+  up. Pause/resume, single-step, save/load, focus, resizing, fullscreen, and
+  aspect changes explicitly re-anchor. `DKC1_FPS_STATS=1` reports submission
+  intervals, measured host work, stalls, and re-anchors. This is deliberately
+  host-only and does not skip or synthesize cartridge frames.
+- **Source/build:** clean USA ROM SHA-256
+  `fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15`;
+  source commit `b404cb7` plus the working-tree macOS changes; final measured
+  arm64 executable SHA-256
+  `6b0c7ebf7e321a199e7e873208475cc42057cccfe44f8bcfc336ae84c76f6dbf`.
+- **Determinism:** three independent 600-frame headless runs were
+  byte-identical, including full logs. Frame SHA-256 was
+  `a7366146a96b47e75d48d3814bfe0859c71f68bcc3fac3d7429befb9b50430dd`;
+  WRAM `405229e90a31728901261cf0c9804b1cad668ba78ec99a94ea096010ed8ae792`;
+  VRAM `628205f68fcfb17ebff713087d104ca0d896205b38855678dc0578b5386b6aec`;
+  CGRAM `ab7733ad35514f04d2ddaacc0298a3d9dfe983857bf465c2b96ce1300eb8c4a1`;
+  OAM `44ddd2f478477ebd1c1cd5b99400af48cd46033c59173195f48870e608cec810`.
+- **Visible QA:** a real 1,200-frame application-window run on an Apple M3
+  Max/Liquid Retina XDR display completed normally. Including three host
+  stalls, submission telemetry reported 59.706 Hz average, 16.749 ms average
+  interval, 15.330-44.712 ms range, three intervals over 1.25 native frames,
+  2.336 ms average measured work, and 26.788 ms maximum work. The pacer
+  re-anchored rather than issuing catch-up bursts. These are host-submission
+  timestamps, not WindowServer scanout timestamps. Raw output is retained at
+  `build/macos/pacing-validation/visible_1200.log`.
+- **Validation:** `./build_macos.sh`, 205 Python tests (one unavailable local
+  imported-state fixture skipped), `git diff --check`, deep ad-hoc signature
+  verification, visible native menu/aspect QA, and the three-repeat headless
+  gate passed.
+- **Residual scope:** this validates boot/title presentation and host timing,
+  not the complete gameplay/cross-layout matrix. Extended gameplay pacing,
+  explicit fixed-60-Hz versus adaptive-refresh display comparison, and direct
+  compositor/scanout measurement remain untested. No widescreen capability or
+  gameplay behavior was promoted by this change.

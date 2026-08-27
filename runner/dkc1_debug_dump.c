@@ -15,6 +15,12 @@
 #define MakeDir(path) mkdir(path, 0777)
 #endif
 
+#ifdef _WIN32
+#define Dkc1StrDup _strdup
+#else
+#define Dkc1StrDup strdup
+#endif
+
 enum {
   kWramSize = 0x20000,
   kOamShadowBase = 0x0200,
@@ -197,7 +203,7 @@ static void Initialize(void) {
 
   setting = getenv("DKC1_SESSION_DIR");
   if (setting && *setting)
-    s_session_dir = _strdup(setting);
+    s_session_dir = Dkc1StrDup(setting);
 }
 
 static void CollectOam(uint8_t out[2][kOamBytes]) {

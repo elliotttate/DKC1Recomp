@@ -4,6 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#define Dkc1StrCaseCmp _stricmp
+#else
+#include <strings.h>
+#define Dkc1StrCaseCmp strcasecmp
+#endif
 
 /* Rendered-blank margin detector.
  *
@@ -107,9 +113,9 @@ void Dkc1BlankScanFrame(long host_frame, const uint8_t *pixels, int width,
     const char *auto_export = getenv("DKC1_AUTO_EXPORT");
     s_active = (path && *path) ||
         (auto_export && *auto_export && strcmp(auto_export, "0") != 0 &&
-         _stricmp(auto_export, "false") != 0 &&
-         _stricmp(auto_export, "off") != 0 &&
-         _stricmp(auto_export, "no") != 0);
+         Dkc1StrCaseCmp(auto_export, "false") != 0 &&
+         Dkc1StrCaseCmp(auto_export, "off") != 0 &&
+         Dkc1StrCaseCmp(auto_export, "no") != 0);
     if (path && *path)
       s_log = fopen(path, "wb");
   }

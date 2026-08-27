@@ -7,8 +7,8 @@ framework — following the working [`DKC2Recomp`](https://github.com/Nicktendon
 project (same Rare engine family) as the template.
 
 **Status: playable bring-up.** The project has 100% statically generated game
-code, a headless validation host, a playable Win32 host, continuous audio, and
-an opt-in 342x224 widescreen presentation path. See `docs/BRINGUP.md` for the
+code, a headless validation host, playable Windows and native macOS hosts,
+continuous audio, and an opt-in 342x224 widescreen presentation path. See `docs/BRINGUP.md` for the
 chronological bring-up record and `docs/WIDESCREEN.md` for the widescreen
 architecture, ported SuperZSNES findings, validation, and limitations.
 
@@ -91,6 +91,28 @@ The desktop host enables widescreen by default. Set `DKC1_WIDESCREEN=0` for
 the exact 256x224 presentation path. The headless validator accepts a frame
 count and supports deterministic input playback and private frame/state
 captures; its environment variables are documented in `docs/BRINGUP.md`.
+
+### macOS
+
+Install CMake, Ninja, and SDL2, then provide the same verified ROM the first
+time private generated sources are needed:
+
+```sh
+brew install cmake ninja sdl2
+./build_macos.sh "/path/to/Donkey Kong Country (USA).sfc"
+open build/macos/DKC1Recomp.app
+```
+
+The arm64 app includes its SDL2 runtime and opens a native ROM picker when
+launched without arguments; the ROM is never copied into the app. Keyboard
+controls match Windows (arrows, Z/X/S/A, Q/W, Return, Right Shift), and SDL
+game controllers are supported. F7 pauses, F8 steps, F9 exports an armed
+flight-recorder bundle, F11/F12 quick-save/load, and Option-Return toggles
+fullscreen. Native Game and View menus expose those commands plus checked
+aspect-ratio, layer, and provenance options. Saves and diagnostics live under
+macOS Application Support. The host presents on the native 60.0988 Hz SNES
+cadence using an absolute Mach-clock deadline; set `DKC1_FPS_STATS=1` to print
+submission-interval, workload, and re-anchor telemetry when it exits.
 
 For visible widescreen debugging, `F7` pauses or resumes, `F8` advances one
 frame while paused, and `F9` exports the rolling repro history when the flight
