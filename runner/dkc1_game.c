@@ -1212,6 +1212,94 @@ static int64_t Dkc1NearestTileDelta(uint32_t source_pixels,
                           : (pixel_delta - 3) / 8;
 }
 
+/* Prove that an empty lateral metatile belongs to a vertical room's authored
+ * wall boundary without consulting a level or entrance ID. Horizontal maps
+ * use their side cells as forward/backward terrain, so an empty cell there is
+ * never evidence for continuation. For a vertical map, accept only a wholly
+ * transparent target and a fully populated source between it and the stock
+ * viewport. A partial intervening metatile is an authored opening and fails
+ * closed. Requiring the same empty/full pair in an adjacent metatile row
+ * distinguishes a continuing wall from an isolated platform or decoration.
+ *
+ * West margins retain the stock-edge source because cells farther west are
+ * outside the cartridge viewport. East margins may use the nearest complete
+ * authored block on the path back to the stock edge; this covers a complete
+ * offscreen wall block followed by unused transparent map cells. */
+static bool Dkc1FindVerticalBoundarySource(
+    Dkc1LevelLayout layout, uint8_t map_bank, uint8_t definition_bank,
+    uint16_t map_base, uint16_t metatile_base, int side,
+    uint32_t target_metatile_x, uint32_t edge_metatile_x,
+    uint32_t metatile_y, uint16_t character_base,
+    uint32_t *source_metatile_x) {
+  if (!source_metatile_x || layout != kDkc1LayoutVertical ||
+      side < 0 || side > 1)
+    return false;
+  if ((side == 0 && target_metatile_x >= edge_metatile_x) ||
+      (side == 1 && target_metatile_x <= edge_metatile_x))
+    return false;
+
+  bool target_empty = false, target_full = false;
+  if (!Dkc1VideoClassifyLevelMetatile(
+          layout, map_bank, definition_bank, map_base, metatile_base,
+          target_metatile_x, metatile_y, g_ppu->vram, 0x8000u,
+          character_base, &target_empty, &target_full) || !target_empty)
+    return false;
+
+  uint32_t source_x = edge_metatile_x;
+  bool source_found = false;
+  if (side == 0) {
+    bool source_empty = false, source_full = false;
+    source_found = Dkc1VideoClassifyLevelMetatile(
+        layout, map_bank, definition_bank, map_base, metatile_base,
+        source_x, metatile_y, g_ppu->vram, 0x8000u, character_base,
+        &source_empty, &source_full) && source_full;
+  } else {
+    for (uint32_t candidate = target_metatile_x - 1u;; candidate--) {
+      bool candidate_empty = false, candidate_full = false;
+      if (!Dkc1VideoClassifyLevelMetatile(
+              layout, map_bank, definition_bank, map_base, metatile_base,
+              candidate, metatile_y, g_ppu->vram, 0x8000u,
+              character_base, &candidate_empty, &candidate_full))
+        return false;
+      if (candidate_full) {
+        source_x = candidate;
+        source_found = true;
+        break;
+      }
+      if (!candidate_empty)
+        return false;
+      if (candidate == edge_metatile_x)
+        break;
+    }
+  }
+  if (!source_found)
+    return false;
+
+  int corroborating_rows = 1;
+  for (int delta = -1; delta <= 1; delta += 2) {
+    if (delta < 0 && metatile_y == 0)
+      continue;
+    const uint32_t neighbor_y = (uint32_t)((int64_t)metatile_y + delta);
+    bool neighbor_target_empty = false, neighbor_target_full = false;
+    bool neighbor_source_empty = false, neighbor_source_full = false;
+    if (Dkc1VideoClassifyLevelMetatile(
+            layout, map_bank, definition_bank, map_base, metatile_base,
+            target_metatile_x, neighbor_y, g_ppu->vram, 0x8000u,
+            character_base, &neighbor_target_empty, &neighbor_target_full) &&
+        Dkc1VideoClassifyLevelMetatile(
+            layout, map_bank, definition_bank, map_base, metatile_base,
+            source_x, neighbor_y, g_ppu->vram, 0x8000u, character_base,
+            &neighbor_source_empty, &neighbor_source_full) &&
+        neighbor_target_empty && neighbor_source_full)
+      corroborating_rows++;
+  }
+  if (corroborating_rows < 2)
+    return false;
+
+  *source_metatile_x = source_x;
+  return true;
+}
+
 static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
                                         int presentation_bias,
                                         bool cartridge_stream_ready,
@@ -1381,23 +1469,17 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
    * the selected cartridge source against the unbiased PPU source instead.
    * The shadow's `worldX + screenX` already accounts for the presentation
    * shift exactly, including its sub-tile phase. */
-  /* Keep this correction scoped to the proven Slip-Slide Ride scene until
-   * the complete all-entrance matrix has promoted signed-delta quantization
-   * as a global capability. Other layouts retain their accepted byte-for-
-   * byte calibration path. */
-  const bool use_smoothed_camera_delta =
-      identity.mode == 0x0009u && identity.level == 0x0051u &&
-      identity.entrance == 0x006du;
-  const int64_t best_offset_x = use_smoothed_camera_delta
-      ? Dkc1NearestTileDelta(
-            calibration_x[best_coordinate_source], cartridge_ppu_x)
-      : (int64_t)(calibration_x[best_coordinate_source] >> 3) -
-            (int64_t)(cartridge_ppu_x >> 3);
-  const int64_t best_offset_y = use_smoothed_camera_delta
-      ? Dkc1NearestTileDelta(
-            calibration_y[best_coordinate_source], cartridge_ppu_y)
-      : (int64_t)(calibration_y[best_coordinate_source] >> 3) -
-            (int64_t)(cartridge_ppu_y >> 3);
+  /* Convert between the two cartridge-authentic pixel coordinates before
+   * quantizing to tiles. This is a coordinate-domain rule, not a room
+   * capability: independently truncating the absolute positions makes the
+   * result depend on which side of an 8px boundary each source happens to
+   * occupy. The signed delta remains zero for +/-4px camera smoothing, moves
+   * only after a real five-pixel crossing, and preserves exact authored
+   * phases such as +/-512px as +/-64 tiles. */
+  const int64_t best_offset_x = Dkc1NearestTileDelta(
+      calibration_x[best_coordinate_source], cartridge_ppu_x);
+  const int64_t best_offset_y = Dkc1NearestTileDelta(
+      calibration_y[best_coordinate_source], cartridge_ppu_y);
   const bool calibrated =
       best_decodable >= 64 && best_matches * 10 >= best_decodable * 7 &&
       best_offset_x >= INT8_MIN && best_offset_x <= INT8_MAX &&
@@ -1687,24 +1769,11 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
     trace->margin_tiles = margin_tiles;
   }
   const int visible_rows = (kDkc1VideoHeight >> 3) + 2;
-  /* Croctopus Chase's vertical room map leaves some 32x32 cells immediately
-   * outside the stock viewport fully transparent because the cartridge could
-   * never display them. Continue only a proven lateral wall boundary into a
-   * presentation margin. The target metatile must be wholly transparent and
-   * a fully populated source metatile. On the left, retain the previously
-   * proven native-edge source. On the right, use the nearest complete block
-   * back toward the native viewport: some fixed-width vertical rooms contain
-   * one complete authored wall block just outside the stock viewport followed
-   * by unused map cells, and skipping that nearer block made the outer margin
-   * alternate between wall fragments and water. Partial openings and
-   * decorative edges remain untouched. This does not alter VRAM, WRAM,
-   * collision, streaming, or any native pixel. */
-  const bool allow_underwater_boundary =
-      s_ws_layout == kDkc1LayoutVertical &&
-      Dkc1ReadWram16(0x0032) == 0x0003u &&
-      Dkc1ReadWram16(0x0030) == 0x0061u &&
-      map_bank == 0xe9u && alternate_definition_bank == 0xd0u &&
-      accepted_definition_bank == 0xd0u;
+  /* Some vertical rooms end their authored lateral wall at the stock view and
+   * leave never-visible map cells transparent. Continue only boundaries that
+   * pass Dkc1FindVerticalBoundarySource's structural proof. The rule is based
+   * on layout and source topology, not a room allowlist, and remains confined
+   * to host margin prefill; partial art and every native pixel are untouched. */
   const uint32_t native_edge_tile_x[2] = {
       stock_left_tx,
       stock_right_tx,
@@ -1746,51 +1815,24 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
         const int64_t signed_decode_edge_wtx =
             (int64_t)native_edge_tile_x[side] +
             accepted_decode_tile_offset_x;
-        if (allow_underwater_boundary && beyond_native_edge &&
-            signed_decode_wtx >= 0 && signed_decode_wty >= 0 &&
-            signed_decode_edge_wtx >= 0) {
-          bool target_empty = false, target_full = false;
+        if (beyond_native_edge && signed_decode_wtx >= 0 &&
+            signed_decode_wty >= 0 && signed_decode_edge_wtx >= 0) {
           const uint32_t decode_metatile_x =
               (uint32_t)signed_decode_wtx >> 2;
           const uint32_t decode_metatile_y =
               (uint32_t)signed_decode_wty >> 2;
           const uint32_t decode_edge_metatile_x =
               (uint32_t)signed_decode_edge_wtx >> 2;
-          if (Dkc1VideoClassifyLevelMetatile(
+          uint32_t source_decode_metatile_x = 0;
+          if (Dkc1FindVerticalBoundarySource(
                   s_ws_layout, map_bank, accepted_definition_bank, map_base,
-                  metatile_base, decode_metatile_x, decode_metatile_y,
-                  g_ppu->vram, 0x8000u, character_base, &target_empty,
-                  &target_full) && target_empty) {
-            uint32_t source_decode_metatile_x = 0;
-            bool source_found = false;
-            int64_t candidate_metatile_x =
-                side == 0 ? (int64_t)decode_edge_metatile_x
-                          : (int64_t)decode_metatile_x - 1;
-            const int64_t candidate_step = side == 0 ? 1 : -1;
-            while (candidate_metatile_x >= 0 &&
-                   (side == 0
-                        ? candidate_metatile_x <=
-                              (int64_t)decode_edge_metatile_x
-                        : candidate_metatile_x >=
-                              (int64_t)decode_edge_metatile_x)) {
-              bool candidate_empty = false, candidate_full = false;
-              if (Dkc1VideoClassifyLevelMetatile(
-                      s_ws_layout, map_bank, accepted_definition_bank,
-                      map_base, metatile_base,
-                      (uint32_t)candidate_metatile_x, decode_metatile_y,
-                      g_ppu->vram, 0x8000u, character_base,
-                      &candidate_empty, &candidate_full) && candidate_full) {
-                source_decode_metatile_x =
-                    (uint32_t)candidate_metatile_x;
-                source_found = true;
-                break;
-              }
-              candidate_metatile_x += candidate_step;
-            }
+                  metatile_base, side, decode_metatile_x,
+                  decode_edge_metatile_x, decode_metatile_y, character_base,
+                  &source_decode_metatile_x)) {
             const uint32_t source_decode_wtx =
                 source_decode_metatile_x * 4u +
                 ((uint32_t)signed_decode_wtx & 3u);
-            if (source_found && Dkc1VideoDecodeLevelTile(
+            if (Dkc1VideoDecodeLevelTile(
                     s_ws_layout, map_bank, accepted_definition_bank, map_base,
                     metatile_base, source_decode_wtx,
                     (uint32_t)signed_decode_wty, &entry) && trace)

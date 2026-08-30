@@ -404,20 +404,20 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("Dkc1NearestTileDelta", offset_block)
         self.assertIn("cartridge_ppu_x", offset_block)
         self.assertIn("cartridge_ppu_y", offset_block)
-        self.assertIn("use_smoothed_camera_delta", offset_block)
-        self.assertIn("identity.mode == 0x0009u", body)
-        self.assertIn("identity.level == 0x0051u", body)
-        self.assertIn("identity.entrance == 0x006du", body)
+        self.assertNotIn("use_smoothed_camera_delta", body)
+        self.assertNotIn("identity.mode == 0x0009u", body)
+        self.assertNotIn("identity.level == 0x0051u", body)
+        self.assertNotIn("identity.entrance == 0x006du", body)
+        self.assertEqual(offset_block.count("Dkc1NearestTileDelta"), 2)
         self.assertNotIn("wx >> 3", offset_block)
         self.assertNotIn("wy >> 3", offset_block)
 
-        # Slip-Slide Ride keeps the logical camera a few pixels ahead of the
-        # rendered BG1 scroll while traversing. Quantizing the signed delta
-        # with a half-tile tie toward zero keeps the observed four-pixel
-        # smoothing drift from flickering the ROM decoder between adjacent
-        # columns. A real five-pixel crossing still advances, and the authored
-        # +/-512px vertical phase still resolves to +/-64 tiles across a PPU
-        # wrap.
+        # Quantizing the signed delta with a half-tile tie toward zero is the
+        # global conversion between the cartridge's logical-camera and PPU
+        # pixel domains. It keeps observed four-pixel smoothing drift from
+        # flickering the ROM decoder between adjacent columns. A real
+        # five-pixel crossing still advances, and authored +/-512px vertical
+        # phases still resolve to +/-64 tiles across a PPU wrap.
         nearest_tile_delta = lambda source, ppu: int(
             ((source - ppu) + (3 if source >= ppu else -3)) / 8)
         self.assertEqual(nearest_tile_delta(816, 815), 0)
@@ -449,7 +449,17 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("right_margin_tiles", prefill)
         self.assertNotIn("(wx >> 3) + 32 + i", prefill)
 
-    def test_underwater_boundary_continuation_is_margin_only(self):
+    def test_shared_shadow_captures_partial_native_right_edge(self):
+        shadow = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
+                  "ws_shadow.c").read_text(encoding="utf-8")
+        self.assertIn("kWsLiveMaxCols = 33", shadow)
+        self.assertIn("kWsSnapshotLiveMaxCols = 32", shadow)
+        self.assertIn("phase ? 1 : 0", shadow)
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        self.assertNotIn("const uint32_t edge_tx", game)
+
+    def test_vertical_boundary_capability_is_structural_and_margin_only(self):
         game = (ROOT / "runner" / "dkc1_game.c").read_text(
             encoding="utf-8")
         video = (ROOT / "runner" / "dkc1_video.c").read_text(
@@ -461,35 +471,39 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
                 "void Dkc1DrawPpuFrame", 1)[0]
 
         # The continuation is deliberately inside the ROM margin prefill,
-        # after the native calibration/commit boundary. It is gated to the
-        # exact mode/level and split-bank source proven by the repro.
+        # after the native calibration/commit boundary. Eligibility comes
+        # from vertical layout plus conservative source topology, never a
+        # level, entrance, mode, or bank allowlist.
         prefill = body.index("/* Prefill every rendered column")
-        continuation = body.index("allow_underwater_boundary")
+        continuation = body.index("Dkc1FindVerticalBoundarySource(", prefill)
         self.assertLess(prefill, continuation)
-        self.assertIn("Dkc1ReadWram16(0x0030) == 0x0061u", body)
-        self.assertIn(
-            "map_bank == 0xe9u && alternate_definition_bank == 0xd0u",
-            body)
-        self.assertIn("accepted_definition_bank == 0xd0u", body)
-        self.assertIn("native_edge_tile_x[2]", body[continuation:])
-        self.assertIn("native_edge_tile_x[side] >> 2", body[continuation:])
-        self.assertIn("side == 0 ?", body[continuation:])
+        capability = game.split(
+            "static bool Dkc1FindVerticalBoundarySource", 1)[1].split(
+                "static bool Dkc1PrepareWidescreenShadow", 1)[0]
+        self.assertIn("layout != kDkc1LayoutVertical", capability)
+        self.assertNotRegex(
+            capability,
+            r"(?:mode|level|entrance)\s*==|0x(?:0003|0061|00bf|00c0)u")
+        self.assertIn("!target_empty", capability)
+        self.assertIn("candidate_full", capability)
+        self.assertIn("!candidate_empty", capability)
+        self.assertIn("corroborating_rows < 2", capability)
+        self.assertIn("native_edge_tile_x[2]", body[prefill:])
+        self.assertIn("native_edge_tile_x[side] >> 2", body[prefill:])
+        self.assertIn("side == 0 ?", body[prefill:])
         self.assertIn("target_metatile_x < native_edge_metatile_x",
-                      body[continuation:])
+                      body[prefill:])
         self.assertIn("target_metatile_x > native_edge_metatile_x",
-                      body[continuation:])
+                      body[prefill:])
 
         # Empty right targets are filled from the nearest completely populated
-        # metatile back toward the native viewport. The already-proven left
-        # behavior deliberately remains anchored to the native edge.
+        # metatile back toward the native viewport. West uses the stock-edge
+        # source; partial intervening art and isolated one-row features fail
+        # closed.
         self.assertIn("Dkc1VideoClassifyLevelMetatile", video)
-        self.assertIn("&& target_empty", body[continuation:])
-        self.assertIn("candidate_metatile_x", body[continuation:])
-        self.assertIn("side == 0 ? (int64_t)decode_edge_metatile_x",
-                      body[continuation:])
-        self.assertIn("candidate_full", body[continuation:])
-        self.assertIn("source_found && Dkc1VideoDecodeLevelTile",
-                      body[continuation:])
+        self.assertIn("target_metatile_x - 1u", capability)
+        self.assertIn("source_x = edge_metatile_x", capability)
+        self.assertIn("Dkc1VideoDecodeLevelTile", body[continuation:])
         self.assertIn("tile_entry & 0x03ffu", video)
         self.assertIn("boundary_continuation_tiles", trace)
 
@@ -890,12 +904,16 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         geometry = host.split(
             "static void ApplyPresentationGeometry", 1)[1].split(
                 "static void ApplyWindowedSize", 1)[0]
+        self.assertIn("SDL_SetTextureScaleMode", geometry)
+        self.assertIn("SDL_ScaleModeLinear", geometry)
+        self.assertIn("SDL_ScaleModeNearest", geometry)
+        self.assertIn("!s_fullscreen_pixel_sharp", geometry)
         self.assertIn("SDL_RenderSetLogicalSize(s_renderer, 0, 0)", geometry)
         self.assertIn("SDL_GetRendererOutputSize", geometry)
         self.assertIn("SDL_RenderSetIntegerScale(s_renderer, SDL_FALSE)",
                       geometry)
         self.assertIn("SDL_RenderSetViewport(s_renderer, NULL)", geometry)
-        present = host.split("static void Present", 1)[1].split(
+        present = host.split("static void PreparePresentation", 1)[1].split(
             "static void OpenFirstController", 1)[0]
         self.assertIn("destination.w = output_width;", present)
         self.assertIn("destination.h = output_height;", present)
@@ -907,6 +925,30 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn('EnvironmentEnabled("DKC1_START_FULLSCREEN")', host)
         self.assertIn("SetFullscreen(1);", host)
 
+    def test_macos_fullscreen_scaling_is_persistent_and_selectable(self):
+        host = (ROOT / "runner" / "sdl_host.c").read_text(encoding="utf-8")
+        header = (ROOT / "runner" / "macos_file_picker.h").read_text(
+            encoding="utf-8")
+        bridge = (ROOT / "runner" / "macos_file_picker.m").read_text(
+            encoding="utf-8")
+        self.assertIn('AddSubmenu(view, @"Full Screen Scaling"', bridge)
+        self.assertIn('@"Smooth (Linear)"', bridge)
+        self.assertIn('@"Pixel Sharp (Nearest)"', bridge)
+        self.assertIn("kDkc1MacMenuFullscreenSmooth", header)
+        self.assertIn("kDkc1MacMenuFullscreenPixelSharp", header)
+        self.assertIn("Dkc1MacSavedFullscreenPixelSharp", bridge)
+        self.assertIn("Dkc1MacSetFullscreenPixelSharp", bridge)
+        self.assertIn('@"DKC1FullscreenPixelSharp"', bridge)
+        self.assertIn(
+            "s_fullscreen_pixel_sharp = Dkc1MacSavedFullscreenPixelSharp();",
+            host)
+        self.assertIn("case kDkc1MacMenuFullscreenSmooth:", host)
+        self.assertIn("SetFullscreenPixelSharp(0);", host)
+        self.assertIn("case kDkc1MacMenuFullscreenPixelSharp:", host)
+        self.assertIn("SetFullscreenPixelSharp(1);", host)
+        self.assertIn("SDL_ScaleModeLinear", host)
+        self.assertIn("SDL_ScaleModeNearest", host)
+
     def test_macos_host_uses_display_link_with_absolute_clock_fallback(self):
         source = (ROOT / "runner" / "sdl_host.c").read_text(
             encoding="utf-8")
@@ -914,15 +956,19 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             encoding="utf-8")
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn("mach_wait_until", source)
-        self.assertIn("kNativeFramesPerSecond = 60.098811862", source)
+        self.assertIn("kHostPresentationFramesPerSecond = 60.0", source)
         self.assertIn("kHostWorkGuardSeconds = 0.006", source)
-        self.assertIn("kMacSubmitLeadSeconds = 0.001", source)
+        self.assertIn("kMacSubmitLeadSeconds = 0.004", source)
         self.assertIn("kMacFinalSpinSeconds = 0.0015", source)
         self.assertIn("frequency * kMacFinalSpinSeconds", source)
         self.assertIn("FramePacerWaitForWorkWindow(&pacer);", source)
         self.assertIn("previous_callback_number, 0.050", source)
         self.assertIn("pacer->next_deadline = target_timestamp * pacer->frequency",
                       source)
+        self.assertIn(
+            "now + pacer->ticks_per_frame +\n"
+            "      pacer->frequency * kMacSubmitLeadSeconds",
+            source)
         self.assertIn("Dkc1MacDisplayLinkStart", source)
         self.assertIn("displayLinkWithTarget:controller", bridge)
         self.assertIn("preferredFrameRateRange", bridge)
@@ -939,11 +985,15 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             work_window)
         self.assertNotIn("ticks_per_frame * 8.0", source)
         self.assertIn('EnvironmentEnabled("DKC1_DISABLE_VSYNC")', source)
+        self.assertIn('EnvironmentEnabled("DKC1_USE_DISPLAY_LINK_PACING")',
+                      source)
         self.assertIn(
             "SDL_RENDERER_ACCELERATED |\n"
             "      (request_vsync ? SDL_RENDERER_PRESENTVSYNC : 0)",
             source)
         self.assertIn("SDL_GetRendererInfo(s_renderer, &info)", source)
+        self.assertIn("SDL_RenderSetVSync(s_renderer, 0)", source)
+        self.assertIn('DKC1_KEEP_RENDERER_VSYNC', source)
         self.assertIn("[fps-renderer] name=%s accelerated=%d vsync=%d",
                       source)
         self.assertIn(
@@ -957,9 +1007,21 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("[fps-work]", source)
         self.assertIn("[display-stall]", source)
         self.assertIn("[display-stale]", source)
-        self.assertIn("target_lead >= pacer->ticks_per_frame * 0.75", source)
-        self.assertIn("callback_number > previous_callback_number + 1",
-                      source)
+        self.assertIn(
+            "callback_elapsed < pacer->ticks_per_frame * 0.75", source)
+        self.assertIn("target_lead >= minimum_target_lead", source)
+        display_wait = source.split(
+            "static int DisplayPacerWaitForTarget", 1)[1].split(
+                "static void DisplayPacerWaitForPresent", 1)[0]
+        self.assertNotIn("recovering_from_gap", display_wait)
+        self.assertNotIn("require_complete_lead", display_wait)
+        main_loop = source.split("while (s_running)", 1)[1]
+        final_wait = main_loop.split(
+            "const double final_wait_start", 1)[1].split(
+                "const double present_start", 1)[0]
+        self.assertIn("kMacSubmitLeadSeconds", final_wait)
+        self.assertNotIn("FramePacerWaitUntil(pacer.next_deadline,",
+                         final_wait)
         self.assertIn("[display] intervals=", source)
         self.assertIn('EnvironmentEnabled("DKC1_LIVE_TITLE")', source)
         self.assertIn("RtlSetAudioOutputRate(kAudioRate)", source)
@@ -969,6 +1031,9 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("s_audio_starvations++", source)
         self.assertIn("s_audio_recovery_requested = 1", source)
         self.assertIn("if (callback_delta >= 4 && s_audio_started)", source)
+        self.assertIn(
+            "lateness >= pacer->ticks_per_frame * 3.0 && s_audio_started",
+            source)
         self.assertNotIn("s_audio_started && queued_frames == 0", source)
         self.assertIn('getenv("DKC1_AUDIO_PREROLL")', source)
         self.assertIn('getenv("DKC1_PACING_LOG")', source)
@@ -981,7 +1046,7 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
 
         loop = source.split("while (s_running) {", 1)[1]
         self.assertLess(loop.index(
-            "DisplayPacerWaitForTarget(&pacer, &display_pacer, 0)"),
+            "DisplayPacerWaitForTarget(&pacer, &display_pacer)"),
                         loop.index("const double work_start"))
         self.assertLess(loop.index("FramePacerWaitForWorkWindow(&pacer);"),
                         loop.index("const double work_start"))
@@ -989,8 +1054,10 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             "if (s_smoke_test_frames", 1)[0]
         self.assertLess(active.index("PollInput()"),
                         active.index("FramePacerRecordWork"))
+        self.assertLess(active.index("PreparePresentation();"),
+                        active.index("const double final_wait_start"))
         self.assertLess(active.index("const double final_wait_start"),
-            active.index("Present();"))
+                        active.index("SubmitPresentation();"))
 
         self.assertIn("s_reanchor_pacer = 1;", source.split(
             "static void QuickLoad", 1)[1].split(

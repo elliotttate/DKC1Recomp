@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(dkc1_port
-    VERSION 0.0.3
+    VERSION 0.0.4
     DESCRIPTION "Native PC recompilation of Donkey Kong Country"
     LANGUAGES C)
 
@@ -107,6 +107,8 @@ if(APPLE)
         ${DKC1_RUNNER_SOURCES}
         assets/macos/DKC1Recomp.icns
         runner/headless_host.c
+        runner/dkc1_haptics.c
+        runner/dkc1_msu1.c
         runner/sdl_host.c
         runner/macos_file_picker.m)
     set_source_files_properties(assets/macos/DKC1Recomp.icns PROPERTIES

@@ -116,21 +116,39 @@ fullscreen. Native Game and View menus expose those commands plus checked
 4:3, 16:10 (308x224), and 16:9 (342x224) aspect-ratio options, layer
 isolation, and provenance controls. `DKC1_ASPECT=16:10` selects the
 Mac-oriented mode at startup. The Mac host presents SNES pixels at their 7:6
-pixel aspect; fullscreen uses a fractional nearest-neighbor fit so 16:10 fills
-the display width instead of retaining an integer-scale border. Saves and
+pixel aspect; fullscreen uses a fractional linear presentation fit so 16:10
+fills the display width without uneven nearest-neighbor column widths. The
+View menu's checked `Full Screen Scaling` submenu can instead select persistent
+`Pixel Sharp (Nearest)` sampling; `Smooth (Linear)` remains the default. Both
+choices fill the same area, and the source framebuffer and native 256-pixel
+center remain unchanged. Saves and
 diagnostics live under macOS Application Support. For controlled launch or QA,
 `DKC1_START_FULLSCREEN=1` enters the same fullscreen path after the renderer is
-created. On macOS 14 and newer, the host uses a window-bound `CADisplayLink`
-requested at the native 60.0988 Hz SNES cadence, prepares one cartridge frame
-for its reported target presentation timestamp, and discards stale callbacks
-instead of issuing catch-up bursts. Audio production follows the display
-cadence macOS actually grants (60 Hz on the tested ProMotion panel). An
-absolute Mach-clock scheduler remains the compatibility fallback. Set
+created. The release host uses one absolute 60 Hz Mach-clock schedule, prepares
+the texture and Metal copy before the final deadline, and submits the prepared
+drawable four milliseconds early. SDL renderer vsync is disabled so it cannot
+form a second blocking cadence gate. Set
 `DKC1_FPS_STATS=1` to print renderer, display-callback, workload-phase,
 submission, and present-wait telemetry when the app exits.
-`DKC1_DISABLE_DISPLAY_LINK=1` and `DKC1_DISABLE_VSYNC=1` are default-off A/B
-switches. `SNESRECOMP_INPUT_PLAY=path` supplies the same deterministic
+`DKC1_USE_DISPLAY_LINK_PACING=1` opts into the macOS 14+ window-bound
+display-link path for A/B testing; `DKC1_KEEP_RENDERER_VSYNC=1` restores the
+renderer wait independently. `DKC1_DISABLE_DISPLAY_LINK=1` and
+`DKC1_DISABLE_VSYNC=1` remain explicit negative overrides.
+`SNESRECOMP_INPUT_PLAY=path` supplies the same deterministic
 per-frame input playback supported by the Windows debugger for visible Mac QA.
+
+The native Mac host also supports controller feedback and external MSU-1
+replacement music. A successful enemy stomp produces a short controller
+rumble; normal jumps and contact damage do not. Set `DKC1_HAPTICS=0` to disable
+it. Choose **Music > Choose MSU-1 Music Pack…** to select either a `.msu1`
+archive or a folder containing `track-N.pcm`/`dkc_msu-N.pcm` files, then restart
+the app. Archives are extracted to Application Support and remain outside the
+repository and app bundle. The host follows DKC's requested music ID and start
+state, maps the ID to track `ID+1`, memory-maps the pack's 44.1-kHz stereo PCM,
+and preserves stock sound effects. Use
+**Music > Disable Replacement Music** to return to the original soundtrack.
+For controlled launches, `DKC1_MSU1_PACK=/path/to/extracted-pack` overrides the
+saved selection and `DKC1_MSU1_DISABLE=1` bypasses it.
 
 For visible widescreen debugging, `F7` pauses or resumes, `F8` advances one
 frame while paused, and `F9` exports the rolling repro history when the flight

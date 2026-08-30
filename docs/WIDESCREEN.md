@@ -18,11 +18,46 @@ startup. For scripted/headless runs, `DKC1_WIDESCREEN=1` selects 16:9 and
 The macOS texture always retains its native source width (256, 308, or 342
 pixels). The SDL presentation width applies the SNES 7:6 pixel aspect, giving
 approximately 299x224, 359x224, or 399x224 on screen. Windowed mode keeps
-integer scaling. Fullscreen deliberately uses a fractional nearest-neighbor
-fit: on a 16:10-class Mac panel the 16:10 mode consumes the full display width
-with only the small vertical remainder required by the panel's exact drawable
-aspect. This scaling is presentation-only and never changes PPU pixels or
-cartridge state.
+integer scaling. Fullscreen uses a fractional fit: the default `Smooth
+(Linear)` sampler avoids uneven output-column widths during movement, while the
+View menu's persistent `Pixel Sharp (Nearest)` option preserves hard pixel
+edges. Both consume the same maximum display area on a 16:10-class Mac panel,
+with only the small remainder required by the panel's exact drawable aspect.
+This scaling is presentation-only and never changes PPU pixels or cartridge
+state.
+
+## Whole-game model: a virtual presentation tilemap
+
+The scalable design follows DKC's existing rolling-map contract instead of
+widening rooms one at a time. `Level_SetTilemapPointers` at `$81:8C66`
+publishes the map, metatile-definition, and VRAM-ring sources. The horizontal
+column DMA at `$81:883F` advances only when `CameraX & $FFF8` changes; the
+vertical path at `$81:8A6F/$81:8DFA` follows the equivalent eight-pixel camera
+phase. The host mirrors those cartridge-authentic writes into a world-keyed
+presentation cache and decodes authored ROM metatiles only for cells the
+native 256-pixel viewport has not populated yet.
+
+Each rendered tile is resolved by provenance, not by level ID:
+
+1. a live PPU/VRAM tile intersecting the native viewport;
+2. a cartridge tilemap write observed at its exact world key;
+3. an authored ROM metatile that calibrates against the live native image;
+4. a separately proven periodic/parallax continuation;
+5. transparent fallback or centered stock presentation.
+
+This makes the native image the oracle and keeps collision, exits, bosses,
+camera bounds, and object state independent from presentation. It also gives
+the project one place to fix coverage math. A fine-scrolled 256-pixel viewport
+intersects 33 8x8 tile columns, not 32; the shared shadow therefore retains the
+partial 33rd live tile on every wide 64-column map. The serialized v2 shadow
+format deliberately retains its historical 32-column array: the live overhang
+is recaptured on the first frame after load, preserving old save-state
+continuity without freezing transient edge data into the file format.
+
+The model cannot manufacture art that does not exist in the ROM. Some fixed
+rooms have intentionally transparent cells outside the stock camera. Those
+scenes require a source-backed continuation capability or must fail closed;
+silently repeating a wall or wrapping the tilemap is not a whole-game fix.
 
 ## What came from DKC2Recomp
 
@@ -118,8 +153,9 @@ entrance, source/map/metatile/VRAM signatures, PPU layout, active layers, and
 terrain selection. A changed identity rejects retained pixels immediately.
 The candidate world coordinates and calibration are then computed read-only.
 They cannot mutate the retained shadow. Camera bounds must span the requested
-wide extension before calibration is eligible. Only an accepted horizontal
-layout enters phase two and commits shadow origins, capture, and prefill.
+wide extension before calibration is eligible. Only an accepted horizontal or
+vertical layout enters phase two and commits shadow origins, capture, and
+prefill.
 
 A failed decision clears retained pixels and centers the native frame over
 black. Within one unchanged hard identity, calibration has a true two-frame
@@ -147,6 +183,9 @@ All BG3 presentation gates reset every frame to prevent scene leakage.
 
 - Override unit tests cover every category, exact-match failure, and applying
   the transformer twice without further changes.
+- The shared shadow unit test proves a nonzero fine-X phase captures the live
+  33rd tile from a 64-column map while the on-disk v2 snapshot shape remains
+  compatible with existing 32-column states.
 - Runtime contract tests lock down the exact native-mode 16-bit stack push
   used by the type-$05 child retry and require the presentation camera to move
   BG scroll and OAM together without writing DKC1's logical camera or bounds.
@@ -208,13 +247,15 @@ to a tile and then subtracted. Whenever only one coordinate crossed an
 eight-pixel boundary, the decoder jumped to an adjacent ROM row or column for
 one frame and rebuilt both margins from the wrong source.
 
-For this proven scene tuple only, calibration now subtracts the signed pixel
-coordinates first and rounds that delta to the nearest tile, resolving an exact
-four-pixel half-tile tie toward zero. This keeps the X decode offset at zero
-across camera smoothing, still advances a real five-pixel crossing, and
-preserves the authored vertical phase. The fallback expression remains
-byte-for-byte in place for every other scene; the complete all-entrance matrix
-is therefore not needed to promote an unproven global calibration change.
+Calibration now subtracts the signed pixel coordinates first and rounds that
+delta to the nearest tile, resolving an exact four-pixel half-tile tie toward
+zero. This is a coordinate-domain conversion rather than a room capability:
+independently truncating two absolute pixel positions can select adjacent tiles
+even when the positions differ only by the cartridge's normal camera smoothing.
+The signed conversion keeps the X decode offset at zero across that smoothing,
+still advances a real five-pixel crossing, and preserves authored vertical
+phases such as 512 pixels. It therefore applies to every calibrated layout
+without consulting mode, level, entrance, or ROM-bank IDs.
 
 The exact 330-frame Right+Y route reduced world-aligned temporal changes in the
 two margins from 2,064,024 to 582,396 pixels (71.8%). It improved 123 frames and
@@ -243,6 +284,35 @@ extended frames, with zero raw fallback and zero trace-policy violations. All
 evidence is under `build/repros/ice-cave-flicker-20260830/`; the preserved user
 state is SHA-256
 `42176b43e8fc6ef90a10f651355218d68137216402ab4af34deb5f82b60d68d3`.
+
+The global promotion was checked against the pre-promotion runner on the exact
+underwater state and the 780-frame cave traversal: framebuffer, WRAM, and VRAM
+remain byte-identical. A controller-only map sweep reached four authentic
+entrances (`$003E`, `$00A7`, `$006D`, and `$0024`); all four passed three
+repeats with zero terrain misses, raw margin fallback, policy violations, or
+repeat instability. Twelve 420-frame neutral/Right+Y/Left+Y traversal branches
+also match the pre-promotion runner exactly in final framebuffer, WRAM, VRAM,
+CGRAM, OAM, scene state, and widescreen grade. The available map root does not
+unlock the other 36 entrances in the committed capability floor, so this is
+not recorded as a complete all-entrance promotion result.
+
+## Structural vertical-wall continuation
+
+Vertical rooms can contain wholly transparent lateral map cells that stock
+hardware could never show even though an authored wall ends at the native
+viewport. Margin continuation is now selected from the ROM topology instead
+of a Croctopus Chase scene tuple. The target metatile must be wholly
+transparent, the source back toward the stock edge must be fully populated,
+and the same empty-target/full-source relationship must occur on an adjacent
+metatile row. Any partial intervening metatile is treated as an authored
+opening and fails closed. Horizontal layouts are ineligible.
+
+This capability runs only while pre-filling presentation margins. It does not
+write WRAM, VRAM, camera bounds, collision, object state, or native pixels. The
+historic Croctopus wall maps satisfy the structural predicate on consecutive
+rows; the currently available exact underwater and cave states remain
+byte-identical because the predicate correctly stays inactive at their tested
+positions.
 
 ## Tradeoffs and next tests
 

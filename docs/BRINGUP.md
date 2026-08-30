@@ -291,3 +291,63 @@ overlay, first-divergence locator, and lifecycle tools. See
   before traversal begins. This host-only change does not alter cartridge
   state, pixels, camera/collision, streaming, or claim a complete cross-layout
   gameplay matrix.
+
+## 2026-08-30 — fixed-clock macOS traversal pacing supersession
+
+- **Symptom/first bad steady frame:** the display-linked fullscreen cave A/B
+  still produced a 29.147 ms submission at traversal frame 133 after warm-up;
+  ten later frames exceeded 20 ms, including a 45.835 ms interval at frame
+  441. Ordinary frame work was only 1.5-4.2 ms at those misses.
+- **Root cause/domain:** host presentation timing only. On the tested
+  ProMotion panel, the window-bound callback target stream itself occasionally
+  advanced by about 29 ms even when the requested rate was exactly 60 Hz.
+  Driving cartridge simulation directly from that variable callback stream
+  therefore reproduced the visible traversal hitch. A second blocking SDL
+  renderer-vsync gate was unnecessary and could add another quantization
+  boundary.
+- **Change:** the Mac release path now has one exact 60 Hz Mach-clock authority
+  with renderer vsync off. Texture upload and render-copy encoding finish
+  before the final wait; only drawable submission occurs at a four-millisecond
+  lead. Display-link pacing and renderer vsync remain independent opt-in A/B
+  controls. A true display-link half-interval is rejected by measured callback
+  spacing, while a normally spaced callback delivered slightly late is kept
+  when enough measured work budget remains. The main thread runs at
+  user-interactive QoS.
+- **Movement-correlated work:** MSU-1 PCM tracks are mapped at pack open rather
+  than refilled synchronously through `fread` in the frame loop. Stomp rumble
+  is queued to a worker thread. A fixed-clock gap of at least three frames now
+  requests the same CoreAudio repreroll used after a long display-link gap.
+- **Presentation sampling:** fullscreen defaults to linear host-only sampling
+  so a fractional Retina fit does not alternate nearest-neighbor column widths
+  while the camera moves. The View menu now provides persistent checked
+  `Smooth (Linear)` and `Pixel Sharp (Nearest)` fullscreen choices; both fill
+  the same area. Windowed presentation remains nearest-neighbor. The source
+  framebuffer, native center, cartridge memories, camera, collision, streaming,
+  and gameplay logic are unchanged.
+- **A/B evidence:** after a 60-frame warm-up, the 720-frame display-link leg had
+  p99 29.1673 ms, max 45.8350 ms, and 11 intervals over 20 ms. The default
+  final fixed-clock leg had p50/p95/p99/max
+  16.6667/16.6696/16.6764/16.6908 ms, zero steady overruns, 0.0031 ms standard
+  deviation, zero audio starvation/drop, and zero engine underflow. Evidence
+  is under `build/repros/macos-motion-pacing-20260830/`.
+- **Rejected experiment:** a cached widescreen-calibration fast path did not
+  reduce render p99 on the exact cave traversal, so it was removed rather than
+  expanding presentation-state complexity without measured value.
+- **State/build identity:** clean ROM SHA-256
+  `fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15`;
+  the exact tester state was preserved outside the repository as external
+  evidence with SHA-256
+  `4563f96051ae1b7a7b2618b38bf93d36bece208e03e5fd6f64928c32e612992e`.
+- **Validation:** `./build_macos.sh` completed; 223 Python tests passed with
+  one unavailable imported-state fixture skipped; `git diff --check` passed;
+  three exact 780-frame headless replays were byte-identical in framebuffer,
+  WRAM, VRAM, CGRAM, both OAM domains, and audio; the real fullscreen app
+  visibly filled the panel and exposed native Game, Music, and View menus; the
+  checked fullscreen-scaling submenu was exercised in both Pixel Sharp and
+  Smooth modes; replacement track 12 played with stock effects; and deep
+  strict code-sign verification passed. The `v0.0.4` release asset is
+  identified by its published SHA-256 sidecar.
+- **Residual scope:** the asynchronous fullscreen Space transition can still
+  block AppKit during the first few startup frames and is excluded by the
+  warm-up. This is a host-only traversal/presentation fix; it does not promote
+  a new cartridge widescreen capability or claim a complete 40-entrance matrix.

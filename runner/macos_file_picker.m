@@ -109,6 +109,95 @@ static NSMenuItem *AddSubmenu(NSMenu *parent, NSString *title,
   return item;
 }
 
+static char *CopyFileSystemPath(NSString *path) {
+  const char *file_system_path = path.fileSystemRepresentation;
+  if (!file_system_path)
+    return NULL;
+  size_t size = strlen(file_system_path) + 1;
+  char *copy = malloc(size);
+  if (copy)
+    memcpy(copy, file_system_path, size);
+  return copy;
+}
+
+static BOOL HasMsuTrackOne(NSString *directory) {
+  NSFileManager *manager = [NSFileManager defaultManager];
+  NSString *track = [directory stringByAppendingPathComponent:@"track-1.pcm"];
+  NSString *legacy =
+      [directory stringByAppendingPathComponent:@"dkc_msu-1.pcm"];
+  return [manager isReadableFileAtPath:track] ||
+         [manager isReadableFileAtPath:legacy];
+}
+
+static void ShowMsuError(NSString *message) {
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Unable to use MSU-1 music pack";
+  alert.informativeText = message ?: @"Unknown error";
+  alert.alertStyle = NSAlertStyleCritical;
+  [alert runModal];
+  [alert release];
+}
+
+static NSString *ExtractMsuArchive(NSURL *archive) {
+  NSFileManager *manager = [NSFileManager defaultManager];
+  NSURL *applicationSupport =
+      [[manager URLsForDirectory:NSApplicationSupportDirectory
+                       inDomains:NSUserDomainMask] firstObject];
+  if (!applicationSupport)
+    return nil;
+  NSURL *root = [applicationSupport URLByAppendingPathComponent:@"Flat2VR"
+                                                    isDirectory:YES];
+  root = [root URLByAppendingPathComponent:@"DKC1Recomp" isDirectory:YES];
+  root = [root URLByAppendingPathComponent:@"MSU1" isDirectory:YES];
+  NSError *directoryError = nil;
+  if (![manager createDirectoryAtURL:root
+          withIntermediateDirectories:YES attributes:nil
+                               error:&directoryError]) {
+    ShowMsuError(directoryError.localizedDescription);
+    return nil;
+  }
+
+  NSString *name = archive.lastPathComponent.stringByDeletingPathExtension;
+  if (!name.length)
+    name = @"MusicPack";
+  NSURL *destination = [root URLByAppendingPathComponent:name isDirectory:YES];
+  if (![manager createDirectoryAtURL:destination
+          withIntermediateDirectories:YES attributes:nil
+                               error:&directoryError]) {
+    ShowMsuError(directoryError.localizedDescription);
+    return nil;
+  }
+
+  NSTask *task = [[NSTask alloc] init];
+  NSPipe *errorPipe = [NSPipe pipe];
+  task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/ditto"];
+  task.arguments = @[@"-x", @"-k", archive.path, destination.path];
+  task.standardError = errorPipe;
+  @try {
+    [task launch];
+    [task waitUntilExit];
+  } @catch (NSException *exception) {
+    ShowMsuError(exception.reason);
+    [task release];
+    return nil;
+  }
+  if (task.terminationStatus != 0) {
+    NSData *data = [[errorPipe fileHandleForReading] readDataToEndOfFile];
+    NSString *detail = [[[NSString alloc] initWithData:data
+                                               encoding:NSUTF8StringEncoding]
+        autorelease];
+    ShowMsuError(detail.length ? detail : @"The archive extractor failed.");
+    [task release];
+    return nil;
+  }
+  [task release];
+  if (!HasMsuTrackOne(destination.path)) {
+    ShowMsuError(@"The archive does not contain track-1.pcm.");
+    return nil;
+  }
+  return destination.path;
+}
+
 void Dkc1MacInstallMenu(void) {
   @autoreleasepool {
     [NSApplication sharedApplication];
@@ -166,6 +255,13 @@ void Dkc1MacInstallMenu(void) {
                0);
     AddSubmenu(bar, @"Game", game);
 
+    NSMenu *music = [[NSMenu alloc] initWithTitle:@"Music"];
+    AddCommand(music, @"Choose MSU-1 Music Pack…",
+               kDkc1MacMenuChooseMusicPack, @"", 0);
+    AddCommand(music, @"Disable Replacement Music",
+               kDkc1MacMenuDisableMusicPack, @"", 0);
+    AddSubmenu(bar, @"Music", music);
+
     NSMenu *aspect = [[NSMenu alloc] initWithTitle:@"Aspect Ratio"];
     AddCommand(aspect, @"Native 4:3 (256x224)", kDkc1MacMenuAspectNative,
                @"", 0);
@@ -183,6 +279,13 @@ void Dkc1MacInstallMenu(void) {
     NSMenu *view = [[NSMenu alloc] initWithTitle:@"View"];
     AddCommand(view, @"Enter Full Screen", kDkc1MacMenuFullscreen, @"f",
                NSEventModifierFlagControl | NSEventModifierFlagCommand);
+    NSMenu *fullscreenScaling =
+        [[NSMenu alloc] initWithTitle:@"Full Screen Scaling"];
+    AddCommand(fullscreenScaling, @"Smooth (Linear)",
+               kDkc1MacMenuFullscreenSmooth, @"", 0);
+    AddCommand(fullscreenScaling, @"Pixel Sharp (Nearest)",
+               kDkc1MacMenuFullscreenPixelSharp, @"", 0);
+    AddSubmenu(view, @"Full Screen Scaling", fullscreenScaling);
     [view addItem:[NSMenuItem separatorItem]];
     AddSubmenu(view, @"Aspect Ratio", aspect);
     AddSubmenu(view, @"Layers", layers);
@@ -195,8 +298,10 @@ void Dkc1MacInstallMenu(void) {
 }
 
 void Dkc1MacUpdateMenuState(int paused, int fullscreen,
+                            int fullscreen_pixel_sharp,
                             Dkc1VideoAspect aspect,
-                            unsigned char layer_mask, int provenance) {
+                            unsigned char layer_mask, int provenance,
+                            int replacement_music) {
   if (!s_menu_controller)
     return;
   s_menu_items[kDkc1MacMenuPause].title = paused ? @"Resume" : @"Pause";
@@ -207,6 +312,10 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
       fullscreen ? @"Exit Full Screen" : @"Enter Full Screen";
   s_menu_items[kDkc1MacMenuFullscreen].state =
       fullscreen ? NSControlStateValueOn : NSControlStateValueOff;
+  s_menu_items[kDkc1MacMenuFullscreenSmooth].state =
+      fullscreen_pixel_sharp ? NSControlStateValueOff : NSControlStateValueOn;
+  s_menu_items[kDkc1MacMenuFullscreenPixelSharp].state =
+      fullscreen_pixel_sharp ? NSControlStateValueOn : NSControlStateValueOff;
   s_menu_items[kDkc1MacMenuAspectNative].state =
       aspect == kDkc1VideoAspectNative ? NSControlStateValueOn
                                        : NSControlStateValueOff;
@@ -230,6 +339,12 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
   s_menu_items[layer_commands[selected]].state = NSControlStateValueOn;
   s_menu_items[kDkc1MacMenuProvenance].state =
       provenance ? NSControlStateValueOn : NSControlStateValueOff;
+  s_menu_items[kDkc1MacMenuChooseMusicPack].state =
+      replacement_music ? NSControlStateValueOn : NSControlStateValueOff;
+  NSString *configuredMusic = [[NSUserDefaults standardUserDefaults]
+      stringForKey:@"DKC1Msu1Directory"];
+  s_menu_items[kDkc1MacMenuDisableMusicPack].enabled =
+      replacement_music != 0 || configuredMusic.length != 0;
 }
 
 int Dkc1MacDisplayLinkStart(void *native_window, double preferred_fps) {
@@ -354,5 +469,80 @@ char *Dkc1MacChooseRom(void) {
     if (copy)
       memcpy(copy, path, size);
     return copy;
+  }
+}
+
+char *Dkc1MacSavedMsu1(void) {
+  @autoreleasepool {
+    NSString *path = [[NSUserDefaults standardUserDefaults]
+        stringForKey:@"DKC1Msu1Directory"];
+    if (!path.length || !HasMsuTrackOne(path))
+      return NULL;
+    return CopyFileSystemPath(path);
+  }
+}
+
+char *Dkc1MacChooseMsu1(void) {
+  @autoreleasepool {
+    [NSApplication sharedApplication];
+    [NSApp activateIgnoringOtherApps:YES];
+
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.title = @"Choose an MSU-1 music pack";
+    panel.message = @"Select a .msu1 archive or an extracted PCM folder.";
+    panel.prompt = @"Use Music Pack";
+    panel.canChooseDirectories = YES;
+    panel.canChooseFiles = YES;
+    panel.allowsMultipleSelection = NO;
+    panel.allowedContentTypes = @[
+      [UTType typeWithFilenameExtension:@"msu1"]
+    ];
+    if ([panel runModal] != NSModalResponseOK)
+      return NULL;
+
+    NSURL *selection = panel.URL;
+    NSNumber *isDirectory = nil;
+    [selection getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey
+                           error:nil];
+    NSString *directory = nil;
+    if (isDirectory.boolValue) {
+      if (!HasMsuTrackOne(selection.path)) {
+        ShowMsuError(@"The selected folder does not contain track-1.pcm.");
+        return NULL;
+      }
+      directory = selection.path;
+    } else {
+      directory = ExtractMsuArchive(selection);
+    }
+    if (!directory.length)
+      return NULL;
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setObject:directory forKey:@"DKC1Msu1Directory"];
+    [defaults synchronize];
+    return CopyFileSystemPath(directory);
+  }
+}
+
+void Dkc1MacClearMsu1(void) {
+  @autoreleasepool {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults removeObjectForKey:@"DKC1Msu1Directory"];
+    [defaults synchronize];
+  }
+}
+
+int Dkc1MacSavedFullscreenPixelSharp(void) {
+  @autoreleasepool {
+    return [[NSUserDefaults standardUserDefaults]
+        boolForKey:@"DKC1FullscreenPixelSharp"] ? 1 : 0;
+  }
+}
+
+void Dkc1MacSetFullscreenPixelSharp(int enabled) {
+  @autoreleasepool {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setBool:enabled != 0 forKey:@"DKC1FullscreenPixelSharp"];
+    [defaults synchronize];
   }
 }

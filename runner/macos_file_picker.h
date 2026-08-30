@@ -10,7 +10,11 @@ enum Dkc1MacMenuCommand {
   kDkc1MacMenuQuickSave,
   kDkc1MacMenuQuickLoad,
   kDkc1MacMenuExportRepro,
+  kDkc1MacMenuChooseMusicPack,
+  kDkc1MacMenuDisableMusicPack,
   kDkc1MacMenuFullscreen,
+  kDkc1MacMenuFullscreenSmooth,
+  kDkc1MacMenuFullscreenPixelSharp,
   kDkc1MacMenuAspectNative,
   kDkc1MacMenuAspect16x10,
   kDkc1MacMenuAspect16x9,
@@ -26,12 +30,26 @@ enum Dkc1MacMenuCommand {
 /* Returns a malloc-owned UTF-8 path, or NULL when the panel is cancelled. */
 char *Dkc1MacChooseRom(void);
 
+/* Selects an extracted MSU-1 directory or extracts a .msu1 archive into the
+ * app's Application Support directory, saves the selection, and returns a
+ * malloc-owned directory path. */
+char *Dkc1MacChooseMsu1(void);
+char *Dkc1MacSavedMsu1(void);
+void Dkc1MacClearMsu1(void);
+
+/* Fullscreen sampling is a host-only preference. Smooth is the default when
+ * the preference has never been set. */
+int Dkc1MacSavedFullscreenPixelSharp(void);
+void Dkc1MacSetFullscreenPixelSharp(int enabled);
+
 /* Installs the native menu bar. Dkc1MacMenuCommand is implemented by the
  * SDL host and receives menu actions on the application's main thread. */
 void Dkc1MacInstallMenu(void);
 void Dkc1MacUpdateMenuState(int paused, int fullscreen,
+                            int fullscreen_pixel_sharp,
                             Dkc1VideoAspect aspect,
-                            unsigned char layer_mask, int provenance);
+                            unsigned char layer_mask, int provenance,
+                            int replacement_music);
 void Dkc1MacMenuCommand(int command);
 
 /* Runs a display-linked cadence source on a private run loop. The SDL host

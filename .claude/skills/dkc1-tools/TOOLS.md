@@ -45,7 +45,12 @@ sidecars; loading a state from a different build warns.
 `DKC1_ROUTE_FRAME_LIMIT` / `DKC1_ROUTE_AUTOCLOSE_MS` /
 `DKC1_ROUTE_RESULT` (visible-host automation), `SNESRECOMP_FPS`,
 `DKC1_PRESENT_HZ` (optional 30-240 Hz presentation-cadence override;
-normally the host chooses an exact 60 Hz display divisor when available).
+normally the host chooses an exact 60 Hz display divisor when available),
+`DKC1_USE_DISPLAY_LINK_PACING` (macOS A/B: opt into window-bound display-link
+cadence), `DKC1_KEEP_RENDERER_VSYNC` (macOS A/B: restore blocking SDL Metal
+vsync), `DKC1_DISABLE_DISPLAY_LINK` / `DKC1_DISABLE_VSYNC` (explicit negative
+overrides). The macOS release default is one fixed 60 Hz Mach authority with
+renderer vsync off.
 
 **Evidence taps:** `DKC1_PACING_LOG` (desktop-host frame work/wait/submit/
 GDI timing jsonl; summarize with `tools/analyze_pacing.py`),

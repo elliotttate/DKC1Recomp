@@ -9,6 +9,8 @@
 #include "dkc1_flight_recorder.h"
 #include "dkc1_game.h"
 #include "dkc1_invariant_monitor.h"
+#include "dkc1_haptics.h"
+#include "dkc1_msu1.h"
 #include "dkc1_video.h"
 #include "input_playback.h"
 #include "macos_file_picker.h"
@@ -26,6 +28,7 @@
 #include <float.h>
 #include <limits.h>
 #include <mach/mach_time.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -53,10 +56,25 @@ enum {
   kAudioMaximumQueuedFrames = kAudioRate / 4,
 };
 
-static const double kNativeFramesPerSecond = 60.098811862;
+static const double kHostPresentationFramesPerSecond = 60.0;
 static const double kHostWorkGuardSeconds = 0.006;
-static const double kMacSubmitLeadSeconds = 0.001;
+static const double kMacSubmitLeadSeconds = 0.004;
 static const double kMacFinalSpinSeconds = 0.0015;
+
+enum {
+  kHapticRequestNone = 0,
+  kHapticRequestPulse,
+  kHapticRequestStop,
+};
+
+typedef struct Dkc1HapticWorker {
+  SDL_mutex *mutex;
+  SDL_cond *condition;
+  SDL_Thread *thread;
+  int request;
+  int busy;
+  int shutdown;
+} Dkc1HapticWorker;
 
 typedef struct Dkc1FramePacer {
   double frequency;
@@ -129,6 +147,8 @@ static SDL_Renderer *s_renderer;
 static SDL_Texture *s_texture;
 static SDL_AudioDeviceID s_audio_device;
 static SDL_GameController *s_controller;
+static Dkc1Msu1 *s_msu1;
+static Dkc1StompProbe s_stomp_probe;
 static int16_t s_audio_scratch[kAudioScratchFrames * kAudioChannels];
 static double s_audio_accumulator;
 static unsigned s_audio_preroll_blocks = 2;
@@ -142,10 +162,12 @@ static int s_audio_started;
 static int s_audio_waiting_for_ring = 1;
 static int s_audio_collect_stats;
 static int s_audio_recovery_requested;
+static int s_haptics_enabled = 1;
 static int s_running = 1;
 static int s_paused;
 static int s_step_once;
 static int s_fullscreen;
+static int s_fullscreen_pixel_sharp;
 static int s_width;
 static int s_presentation_output_width;
 static int s_presentation_output_height;
@@ -155,10 +177,11 @@ static long s_host_frame;
 static long s_smoke_test_frames;
 static int s_reanchor_pacer;
 static double s_present_fps;
-static double s_audio_pacing_fps = 60.098811862;
+static double s_audio_pacing_fps = 60.0;
 static char s_status[256] = "ready";
 static Dkc1WramDump s_wram_dump;
 static Dkc1InputPlayback s_input_playback;
+static Dkc1HapticWorker s_haptic_worker;
 
 static int EnvironmentEnabled(const char *name) {
   const char *value = getenv(name);
@@ -204,7 +227,8 @@ static void FramePacerInit(Dkc1FramePacer *pacer) {
   memset(pacer, 0, sizeof *pacer);
   pacer->frequency = 1000000000.0 * (double)timebase.denom /
                      (double)timebase.numer;
-  pacer->ticks_per_frame = pacer->frequency / kNativeFramesPerSecond;
+  pacer->ticks_per_frame =
+      pacer->frequency / kHostPresentationFramesPerSecond;
   pacer->next_deadline = FramePacerNow() + pacer->ticks_per_frame;
   pacer->estimated_work_ticks = pacer->frequency / 500.0;
   pacer->previous_present = FramePacerNow();
@@ -213,7 +237,13 @@ static void FramePacerInit(Dkc1FramePacer *pacer) {
 }
 
 static void FramePacerReanchor(Dkc1FramePacer *pacer, double now) {
-  pacer->next_deadline = now + pacer->ticks_per_frame;
+  /* next_deadline is the intended scanout boundary, while submission occurs
+   * kMacSubmitLeadSeconds earlier. Include that lead when anchoring from the
+   * last completed submit so a stall is followed by one normal 16.67 ms
+   * interval rather than a short catch-up interval. */
+  pacer->next_deadline =
+      now + pacer->ticks_per_frame +
+      pacer->frequency * kMacSubmitLeadSeconds;
   pacer->previous_present = 0.0;
   pacer->title_window_start = 0.0;
   pacer->title_window_intervals = 0;
@@ -343,8 +373,7 @@ static void DisplayPacerRecord(Dkc1DisplayPacer *display,
 }
 
 static int DisplayPacerWaitForTarget(Dkc1FramePacer *pacer,
-                                     Dkc1DisplayPacer *display,
-                                     int require_complete_lead) {
+                                     Dkc1DisplayPacer *display) {
   for (;;) {
     double timestamp = 0.0;
     double target_timestamp = 0.0;
@@ -352,6 +381,7 @@ static int DisplayPacerWaitForTarget(Dkc1FramePacer *pacer,
     unsigned long long callback_number = 0;
     const unsigned long long previous_callback_number =
         display->previous_callback_number;
+    const double previous_timestamp = display->previous_timestamp;
     if (!Dkc1MacDisplayLinkWait(
             previous_callback_number, 0.050,
             &timestamp, &target_timestamp, &duration, &callback_number)) {
@@ -363,14 +393,24 @@ static int DisplayPacerWaitForTarget(Dkc1FramePacer *pacer,
     DisplayPacerRecord(display, callback_number, timestamp, duration);
     pacer->next_deadline = target_timestamp * pacer->frequency;
     const double target_lead = pacer->next_deadline - FramePacerNow();
-    const int recovering_from_gap =
-        previous_callback_number > 0 &&
-        callback_number > previous_callback_number + 1;
-    if (target_lead >= pacer->ticks_per_frame * 0.75 ||
-        (!require_complete_lead && !recovering_from_gap))
+    const double callback_elapsed =
+        previous_timestamp > 0.0 &&
+                callback_number == previous_callback_number + 1
+            ? (timestamp - previous_timestamp) * pacer->frequency
+            : pacer->ticks_per_frame;
+    const bool short_callback =
+        callback_elapsed < pacer->ticks_per_frame * 0.75;
+    double work_budget = pacer->estimated_work_ticks;
+    if (work_budget > pacer->frequency * kHostWorkGuardSeconds)
+      work_budget = pacer->frequency * kHostWorkGuardSeconds;
+    const double minimum_target_lead =
+        work_budget + pacer->frequency * (kMacSubmitLeadSeconds + 0.001);
+    if (!short_callback && target_lead >= minimum_target_lead)
       return 1;
-    /* Consume a stale callback, but do not produce a short catch-up frame.
-     * Its successor provides a complete display interval for recovery. */
+    /* Consume a real ProMotion half-interval or a callback that arrived too
+     * late to finish the measured work before the submit lead. A normally
+     * spaced 60 Hz callback that was delivered a few milliseconds late still
+     * has enough budget and must not be converted into a dropped frame. */
     display->skipped_callbacks++;
     if (EnvironmentEnabled("DKC1_FPS_STATS")) {
       fprintf(stderr,
@@ -436,7 +476,8 @@ static int PacingLogWriteHeader(Dkc1PacingLog *log,
   if (s_display_link_active && display->interval_count == 0)
     return 0;
   const double refresh_hz = display->callback_interval > 0.0
-      ? 1.0 / display->callback_interval : kNativeFramesPerSecond;
+      ? 1.0 / display->callback_interval
+      : kHostPresentationFramesPerSecond;
   fprintf(log->stream,
           "{\"schema\":\"dkc1.pacing.v3\",\"platform\":\"macos\","
           "\"refresh_hz\":%.9f,\"display_hz\":%.9f,"
@@ -571,6 +612,8 @@ static void FramePacerRecordPresentWait(Dkc1FramePacer *pacer,
 static void FramePacerAdvance(Dkc1FramePacer *pacer, double presented_at,
                               int force_reanchor) {
   const double lateness = presented_at - pacer->next_deadline;
+  if (lateness >= pacer->ticks_per_frame * 3.0 && s_audio_started)
+    s_audio_recovery_requested = 1;
   if (force_reanchor || lateness > pacer->frequency / 500.0)
     FramePacerReanchor(pacer, presented_at);
   else
@@ -590,7 +633,7 @@ static void FramePacerPrintStats(const Dkc1FramePacer *pacer) {
           (unsigned long long)pacer->presented_frames, active_seconds,
           active_seconds > 0.0
               ? (double)pacer->interval_count / active_seconds : 0.0,
-          kNativeFramesPerSecond,
+          kHostPresentationFramesPerSecond,
           pacer->interval_count
               ? pacer->interval_sum * 1000.0 /
                     (pacer->frequency * (double)pacer->interval_count) : 0.0,
@@ -663,9 +706,50 @@ static void UpdateWindowTitle(void) {
 static void UpdateTitle(void) {
   UpdateWindowTitle();
   Dkc1MacUpdateMenuState(s_paused, s_fullscreen,
+                         s_fullscreen_pixel_sharp,
                          Dkc1VideoGetAspect(),
                          Dkc1DebugLayerMask(),
-                         Dkc1DebugProvenanceOverlay());
+                         Dkc1DebugProvenanceOverlay(), s_msu1 != NULL);
+}
+
+static char *ConfiguredMusicPackPath(void) {
+  if (EnvironmentEnabled("DKC1_MSU1_DISABLE"))
+    return NULL;
+  const char *configured = getenv("DKC1_MSU1_PACK");
+  if (configured && *configured) {
+    size_t size = strlen(configured) + 1;
+    char *copy = malloc(size);
+    if (copy)
+      memcpy(copy, configured, size);
+    return copy;
+  }
+  return Dkc1MacSavedMsu1();
+}
+
+static uint16_t ReadWram16(size_t address) {
+  return (uint16_t)(g_ram[address] | ((uint16_t)g_ram[address + 1] << 8));
+}
+
+static void ObserveMsu1MusicState(void) {
+  if (!s_msu1)
+    return;
+  const unsigned previous_track = Dkc1Msu1CurrentTrack(s_msu1);
+  Dkc1Msu1ObserveMusicState(s_msu1, ReadWram16(0x0521),
+                            ReadWram16(0x051d));
+  const unsigned current_track = Dkc1Msu1CurrentTrack(s_msu1);
+  if (current_track == previous_track)
+    return;
+  if (current_track) {
+    fprintf(stderr, "msu1: playing track %u (DKC music $%02x)\n",
+            current_track, ReadWram16(0x0521));
+    snprintf(s_status, sizeof s_status, "MSU-1 track %u | %s",
+             current_track,
+             s_haptics_enabled ? "controller stomp haptics on" : "haptics off");
+  } else {
+    fprintf(stderr, "msu1: stopped\n");
+    snprintf(s_status, sizeof s_status, "MSU-1 waiting for music cue | %s",
+             s_haptics_enabled ? "controller stomp haptics on" : "haptics off");
+  }
 }
 
 static int ResolveRomPath(int argc, char **argv, char output[PATH_MAX]) {
@@ -709,6 +793,16 @@ static int PresentationWidth(void) {
 static void ApplyPresentationGeometry(void) {
   s_presentation_output_width = 0;
   s_presentation_output_height = 0;
+  if (s_texture) {
+    /* Retain exact source pixels. Smooth avoids differently sized output
+     * columns at a fractional Retina scale; Pixel Sharp keeps hard nearest-
+     * neighbor edges. This preference changes only the host sampler. */
+    (void)SDL_SetTextureScaleMode(
+        s_texture,
+        s_fullscreen && !s_fullscreen_pixel_sharp
+            ? SDL_ScaleModeLinear
+            : SDL_ScaleModeNearest);
+  }
   if (s_fullscreen) {
     /* macOS fullscreen Spaces resize asynchronously. Use the live drawable
      * as a 1:1 logical target, then fit the texture explicitly in Present().
@@ -744,7 +838,12 @@ static bool InitVideo(void) {
     return false;
 
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-  const int request_vsync = !EnvironmentEnabled("DKC1_DISABLE_VSYNC");
+  /* The fixed Mach clock is the default and sole presentation authority.
+   * SDL's blocking Metal vsync is retained only as an explicit diagnostic;
+   * the macOS compositor still prevents direct-scanout tearing. */
+  const int request_vsync =
+      EnvironmentEnabled("DKC1_KEEP_RENDERER_VSYNC") &&
+      !EnvironmentEnabled("DKC1_DISABLE_VSYNC");
   const Uint32 renderer_flags =
       SDL_RENDERER_ACCELERATED |
       (request_vsync ? SDL_RENDERER_PRESENTVSYNC : 0);
@@ -788,25 +887,44 @@ static bool InitVideo(void) {
 }
 
 static void InitDisplayLink(void) {
-  if (EnvironmentEnabled("DKC1_DISABLE_DISPLAY_LINK"))
-    return;
-  SDL_SysWMinfo window_info;
-  SDL_VERSION(&window_info.version);
-  if (!SDL_GetWindowWMInfo(s_window, &window_info)) {
-    fprintf(stderr, "warning: native window unavailable for display link: %s\n",
-            SDL_GetError());
-    return;
+  const int request_display_link =
+      EnvironmentEnabled("DKC1_USE_DISPLAY_LINK_PACING") &&
+      !EnvironmentEnabled("DKC1_DISABLE_DISPLAY_LINK");
+  if (request_display_link) {
+    SDL_SysWMinfo window_info;
+    SDL_VERSION(&window_info.version);
+    if (!SDL_GetWindowWMInfo(s_window, &window_info)) {
+      fprintf(stderr,
+              "warning: native window unavailable for display link: %s\n",
+              SDL_GetError());
+    } else {
+      s_display_link_active =
+          Dkc1MacDisplayLinkStart(window_info.info.cocoa.window,
+                                  kHostPresentationFramesPerSecond);
+    }
   }
-  s_display_link_active =
-      Dkc1MacDisplayLinkStart(window_info.info.cocoa.window,
-                              kNativeFramesPerSecond);
+  if (s_display_link_active && s_renderer_vsync &&
+      !EnvironmentEnabled("DKC1_KEEP_RENDERER_VSYNC")) {
+    /* CADisplayLink is the opted-in scanout authority. A second blocking-vsync gate in
+     * SDL can quantize an otherwise timely Metal submission onto the following
+     * refresh. macOS remains composited; disabling this wait does not permit
+     * direct scanout tearing. */
+    if (SDL_RenderSetVSync(s_renderer, 0) == 0) {
+      s_renderer_vsync = 0;
+    } else {
+      fprintf(stderr, "warning: unable to disable renderer vsync: %s\n",
+              SDL_GetError());
+    }
+  }
   if (EnvironmentEnabled("DKC1_FPS_STATS")) {
     fprintf(stderr, "[display-link] active=%d requested_fps=%.6f\n",
-            s_display_link_active, kNativeFramesPerSecond);
+            s_display_link_active, kHostPresentationFramesPerSecond);
+    fprintf(stderr, "[display-authority] display_link=%d renderer_vsync=%d\n",
+            s_display_link_active, s_renderer_vsync);
   }
 }
 
-static void Present(void) {
+static void PreparePresentation(void) {
   SDL_Rect destination;
   SDL_Rect *destination_ptr = NULL;
   if (s_fullscreen) {
@@ -837,7 +955,15 @@ static void Present(void) {
   SDL_UpdateTexture(s_texture, NULL, s_pixels, s_width * 4);
   SDL_RenderClear(s_renderer);
   SDL_RenderCopy(s_renderer, s_texture, NULL, destination_ptr);
+}
+
+static void SubmitPresentation(void) {
   SDL_RenderPresent(s_renderer);
+}
+
+static void Present(void) {
+  PreparePresentation();
+  SubmitPresentation();
 }
 
 static void OpenFirstController(void) {
@@ -856,11 +982,118 @@ static void OpenFirstController(void) {
   }
 }
 
+static int SDLCALL HapticWorkerMain(void *unused) {
+  (void)unused;
+  Dkc1HapticWorker *worker = &s_haptic_worker;
+  SDL_LockMutex(worker->mutex);
+  while (!worker->shutdown) {
+    while (!worker->shutdown && worker->request == kHapticRequestNone)
+      SDL_CondWait(worker->condition, worker->mutex);
+    if (worker->shutdown)
+      break;
+    const int request = worker->request;
+    SDL_GameController *controller = s_controller;
+    worker->request = kHapticRequestNone;
+    worker->busy = 1;
+    SDL_UnlockMutex(worker->mutex);
+    if (controller) {
+      if (request == kHapticRequestPulse)
+        (void)SDL_GameControllerRumble(controller, 0x2800, 0x5000, 55);
+      else
+        (void)SDL_GameControllerRumble(controller, 0, 0, 0);
+    }
+    SDL_LockMutex(worker->mutex);
+    worker->busy = 0;
+    SDL_CondBroadcast(worker->condition);
+  }
+  worker->busy = 0;
+  SDL_CondBroadcast(worker->condition);
+  SDL_UnlockMutex(worker->mutex);
+  return 0;
+}
+
+static bool HapticWorkerStart(void) {
+  if (!s_haptics_enabled)
+    return true;
+  Dkc1HapticWorker *worker = &s_haptic_worker;
+  worker->mutex = SDL_CreateMutex();
+  worker->condition = SDL_CreateCond();
+  if (!worker->mutex || !worker->condition)
+    goto fail;
+  worker->thread = SDL_CreateThread(HapticWorkerMain, "DKC1 haptics", NULL);
+  if (!worker->thread)
+    goto fail;
+  return true;
+
+fail:
+  if (worker->condition)
+    SDL_DestroyCond(worker->condition);
+  if (worker->mutex)
+    SDL_DestroyMutex(worker->mutex);
+  *worker = (Dkc1HapticWorker){0};
+  return false;
+}
+
+static void HapticWorkerRequest(int request) {
+  Dkc1HapticWorker *worker = &s_haptic_worker;
+  if (!worker->thread || !worker->mutex)
+    return;
+  SDL_LockMutex(worker->mutex);
+  worker->request = request;
+  SDL_CondSignal(worker->condition);
+  SDL_UnlockMutex(worker->mutex);
+}
+
+static void HapticWorkerDetachController(void) {
+  Dkc1HapticWorker *worker = &s_haptic_worker;
+  if (!worker->mutex)
+    return;
+  SDL_LockMutex(worker->mutex);
+  worker->request = kHapticRequestNone;
+  while (worker->busy)
+    SDL_CondWait(worker->condition, worker->mutex);
+  SDL_UnlockMutex(worker->mutex);
+}
+
+static void HapticWorkerStop(void) {
+  Dkc1HapticWorker *worker = &s_haptic_worker;
+  if (!worker->thread)
+    return;
+  SDL_LockMutex(worker->mutex);
+  worker->request = kHapticRequestNone;
+  while (worker->busy)
+    SDL_CondWait(worker->condition, worker->mutex);
+  worker->shutdown = 1;
+  SDL_CondSignal(worker->condition);
+  SDL_UnlockMutex(worker->mutex);
+  SDL_WaitThread(worker->thread, NULL);
+  SDL_DestroyCond(worker->condition);
+  SDL_DestroyMutex(worker->mutex);
+  *worker = (Dkc1HapticWorker){0};
+}
+
+static void StopControllerRumble(void) {
+  if (s_haptic_worker.thread)
+    HapticWorkerRequest(kHapticRequestStop);
+  else if (s_controller)
+    (void)SDL_GameControllerRumble(s_controller, 0, 0, 0);
+}
+
+static void PulseStompHaptic(void) {
+  if (!s_haptics_enabled || !s_controller)
+    return;
+  /* A short, brighter high-frequency pulse reads as a stomp without masking
+   * controller input or blocking the frame-critical thread on Bluetooth I/O. */
+  HapticWorkerRequest(kHapticRequestPulse);
+}
+
 static void ControllerRemoved(SDL_JoystickID instance) {
   if (!s_controller)
     return;
   SDL_Joystick *joystick = SDL_GameControllerGetJoystick(s_controller);
   if (SDL_JoystickInstanceID(joystick) == instance) {
+    HapticWorkerDetachController();
+    (void)SDL_GameControllerRumble(s_controller, 0, 0, 0);
     SDL_GameControllerClose(s_controller);
     s_controller = NULL;
     snprintf(s_status, sizeof s_status, "controller disconnected");
@@ -977,7 +1210,8 @@ static void PumpAudio(void) {
   if (s_audio_recovery_requested) {
     /* SDL may report an empty software queue while CoreAudio still owns
      * buffered samples, so zero queue occupancy alone is not starvation.
-     * A long skipped-callback gap is the reliable host-stall signal. */
+     * A long display-callback gap or fixed-clock deadline miss is the reliable
+     * host-stall signal. */
     s_audio_recovery_requested = 0;
     s_audio_starvations++;
     ResetAudioTimeline();
@@ -999,11 +1233,9 @@ static void PumpAudio(void) {
   Uint32 queued_frames =
       SDL_GetQueuedAudioSize(s_audio_device) / bytes_per_frame;
   s_audio_last_queued_frames = queued_frames;
-  /* Keep the queued device fed at the cadence macOS actually grants. A
-   * ProMotion panel may resolve the requested 60.0988 Hz link to 60 Hz; using
-   * the cartridge rate in that case loses almost one sample per displayed
-   * frame and creates periodic audio under-runs that can coincide with motion
-   * hitches. */
+  /* Keep the queued device fed at the selected host presentation cadence.
+   * The release clock is exactly 60 Hz; the opted-in display-link path updates
+   * this rate only from stable 50-75 Hz callback intervals. */
   s_audio_accumulator += (double)kAudioRate / s_audio_pacing_fps;
   int frames = (int)s_audio_accumulator;
   s_audio_accumulator -= frames;
@@ -1016,6 +1248,7 @@ static void PumpAudio(void) {
     return;
   }
   RtlRenderAudio(s_audio_scratch, frames, kAudioChannels);
+  Dkc1Msu1Mix(s_msu1, s_audio_scratch, frames, kAudioChannels, kAudioRate);
   const Uint32 bytes = (Uint32)frames * kAudioChannels * sizeof(int16_t);
   if (SDL_QueueAudio(s_audio_device, s_audio_scratch, bytes) != 0) {
     s_audio_drops++;
@@ -1049,6 +1282,10 @@ static void QuickLoad(void) {
     snprintf(s_status, sizeof s_status, "quick load FAILED");
   } else {
     ResetAudioTimeline();
+    Dkc1Msu1Reset(s_msu1);
+    ObserveMsu1MusicState();
+    s_stomp_probe = (Dkc1StompProbe){0};
+    StopControllerRumble();
     char error[256];
     if (!Dkc1FlightRecorderReanchorAfterStateLoad(
             s_host_frame, error, sizeof error))
@@ -1141,6 +1378,17 @@ static void SetFullscreen(int fullscreen) {
   UpdateTitle();
 }
 
+static void SetFullscreenPixelSharp(int pixel_sharp) {
+  s_fullscreen_pixel_sharp = pixel_sharp != 0;
+  Dkc1MacSetFullscreenPixelSharp(s_fullscreen_pixel_sharp);
+  ApplyPresentationGeometry();
+  snprintf(s_status, sizeof s_status, "fullscreen scaling: %s",
+           s_fullscreen_pixel_sharp ? "pixel sharp" : "smooth");
+  s_reanchor_pacer = 1;
+  Present();
+  UpdateTitle();
+}
+
 static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
   if ((mod & KMOD_GUI) && key == SDLK_q) {
     s_running = 0;
@@ -1162,6 +1410,7 @@ static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
   } else if (key == SDLK_F7) {
     s_paused = !s_paused;
     if (s_paused) {
+      StopControllerRumble();
       if (s_audio_device)
         SDL_PauseAudioDevice(s_audio_device, 1);
     } else {
@@ -1189,6 +1438,7 @@ void Dkc1MacMenuCommand(int command) {
     case kDkc1MacMenuPause:
       s_paused = !s_paused;
       if (s_paused) {
+        StopControllerRumble();
         if (s_audio_device)
           SDL_PauseAudioDevice(s_audio_device, 1);
       } else {
@@ -1210,8 +1460,28 @@ void Dkc1MacMenuCommand(int command) {
     case kDkc1MacMenuExportRepro:
       ExportRepro();
       return;
+    case kDkc1MacMenuChooseMusicPack: {
+      char *path = Dkc1MacChooseMsu1();
+      if (path) {
+        snprintf(s_status, sizeof s_status,
+                 "music pack installed; restart DKC1Recomp to apply");
+        free(path);
+      }
+      break;
+    }
+    case kDkc1MacMenuDisableMusicPack:
+      Dkc1MacClearMsu1();
+      snprintf(s_status, sizeof s_status,
+               "replacement music disabled after restart");
+      break;
     case kDkc1MacMenuFullscreen:
       SetFullscreen(!s_fullscreen);
+      return;
+    case kDkc1MacMenuFullscreenSmooth:
+      SetFullscreenPixelSharp(0);
+      return;
+    case kDkc1MacMenuFullscreenPixelSharp:
+      SetFullscreenPixelSharp(1);
       return;
     case kDkc1MacMenuAspectNative:
       SetAspectMode(kDkc1VideoAspectNative);
@@ -1286,8 +1556,13 @@ static void Cleanup(uint8_t *rom) {
   Dkc1InputPlaybackFree(&s_input_playback);
   Dkc1MacDisplayLinkStop();
   s_display_link_active = 0;
-  if (s_controller)
+  HapticWorkerStop();
+  if (s_controller) {
+    (void)SDL_GameControllerRumble(s_controller, 0, 0, 0);
     SDL_GameControllerClose(s_controller);
+  }
+  Dkc1Msu1Close(s_msu1);
+  s_msu1 = NULL;
   if (s_audio_device)
     SDL_CloseAudioDevice(s_audio_device);
   if (s_texture)
@@ -1302,6 +1577,7 @@ static void Cleanup(uint8_t *rom) {
 
 int main(int argc, char **argv) {
   SDL_SetMainReady();
+  (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   /* A native macOS fullscreen Space constrains SDL to the panel's inset safe
    * area (3949x2464 on the target 4112x2658 MacBook display). Set this before
    * the Cocoa video backend initializes so FULLSCREEN_DESKTOP uses the full
@@ -1328,6 +1604,22 @@ int main(int argc, char **argv) {
     ShowError("Unsupported DKC1 ROM", message);
     SDL_Quit();
     return 2;
+  }
+
+  char *music_pack_path = ConfiguredMusicPackPath();
+  if (music_pack_path) {
+    s_msu1 = Dkc1Msu1Open(music_pack_path, rom_error, sizeof rom_error);
+    if (!s_msu1 ||
+        !Dkc1Msu1ApplySpcMusicMute(rom, rom_size,
+                                   rom_error, sizeof rom_error)) {
+      fprintf(stderr, "warning: MSU-1 music disabled: %s\n", rom_error);
+      Dkc1Msu1Close(s_msu1);
+      s_msu1 = NULL;
+    } else {
+      fprintf(stderr, "msu1: replacement music active from %s\n",
+              music_pack_path);
+    }
+    free(music_pack_path);
   }
 
   PrepareUserDirectory();
@@ -1368,6 +1660,16 @@ int main(int argc, char **argv) {
   }
 
   s_paused = EnvironmentEnabled("DKC1_START_PAUSED");
+  s_fullscreen_pixel_sharp = Dkc1MacSavedFullscreenPixelSharp();
+  s_haptics_enabled = !getenv("DKC1_HAPTICS") ||
+                      EnvironmentEnabled("DKC1_HAPTICS");
+  if (!HapticWorkerStart()) {
+    fprintf(stderr, "warning: haptic worker unavailable: %s\n",
+            SDL_GetError());
+    s_haptics_enabled = 0;
+  }
+  Dkc1Msu1Reset(s_msu1);
+  ObserveMsu1MusicState();
   {
     const char *smoke = getenv("DKC1_SMOKE_TEST_FRAMES");
     if (smoke && *smoke) {
@@ -1415,8 +1717,17 @@ int main(int argc, char **argv) {
     return 20;
   }
 
-  snprintf(s_status, sizeof s_status,
-           "Z/X/S/A controls | F7 pause | F11/F12 state | Alt-Return full screen");
+  const char *haptics_status =
+      s_haptics_enabled ? "controller stomp haptics on" : "haptics off";
+  if (s_msu1 && Dkc1Msu1CurrentTrack(s_msu1))
+    snprintf(s_status, sizeof s_status, "MSU-1 track %u | %s",
+             Dkc1Msu1CurrentTrack(s_msu1), haptics_status);
+  else if (s_msu1)
+    snprintf(s_status, sizeof s_status, "MSU-1 waiting for music cue | %s",
+             haptics_status);
+  else
+    snprintf(s_status, sizeof s_status, "Z/X/S/A controls | %s",
+             haptics_status);
   if (EnvironmentEnabled("DKC1_START_FULLSCREEN"))
     SetFullscreen(1);
   UpdateTitle();
@@ -1457,7 +1768,7 @@ int main(int argc, char **argv) {
         s_reanchor_pacer = 0;
       }
       if (s_display_link_active) {
-        if (!DisplayPacerWaitForTarget(&pacer, &display_pacer, 0)) {
+        if (!DisplayPacerWaitForTarget(&pacer, &display_pacer)) {
           PollEvents();
           s_reanchor_pacer = 1;
           continue;
@@ -1504,7 +1815,11 @@ int main(int argc, char **argv) {
     phase_end = FramePacerNow();
     work_profile.input = phase_end - phase_start;
     phase_start = phase_end;
+    Dkc1StompProbeCapture(&s_stomp_probe, g_ram);
     RtlRunFrame(input);
+    if (Dkc1StompProbeAccepted(&s_stomp_probe, g_ram))
+      PulseStompHaptic();
+    ObserveMsu1MusicState();
     phase_end = FramePacerNow();
     work_profile.emulation = phase_end - phase_start;
     if (g_fail || !Dkc1LastLleResult()) {
@@ -1548,6 +1863,13 @@ int main(int argc, char **argv) {
       UpdateWindowTitle();
     phase_end = FramePacerNow();
     work_profile.title = phase_end - phase_start;
+    phase_start = phase_end;
+    /* Upload and encode while the target still has several milliseconds of
+     * lead. Only the lightweight drawable submission remains after the final
+     * display-link wait. */
+    PreparePresentation();
+    phase_end = FramePacerNow();
+    work_profile.ppu += phase_end - phase_start;
     const double work_end = FramePacerNow();
     FramePacerRecordWork(&pacer, work_end - work_start);
     FramePacerRecordWorkProfile(&pacer, &work_profile,
@@ -1563,15 +1885,14 @@ int main(int argc, char **argv) {
     PacingLogInjectTestStall(&pacing_log, s_host_frame);
 
     /* CADisplayLink wakes one interval before a concrete targetTimestamp.
-     * Finish the frame early, then submit at a fixed one-millisecond lead so
-     * variable emulation/render cost does not become variable Metal enqueue
-     * cadence. The bridge returns an already-fired but unconsumed callback on
-     * the next iteration, so waiting here cannot halve the frame rate. */
+     * Texture upload and command encoding are already complete. Submit the
+     * prepared drawable at a four-millisecond lead so compositor pickup
+     * variance cannot move ordinary frames between adjacent refresh slots. */
     if (!single_step) {
       if (display_frame_sync &&
           FramePacerNow() > pacer.next_deadline -
               pacer.frequency * kMacSubmitLeadSeconds) {
-        if (!DisplayPacerWaitForTarget(&pacer, &display_pacer, 1)) {
+        if (!DisplayPacerWaitForTarget(&pacer, &display_pacer)) {
           PollEvents();
           s_reanchor_pacer = 1;
           continue;
@@ -1579,18 +1900,14 @@ int main(int argc, char **argv) {
         pacing_log.target = pacer.next_deadline;
       }
       const double final_wait_start = FramePacerNow();
-      if (display_frame_sync) {
-        FramePacerWaitUntil(
-            pacer.next_deadline - pacer.frequency * kMacSubmitLeadSeconds,
-            pacer.frequency);
-      } else {
-        FramePacerWaitUntil(pacer.next_deadline, pacer.frequency);
-      }
+      FramePacerWaitUntil(
+          pacer.next_deadline - pacer.frequency * kMacSubmitLeadSeconds,
+          pacer.frequency);
       pacing_log.wait_ms +=
           (FramePacerNow() - final_wait_start) * 1000.0 / pacer.frequency;
     }
     const double present_start = FramePacerNow();
-    Present();
+    SubmitPresentation();
     const double presented_at = FramePacerNow();
     FramePacerRecordPresentWait(&pacer, presented_at - present_start);
     FramePacerRecordPresent(&pacer, presented_at);
