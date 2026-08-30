@@ -189,3 +189,105 @@ overlay, first-divergence locator, and lifecycle tools. See
   explicit fixed-60-Hz versus adaptive-refresh display comparison, and direct
   compositor/scanout measurement remain untested. No widescreen capability or
   gameplay behavior was promoted by this change.
+
+## 2026-08-29 — macOS 16:10 and full-panel presentation
+
+- **Symptom/first visible failure:** 16:10 appeared narrower than 16:9, and a
+  4112x2658 fullscreen capture retained about 81 black pixels at both sides.
+  The active raster was 3949x2464, exactly an 11x integer presentation of the
+  359x224 display-space image.
+- **Root cause/domain:** host presentation plus selectable margin geometry.
+  The macOS renderer treated 256/308/342-wide SNES source pixels as square and
+  retained integer scaling in fullscreen. The cartridge image, logical camera,
+  collision, exits, and timing were not the source of the outer border.
+- **Change:** macOS now offers 308x224 symmetric 16:10 (26 source pixels per
+  side), while retaining 256x224 native and 342x224 16:9. The SDL host applies
+  the SNES 7:6 pixel aspect only at presentation, keeps integer scaling in a
+  window, and uses an explicit fractional nearest-neighbor aspect fit against
+  the live high-DPI drawable in fullscreen. The texture and native center are
+  not resampled or cropped before the final host presentation. A default-off
+  `DKC1_START_FULLSCREEN=1` path supports deterministic visible QA.
+- **Source/build:** clean USA ROM SHA-256
+  `fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15`;
+  source commit `23fa62d` plus the working-tree changes; arm64 executable
+  SHA-256
+  `a8d3317ecf594b073877664bedff3b7ab1a524181cef83277e232cc2636b5cf0`.
+- **Visible QA:** a real paused fullscreen application capture on the
+  4112x2658 Mac panel fit the 359:224 presentation at 4112x2566, leaving zero
+  side bars and the unavoidable 46-pixel top/bottom remainder. The retained
+  downsampled capture at
+  `build/macos/fullscreen-validation/visible_16x10_fullscreen.jpeg` measured
+  1189x743 at x=0/y=13 inside its 1189x768 frame; SHA-256
+  `2d887ad4ed33ed038cf58f16984ff81d0bbcda2e708629e035de0c718a11c0ee`.
+- **Validation:** `./build_macos.sh`, 206 Python tests (one unavailable local
+  imported-state fixture skipped), `git diff --check`, deep ad-hoc signature
+  verification, native aspect-menu QA, and the real fullscreen capture passed.
+- **Residual scope:** 16:10 is optional and not a promoted replacement for the
+  default 16:9 mode. The complete 40-entrance fresh-entry matrix was not rerun,
+  so this record validates host scaling and the observed scene rather than all
+  layout/gameplay closures. Filling the remaining 46-pixel vertical bands
+  would require crop or distortion and is intentionally not done.
+
+## 2026-08-30 — display-linked macOS traversal pacing
+
+- **Symptom/first visible failure:** horizontally scrolling terrain still
+  showed small hitches after the first Metal-vsync candidate. In the tester's
+  live run the first attributed whole-host miss was frame 148 (52.191 ms), but
+  other 21-29 ms CPU submission intervals occurred while the Mach deadline was
+  still 4-10 ms early. The title's near-60 average therefore did not describe
+  visible scanout cadence.
+- **Root cause/domain:** host presentation timing only. SDL2's Metal
+  `SDL_RenderPresent` return is an enqueue timestamp, not a scanout timestamp.
+  Skipping the final Mach wait whenever the renderer advertised vsync allowed
+  frames to enter Core Animation with a varying amount of queue lead, so
+  PRESENTVSYNC by itself did not phase-lock cartridge frames to ProMotion.
+  Independent 14-52 ms spikes were real AppKit/window-event work and needed to
+  be distinguished from emulation, PPU, diagnostics, audio, and title work.
+- **Change:** macOS 14+ now creates a window-bound `CADisplayLink` on a private
+  user-interactive run loop and requests 60.098811862 Hz. The main SDL thread
+  waits for a new callback, prepares exactly one cartridge frame for its
+  `targetTimestamp`, and never catches up a callback that became stale during
+  host work. SDL's accelerated Metal vsync remains enabled, while the absolute
+  Mach scheduler and its 6 ms adaptive guard are retained strictly as the
+  compatibility fallback. Audio production follows the measured callback
+  cadence, preventing the tested panel's 60 Hz grant from draining nearly one
+  queued sample per frame. The periodic WindowServer title update is off by
+  default (`DKC1_LIVE_TITLE=1` restores it). The Mac visible host also accepts
+  `SNESRECOMP_INPUT_PLAY`, matching the existing Windows deterministic-input
+  path.
+- **Diagnostics/A-B:** `DKC1_FPS_STATS=1` now prints display callback cadence,
+  stale callbacks/timeouts, target-deadline phase, Metal enqueue wait, and an
+  events/input/emulation/PPU/diagnostics/audio/title split for every host-work
+  frame over 8 ms. `DKC1_DISABLE_DISPLAY_LINK=1` selects the absolute-clock
+  fallback and `DKC1_DISABLE_VSYNC=1` disables Metal presentation sync; both
+  switches remain default-off.
+- **Source/build:** clean USA ROM SHA-256
+  `fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15`;
+  source commit `d38d7ea` plus the working-tree macOS presentation changes.
+  The final signed arm64 executable SHA-256 is
+  `3b70146ea9377ac07fd19c276e62409e4f821673295238c8a879db074c92f7bf`.
+- **Fresh visible traversal:** a 2,640-frame fullscreen 16:10 replay loaded the
+  tester's immutable quick state inside Temple Tempest, held run-right, and
+  issued regular held jumps until the visible application returned to the next
+  world-map node. This exercised scrolling rather than a stationary menu. The
+  display link supplied 2,639 measured intervals at 59.881 Hz overall
+  (16.700 ms average, 16.667 ms minimum, 29.185 ms maximum), with zero wait
+  timeouts. All 21 explicitly skipped callbacks belonged to the asynchronous
+  fullscreen setup. After that transition there was no cartridge-frame work
+  over one 16.667 ms display interval; the only logged traversal work sample
+  over 8 ms was 8.571 ms.
+- **Validation:** `./build_macos.sh` completed, all 210 Python tests passed
+  (one unavailable local imported-state fixture skipped), `git diff --check`
+  passed, the executable links the system QuartzCore framework and bundled
+  SDL2, and `codesign --verify --deep --strict` accepted the packaged app and
+  nested SDL framework. A final packaged-app smoke run rechecks active Metal
+  vsync and display-link startup before handoff.
+- **Evidence boundary/residual scope:** a full-screen ScreenCaptureKit probe
+  was deliberately excluded as a cadence oracle because encoding the 4096 x
+  2648 desktop dropped capture samples and itself introduced an AppKit miss.
+  The display link resolved the 60.0988 Hz request to exactly 60 Hz on the
+  tested ProMotion panel; gameplay is consequently about 0.16 percent slower
+  while audio remains real-time. Fullscreen transition work is still expected
+  before traversal begins. This host-only change does not alter cartridge
+  state, pixels, camera/collision, streaming, or claim a complete cross-layout
+  gameplay matrix.

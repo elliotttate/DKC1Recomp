@@ -1,6 +1,7 @@
 #import "macos_file_picker.h"
 
 #import <AppKit/AppKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include <stdlib.h>
@@ -13,10 +14,73 @@
 static Dkc1MenuController *s_menu_controller;
 static NSMenuItem *s_menu_items[kDkc1MacMenuCommandCount];
 
+@interface Dkc1DisplayLinkController : NSObject {
+@public
+  NSCondition *condition;
+  CADisplayLink *displayLink;
+  BOOL started;
+  BOOL stopRequested;
+  BOOL stopped;
+  unsigned long long callbackNumber;
+  CFTimeInterval timestamp;
+  CFTimeInterval targetTimestamp;
+  CFTimeInterval duration;
+}
+- (void)displayLinkFired:(CADisplayLink *)sender;
+- (void)runDisplayLinkThread;
+@end
+
+static Dkc1DisplayLinkController *s_display_link_controller;
+
 @implementation Dkc1MenuController
 - (void)runCommand:(id)sender {
   Dkc1MacMenuCommand((int)[sender tag]);
 }
+@end
+
+@implementation Dkc1DisplayLinkController
+
+- (void)displayLinkFired:(CADisplayLink *)sender {
+  [condition lock];
+  callbackNumber++;
+  timestamp = sender.timestamp;
+  targetTimestamp = sender.targetTimestamp;
+  duration = sender.duration;
+  [condition signal];
+  [condition unlock];
+}
+
+- (void)runDisplayLinkThread {
+  @autoreleasepool {
+    [NSThread currentThread].qualityOfService =
+        NSQualityOfServiceUserInteractive;
+    NSRunLoop *runLoop = [NSRunLoop currentRunLoop];
+    [displayLink addToRunLoop:runLoop forMode:NSDefaultRunLoopMode];
+    [condition lock];
+    started = YES;
+    [condition signal];
+    [condition unlock];
+
+    for (;;) {
+      [condition lock];
+      BOOL shouldStop = stopRequested;
+      [condition unlock];
+      if (shouldStop)
+        break;
+      @autoreleasepool {
+        [runLoop runMode:NSDefaultRunLoopMode
+              beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.050]];
+      }
+    }
+
+    [displayLink invalidate];
+    [condition lock];
+    stopped = YES;
+    [condition broadcast];
+    [condition unlock];
+  }
+}
+
 @end
 
 static NSMenuItem *AddCommand(NSMenu *menu, NSString *title, int command,
@@ -105,8 +169,10 @@ void Dkc1MacInstallMenu(void) {
     NSMenu *aspect = [[NSMenu alloc] initWithTitle:@"Aspect Ratio"];
     AddCommand(aspect, @"Native 4:3 (256x224)", kDkc1MacMenuAspectNative,
                @"", 0);
+    AddCommand(aspect, @"Widescreen 16:10 (308x224)",
+               kDkc1MacMenuAspect16x10, @"", 0);
     AddCommand(aspect, @"Widescreen 16:9 (342x224)",
-               kDkc1MacMenuAspectWidescreen, @"", 0);
+               kDkc1MacMenuAspect16x9, @"", 0);
     NSMenu *layers = [[NSMenu alloc] initWithTitle:@"Layers"];
     AddCommand(layers, @"Composite", kDkc1MacMenuLayerComposite, @"", 0);
     AddCommand(layers, @"BG1 Only", kDkc1MacMenuLayerBg1, @"", 0);
@@ -128,7 +194,8 @@ void Dkc1MacInstallMenu(void) {
   }
 }
 
-void Dkc1MacUpdateMenuState(int paused, int fullscreen, int widescreen,
+void Dkc1MacUpdateMenuState(int paused, int fullscreen,
+                            Dkc1VideoAspect aspect,
                             unsigned char layer_mask, int provenance) {
   if (!s_menu_controller)
     return;
@@ -141,9 +208,14 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen, int widescreen,
   s_menu_items[kDkc1MacMenuFullscreen].state =
       fullscreen ? NSControlStateValueOn : NSControlStateValueOff;
   s_menu_items[kDkc1MacMenuAspectNative].state =
-      widescreen ? NSControlStateValueOff : NSControlStateValueOn;
-  s_menu_items[kDkc1MacMenuAspectWidescreen].state =
-      widescreen ? NSControlStateValueOn : NSControlStateValueOff;
+      aspect == kDkc1VideoAspectNative ? NSControlStateValueOn
+                                       : NSControlStateValueOff;
+  s_menu_items[kDkc1MacMenuAspect16x10].state =
+      aspect == kDkc1VideoAspect16x10 ? NSControlStateValueOn
+                                      : NSControlStateValueOff;
+  s_menu_items[kDkc1MacMenuAspect16x9].state =
+      aspect == kDkc1VideoAspect16x9 ? NSControlStateValueOn
+                                     : NSControlStateValueOff;
   const int layer_commands[] = {
     kDkc1MacMenuLayerComposite, kDkc1MacMenuLayerBg1,
     kDkc1MacMenuLayerBg2, kDkc1MacMenuLayerBg3, kDkc1MacMenuLayerObj
@@ -158,6 +230,100 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen, int widescreen,
   s_menu_items[layer_commands[selected]].state = NSControlStateValueOn;
   s_menu_items[kDkc1MacMenuProvenance].state =
       provenance ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+int Dkc1MacDisplayLinkStart(void *native_window, double preferred_fps) {
+  @autoreleasepool {
+    if (s_display_link_controller)
+      return 1;
+    if (!native_window || preferred_fps <= 0.0)
+      return 0;
+    if (@available(macOS 14.0, *)) {
+      NSWindow *window = (NSWindow *)native_window;
+      Dkc1DisplayLinkController *controller =
+          [[Dkc1DisplayLinkController alloc] init];
+      controller->condition = [[NSCondition alloc] init];
+      controller->displayLink =
+          [[window displayLinkWithTarget:controller
+                                selector:@selector(displayLinkFired:)] retain];
+      if (!controller->displayLink) {
+        [controller->condition release];
+        [controller release];
+        return 0;
+      }
+      const float rate = (float)preferred_fps;
+      controller->displayLink.preferredFrameRateRange =
+          CAFrameRateRangeMake(rate, rate, rate);
+      controller->displayLink.paused = NO;
+      s_display_link_controller = controller;
+      [NSThread detachNewThreadSelector:@selector(runDisplayLinkThread)
+                               toTarget:controller
+                             withObject:nil];
+
+      [controller->condition lock];
+      NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:1.0];
+      while (!controller->started && !controller->stopped) {
+        if (![controller->condition waitUntilDate:deadline])
+          break;
+      }
+      const BOOL running = controller->started && !controller->stopped;
+      [controller->condition unlock];
+      if (running)
+        return 1;
+      Dkc1MacDisplayLinkStop();
+    }
+    return 0;
+  }
+}
+
+int Dkc1MacDisplayLinkWait(double timeout_seconds, double *out_timestamp,
+                           double *out_target_timestamp, double *out_duration,
+                           unsigned long long *out_callback_number) {
+  @autoreleasepool {
+    Dkc1DisplayLinkController *controller = s_display_link_controller;
+    if (!controller || timeout_seconds <= 0.0)
+      return 0;
+    [controller->condition lock];
+    const unsigned long long baseline = controller->callbackNumber;
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout_seconds];
+    while (controller->callbackNumber == baseline && !controller->stopped) {
+      if (![controller->condition waitUntilDate:deadline])
+        break;
+    }
+    const BOOL fired = controller->callbackNumber != baseline;
+    if (fired) {
+      if (out_timestamp)
+        *out_timestamp = controller->timestamp;
+      if (out_target_timestamp)
+        *out_target_timestamp = controller->targetTimestamp;
+      if (out_duration)
+        *out_duration = controller->duration;
+      if (out_callback_number)
+        *out_callback_number = controller->callbackNumber;
+    }
+    [controller->condition unlock];
+    return fired ? 1 : 0;
+  }
+}
+
+void Dkc1MacDisplayLinkStop(void) {
+  @autoreleasepool {
+    Dkc1DisplayLinkController *controller = s_display_link_controller;
+    if (!controller)
+      return;
+    [controller->condition lock];
+    controller->stopRequested = YES;
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:1.0];
+    while (!controller->stopped) {
+      if (![controller->condition waitUntilDate:deadline])
+        break;
+    }
+    [controller->condition unlock];
+    [controller->displayLink release];
+    [controller->condition release];
+    [controller release];
+    s_display_link_controller = nil;
+  }
 }
 
 char *Dkc1MacChooseRom(void) {

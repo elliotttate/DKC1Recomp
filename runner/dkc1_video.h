@@ -8,15 +8,24 @@
 enum {
   kDkc1VideoNativeWidth = 256,
   kDkc1VideoHeight = 224,
-  /* SNES pixels present at a 7:6 pixel aspect. 342 source columns at 224
-   * lines give 1.78125, within one pixel of exact 16:9 (same policy as
-   * DKC2Recomp). Widescreen stays disabled until the DKC1 terrain
-   * reconstruction is audited; the buffer is sized for it up front. */
+  /* SNES pixels present at a 7:6 pixel aspect. A symmetric 26-pixel margin
+   * gives 308x224 (1.60417, the closest even-width 16:10 presentation), while
+   * 43 pixels gives 342x224 (1.78125, within one source pixel of 16:9). The
+   * backing buffer remains sized for the largest supported presentation. */
+  kDkc1VideoWidescreen16x10Extra = 26,
+  kDkc1VideoWidescreen16x10Width =
+      kDkc1VideoNativeWidth + 2 * kDkc1VideoWidescreen16x10Extra,
   kDkc1VideoWidescreenExtra = 43,
   kDkc1VideoWidescreenWidth =
       kDkc1VideoNativeWidth + 2 * kDkc1VideoWidescreenExtra,
   kDkc1VideoBytesPerPixel = 4,
 };
+
+typedef enum Dkc1VideoAspect {
+  kDkc1VideoAspectNative = 0,
+  kDkc1VideoAspect16x10,
+  kDkc1VideoAspect16x9,
+} Dkc1VideoAspect;
 
 /* These symbols are the shared snesrecomp widescreen runtime contract. */
 extern bool g_ws_active;
@@ -26,6 +35,8 @@ struct CpuState;
 
 void Dkc1VideoSetWidescreen(bool enabled);
 bool Dkc1VideoIsWidescreen(void);
+void Dkc1VideoSetAspect(Dkc1VideoAspect aspect);
+Dkc1VideoAspect Dkc1VideoGetAspect(void);
 void Dkc1VideoSetTerrainReady(bool ready);
 bool Dkc1VideoTerrainReady(void);
 int Dkc1VideoWidth(void);

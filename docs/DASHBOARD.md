@@ -1,29 +1,17 @@
 # DKC1Recomp regression dashboard
 
-Generated 2026-08-16 17:02 UTC at commit `2bd177d-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
+Generated 2026-08-30 14:24 UTC at commit `d38d7ea-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
 
 ## Contracts
 
 | contract | last result | legs | evidence |
 |---|---|---|---|
 | jungle-death-transition (`jungle-death-transition.json`) | NOT RUN in latest cycle | - | - |
-| jungle-entry (`jungle-entry.json`) | PASS | entry+quickload | `C:\Users\ellio\Documents\GitHub\DKC1Recomp\build\regression\jungle-entry` |
+| jungle-entry (`jungle-entry.json`) | NOT RUN in latest cycle | - | - |
 
 ## Route sweep
 
-_9 routes swept; levels without a route are NOT covered — absence here is not a pass_
-
-| route | rc | cache oob (r/w) | rebases | oam wrap | scene flags |
-|---|---|---|---|---|---|
-| capture_jungle_route_snapshots.dks | 22 | 0/0 | 0 | 0 | clean |
-| capture_jungle_snapshots.dks | 22 | 0/0 | 0 | 0 | clean |
-| jungle_snapshot_scroll.dks | 0 | 0/0 | 0 | 0 | clean |
-| rope_to_left_margin.dks | 0 | 0/0 | 0 | 0 | clean |
-| rope_to_right_margin.dks | 0 | 0/0 | 0 | 0 | clean |
-| route_death.dks | 0 | 0/0 | 0 | 2 | (0, 22, 217, 0): BLANK(4032),PILLARBOX; (0, 22, 0, 0): PILLARBOX |
-| route_jungle.dks | 0 | 0/0 | 0 | 0 | (0, 22, 217, 0): BLANK(4032),PILLARBOX |
-| route_jungle_quickload.dks | skipped | - | - | - | dependent leg (needs a seeded state) |
-| snapshot_smoke.dks | 0 | 0/0 | 0 | 0 | clean |
+_No sweep report; run `python tools/level_sweep.py`._
 
 ## Known issues
 
@@ -42,6 +30,8 @@ _9 routes swept; levels without a route are NOT covered — absence here is not 
 | ropey-rampage-widened-initializer-corruption | fixed | Ropey Rampage could start with terrain sliced into displaced horizontal and vertical bands because the shared widened cartridge initializer generated invalid native-ring data for this layout. | `build/visible-bonusguard-flight-20260816/capture-f00009082-20260816-101211-p61340` |
 | underwater-split-map-metatile-bank-pillarbox | fixed | Underwater level $0061/$80BF stayed entirely 4:3 because the host decoded both level-map cells and metatile definitions from the map bank. This scene publishes map bank $E9 in $D5 and metatile-definition bank $D0 in $D6, so the one-bank decode failed calibration and correctly fell back to pillarbox. | `build/current-level-live/level0061-entrance80BF-20260816-120545.state (external evidence; not committed)` |
 | croctopus-authored-right-boundary-gap | fixed | Croctopus Chase level $0061/$00BF widened correctly, but its lower-right rock wall stopped at the native edge and exposed BG2 water in the right margin. The ROM map itself switches from a fully populated wall metatile at world X $0620-$063F to wholly transparent metatiles at X $0640 because those cells were never visible on stock hardware. | `build/current-underwater-rightgap-20260816/level0061-rightgap.state (external evidence; not committed)` |
+| croctopus-nearest-right-wall-source | fixed | At Croctopus Chase level $0061/$00C0 near camera X $007F, BG1's first offscreen right metatile was a complete wall but the following unused metatile was empty. The continuation rule skipped the nearer complete block and tested only the native-edge block, leaving alternating water and rock fragments in the outermost right margin. | `build/repros/underwater-right-20260816-1823/underwater-right.state (external evidence; not committed)` |
 | croctopus-authored-left-boundary-gap | fixed | At world X $0241 in Croctopus Chase level $0061/$00BF, BG1's rock wall stopped 11 pixels inside the left widescreen margin and exposed BG2 water. The ROM map has a fully populated wall metatile at the stock left edge (metatile X $12) but a wholly transparent offscreen metatile at X $10. | `build/current-underwater-leftgap-20260816/level0061-leftgap.state (external evidence; not committed)` |
+| slip-slide-ride-moving-margin-calibration-flicker | fixed | Slip-Slide Ride mode $0009, level $0051, entrance $006D could replace most of both widescreen margins with adjacent ROM tile columns while the camera moved. Independent floor-division first exposed 1-3 pixel camera smoothing; a later uphill/downhill repro showed that rounding an exact four-pixel half-tile tie away from zero still selected an adjacent column. | `build/repros/ice-cave-flicker-20260830/exact-user.state plus traverse-right.inputs for the original traversal; build/repros/ice-cave-flicker-20260830/vertical-left-right/exact-user-new.state plus left-right.inputs for the four-pixel uphill/downhill tie` |
 
 Issue lifecycle: edit `docs/KNOWN_ISSUES.json` (set status `fixed` with the fixing commit) and regenerate. A fixed issue regressing shows up here as its contract/sweep line failing.

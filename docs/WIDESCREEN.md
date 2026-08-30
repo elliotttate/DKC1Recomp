@@ -1,16 +1,28 @@
 # DKC1 recomp widescreen architecture
 
-The recomp displays a 342x224 source image: 43 extra SNES pixels on each side
-of the native 256x224 frame. With the SNES 7:6 pixel aspect, this is 1.78125,
-within one source pixel of 16:9.
+The recomp's standard widescreen mode displays a 342x224 source image: 43
+extra SNES pixels on each side of the native 256x224 frame. With the SNES 7:6
+pixel aspect, this is 1.78125, within one source pixel of 16:9. The native
+macOS host also offers a symmetric 308x224 mode with 26 pixels per side; its
+1.60417 display aspect is the closest even-width presentation to 16:10.
 
-The visible desktop exposes both presentation modes under
-`View -> Aspect Ratio`: `Native 4:3 (256x224)` and
-`Widescreen 16:9 (342x224)`. Switching modes changes only the host framebuffer,
-source pitch, presentation history, and window size; it does not reload the
-ROM or alter cartridge WRAM, camera, collision, or level state. The desktop
-defaults to 16:9. For scripted/headless runs, `DKC1_WIDESCREEN=1` selects 16:9
-and `DKC1_WIDESCREEN=0` selects native 4:3.
+The visible desktop exposes presentation modes under `View -> Aspect Ratio`.
+Windows offers `Native 4:3 (256x224)` and `Widescreen 16:9 (342x224)`; macOS
+also offers `Widescreen 16:10 (308x224)`. Switching modes changes only the
+host framebuffer, source pitch, presentation history, and window size; it does
+not reload the ROM or alter cartridge WRAM, camera, collision, or level state.
+The desktop defaults to 16:9. On macOS, `DKC1_ASPECT=16:10` selects 16:10 at
+startup. For scripted/headless runs, `DKC1_WIDESCREEN=1` selects 16:9 and
+`DKC1_WIDESCREEN=0` selects native 4:3.
+
+The macOS texture always retains its native source width (256, 308, or 342
+pixels). The SDL presentation width applies the SNES 7:6 pixel aspect, giving
+approximately 299x224, 359x224, or 399x224 on screen. Windowed mode keeps
+integer scaling. Fullscreen deliberately uses a fractional nearest-neighbor
+fit: on a 16:10-class Mac panel the 16:10 mode consumes the full display width
+with only the small vertical remainder required by the panel's exact drawable
+aspect. This scaling is presentation-only and never changes PPU pixels or
+cartridge state.
 
 ## What came from DKC2Recomp
 
@@ -160,12 +172,13 @@ All BG3 presentation gates reset every frame to prevent scene leakage.
 ## Level-edge presentation clamp and black-screen repair
 
 Keeping DKC1's logical camera stock avoids the ROM hack's collision, exit, and
-boss-boundary regressions, but a centered 342-pixel host viewport at the
-authored left endpoint asks for 43 pixels before the beginning of the level.
-Those nonexistent world pixels produced the hard left-side cutoff until the
-player first moved right. The host now computes a presentation-only target:
+boss-boundary regressions, but a centered wide host viewport at the authored
+left endpoint asks for margin pixels before the beginning of the level. Those
+nonexistent world pixels produced the hard left-side cutoff until the player
+first moved right. The host now computes a presentation-only target using the
+active per-side extent:
 
-`clamp(logicalCamera, lowerBound + 43, upperBound - 43)`
+`clamp(logicalCamera, lowerBound + extra, upperBound - extra)`
 
 The resulting bias is applied to all BG scroll inputs and decoded OAM X for
 the rendered frame, then removed before HDMA continues. Generated object cull
@@ -182,6 +195,54 @@ returned from `$BD:FC19` to invalid `$BD:FE01` and eventually executed garbage.
 The retry now follows the generated core's exact push sequence: decrement S,
 write the little-endian word, then decrement S again. A complete 12,984-frame
 widescreen route finishes without that invalid return or a black frame.
+
+## Slip-Slide Ride moving-margin calibration
+
+The supplied Slip-Slide Ride quicksave (mode `$0009`, level `$0051`, entrance
+`$006D`) exposed a presentation-only flicker while traversing. The first bad
+trace frame was absolute frame `271198` (zero-based capture index 6). The
+cartridge logical camera normally leads or trails BG1's rendered PPU scroll by
+one to four pixels in this room, while the vertical map has an authored
+512-pixel phase. Calibration previously floor-divided each absolute coordinate
+to a tile and then subtracted. Whenever only one coordinate crossed an
+eight-pixel boundary, the decoder jumped to an adjacent ROM row or column for
+one frame and rebuilt both margins from the wrong source.
+
+For this proven scene tuple only, calibration now subtracts the signed pixel
+coordinates first and rounds that delta to the nearest tile, resolving an exact
+four-pixel half-tile tie toward zero. This keeps the X decode offset at zero
+across camera smoothing, still advances a real five-pixel crossing, and
+preserves the authored vertical phase. The fallback expression remains
+byte-for-byte in place for every other scene; the complete all-entrance matrix
+is therefore not needed to promote an unproven global calibration change.
+
+The exact 330-frame Right+Y route reduced world-aligned temporal changes in the
+two margins from 2,064,024 to 582,396 pixels (71.8%). It improved 123 frames and
+made none worse. The old trace used six decode-offset states; the corrected
+trace uses `[0,64]` on 329 frames and `[0,-64]` only at the wrap. Three repeats
+match in framebuffer, WRAM, VRAM, CGRAM, both OAM copies, audio, and trace.
+The correction changes center pixels on 13 transient frames, and every one of
+those corrected centers matches the native-width oracle exactly.
+
+A later user state on the icy slope exposed the exact half-tile case while
+moving uphill and downhill. With ties rounded away from zero, its 780-frame
+Right+Y/Left+Y replay used X offsets `-1` on 120 frames and `+1` on seven
+frames. Resolving the tie toward zero keeps `[0,-32]` for every frame. The A/B
+changes 1,666,730 pixels across 129 frames, all in the two margins and none in
+the native 256-pixel center; final WRAM and VRAM are byte-identical. Three
+independent repeats match in framebuffer, WRAM, VRAM, CGRAM, both OAM copies,
+audio, and trace. The second immutable user state is SHA-256
+`1c72f2e5151f7603d255ff7e79ba458b9feeb6979a0634b48826f9a3d3f05af5`.
+
+The supplied state was also validated through a fresh-entry branch rather than
+treated as the only oracle. A deterministic controller route climbed the
+vertical rope, traversed to the visible Zinger, took the normal death, settled
+on the Slip-Slide Ride map node, and re-entered with B. The 900-frame re-entry
+trace contains 135 fail-closed transition frames followed by 765 accepted
+extended frames, with zero raw fallback and zero trace-policy violations. All
+evidence is under `build/repros/ice-cave-flicker-20260830/`; the preserved user
+state is SHA-256
+`42176b43e8fc6ef90a10f651355218d68137216402ab4af34deb5f82b60d68d3`.
 
 ## Tradeoffs and next tests
 

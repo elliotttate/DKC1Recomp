@@ -215,14 +215,35 @@ void Dkc1VideoResetPlacedActorPhases(void) {
   memset(&s_wide_row_build, 0, sizeof s_wide_row_build);
 }
 
-void Dkc1VideoSetWidescreen(bool enabled) {
-  if (g_ws_active != enabled) {
+void Dkc1VideoSetAspect(Dkc1VideoAspect aspect) {
+  int extra = 0;
+  if (aspect == kDkc1VideoAspect16x10)
+    extra = kDkc1VideoWidescreen16x10Extra;
+  else if (aspect == kDkc1VideoAspect16x9)
+    extra = kDkc1VideoWidescreenExtra;
+  else
+    aspect = kDkc1VideoAspectNative;
+
+  if (g_ws_extra != extra) {
     s_terrain_ready = false;
     s_presentation_bias = 0;
     Dkc1VideoResetPlacedActorPhases();
   }
-  g_ws_active = enabled;
-  g_ws_extra = enabled ? kDkc1VideoWidescreenExtra : 0;
+  g_ws_active = aspect != kDkc1VideoAspectNative;
+  g_ws_extra = extra;
+}
+
+Dkc1VideoAspect Dkc1VideoGetAspect(void) {
+  if (g_ws_extra == kDkc1VideoWidescreen16x10Extra)
+    return kDkc1VideoAspect16x10;
+  if (g_ws_extra == kDkc1VideoWidescreenExtra)
+    return kDkc1VideoAspect16x9;
+  return kDkc1VideoAspectNative;
+}
+
+void Dkc1VideoSetWidescreen(bool enabled) {
+  Dkc1VideoSetAspect(enabled ? kDkc1VideoAspect16x9
+                             : kDkc1VideoAspectNative);
 }
 
 bool Dkc1VideoIsWidescreen(void) {
@@ -361,7 +382,7 @@ static bool Dkc1VideoStreamWideningEligible(const struct CpuState *cpu) {
   const uint16_t upper = Dkc1ReadWram16(cpu->ram, 0x1b25u);
   return upper >= lower &&
          (uint16_t)(upper - lower) >=
-             (uint16_t)(2 * kDkc1VideoWidescreenExtra);
+             (uint16_t)(2 * Dkc1VideoExtra());
 }
 
 void Dkc1VideoBeginWideRowBuild(struct CpuState *cpu, bool alternate) {
@@ -546,10 +567,10 @@ static int Dkc1VideoAlignedStreamBias(const struct CpuState *cpu,
   const uint16_t lower = Dkc1ReadWram16(cpu->ram, 0x1b23u);
   const uint16_t upper = Dkc1ReadWram16(cpu->ram, 0x1b25u);
   int32_t target = camera;
-  if (target < (int32_t)lower + kDkc1VideoWidescreenExtra)
-    target = (int32_t)lower + kDkc1VideoWidescreenExtra;
-  if (target > (int32_t)upper - kDkc1VideoWidescreenExtra)
-    target = (int32_t)upper - kDkc1VideoWidescreenExtra;
+  if (target < (int32_t)lower + Dkc1VideoExtra())
+    target = (int32_t)lower + Dkc1VideoExtra();
+  if (target > (int32_t)upper - Dkc1VideoExtra())
+    target = (int32_t)upper - Dkc1VideoExtra();
   const int bias = (int)(target - camera);
   if (bias > 0)
     return (bias + 7) & ~7;

@@ -799,6 +799,7 @@ enum Dkc1WsIdentityChange {
 
 static bool s_ws_identity_valid;
 static Dkc1WsIdentity s_ws_identity;
+static int s_ws_last_presentation_extra = -1;
 
 enum {
   kDkc1WsSaveMagic = 0x38535744u, /* "DWS8" */
@@ -1194,6 +1195,23 @@ static int Dkc1DefinitionBankCandidates(Dkc1LevelLayout layout,
   return count;
 }
 
+static int64_t Dkc1NearestTileDelta(uint32_t source_pixels,
+                                    uint32_t presentation_pixels) {
+  /* Camera smoothing can leave the cartridge map coordinate one to four
+   * pixels ahead of or behind the PPU scroll. Rounding each absolute source
+   * down to a tile before subtracting turns that harmless sub-tile drift into
+   * a whole-column source change whenever only one side crosses an 8px
+   * boundary. Quantize the signed pixel delta instead, resolving an exact
+   * half-tile tie toward zero: smoothing drift stays zero, while a real
+   * five-pixel crossing advances and authored phases such as the ice cave's
+   * 512px vertical offset remain an exact +/-64 tiles across the PPU's
+   * 1024px wrap. */
+  const int64_t pixel_delta =
+      (int64_t)source_pixels - (int64_t)presentation_pixels;
+  return pixel_delta >= 0 ? (pixel_delta + 3) / 8
+                          : (pixel_delta - 3) / 8;
+}
+
 static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
                                         int presentation_bias,
                                         bool cartridge_stream_ready,
@@ -1363,12 +1381,23 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
    * the selected cartridge source against the unbiased PPU source instead.
    * The shadow's `worldX + screenX` already accounts for the presentation
    * shift exactly, including its sub-tile phase. */
-  const int64_t best_offset_x =
-      (int64_t)(calibration_x[best_coordinate_source] >> 3) -
-      (int64_t)(cartridge_ppu_x >> 3);
-  const int64_t best_offset_y =
-      (int64_t)(calibration_y[best_coordinate_source] >> 3) -
-      (int64_t)(cartridge_ppu_y >> 3);
+  /* Keep this correction scoped to the proven Slip-Slide Ride scene until
+   * the complete all-entrance matrix has promoted signed-delta quantization
+   * as a global capability. Other layouts retain their accepted byte-for-
+   * byte calibration path. */
+  const bool use_smoothed_camera_delta =
+      identity.mode == 0x0009u && identity.level == 0x0051u &&
+      identity.entrance == 0x006du;
+  const int64_t best_offset_x = use_smoothed_camera_delta
+      ? Dkc1NearestTileDelta(
+            calibration_x[best_coordinate_source], cartridge_ppu_x)
+      : (int64_t)(calibration_x[best_coordinate_source] >> 3) -
+            (int64_t)(cartridge_ppu_x >> 3);
+  const int64_t best_offset_y = use_smoothed_camera_delta
+      ? Dkc1NearestTileDelta(
+            calibration_y[best_coordinate_source], cartridge_ppu_y)
+      : (int64_t)(calibration_y[best_coordinate_source] >> 3) -
+            (int64_t)(cartridge_ppu_y >> 3);
   const bool calibrated =
       best_decodable >= 64 && best_matches * 10 >= best_decodable * 7 &&
       best_offset_x >= INT8_MIN && best_offset_x <= INT8_MAX &&
@@ -1796,6 +1825,16 @@ static bool Dkc1DebugForceWidescreenFallback(void) {
 }
 
 void Dkc1DrawPpuFrame(void) {
+  /* Aspect changes are presentation-only, but retained shadow coordinates
+   * are sized around the active side extent. A 16:9 <-> 16:10 switch must
+   * cold-start that host history before the next emulated frame; cartridge
+   * WRAM, VRAM, OAM, camera, and bounds remain untouched. */
+  const int presentation_extra = Dkc1VideoExtra();
+  if (s_ws_last_presentation_extra != presentation_extra) {
+    Dkc1ResetWidescreenShadow();
+    s_ws_last_presentation_extra = presentation_extra;
+  }
+
   SimpleHdma channels[8];
   bool active[8] = {false};
   Dkc1WsTraceFrame trace;

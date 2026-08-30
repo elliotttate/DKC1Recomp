@@ -110,10 +110,24 @@ controls match Windows (arrows, Z/X/S/A, Q/W, Return, Right Shift), and SDL
 game controllers are supported. F7 pauses, F8 steps, F9 exports an armed
 flight-recorder bundle, F11/F12 quick-save/load, and Option-Return toggles
 fullscreen. Native Game and View menus expose those commands plus checked
-aspect-ratio, layer, and provenance options. Saves and diagnostics live under
-macOS Application Support. The host presents on the native 60.0988 Hz SNES
-cadence using an absolute Mach-clock deadline; set `DKC1_FPS_STATS=1` to print
-submission-interval, workload, and re-anchor telemetry when it exits.
+4:3, 16:10 (308x224), and 16:9 (342x224) aspect-ratio options, layer
+isolation, and provenance controls. `DKC1_ASPECT=16:10` selects the
+Mac-oriented mode at startup. The Mac host presents SNES pixels at their 7:6
+pixel aspect; fullscreen uses a fractional nearest-neighbor fit so 16:10 fills
+the display width instead of retaining an integer-scale border. Saves and
+diagnostics live under macOS Application Support. For controlled launch or QA,
+`DKC1_START_FULLSCREEN=1` enters the same fullscreen path after the renderer is
+created. On macOS 14 and newer, the host uses a window-bound `CADisplayLink`
+requested at the native 60.0988 Hz SNES cadence, prepares one cartridge frame
+for its reported target presentation timestamp, and discards stale callbacks
+instead of issuing catch-up bursts. Audio production follows the display
+cadence macOS actually grants (60 Hz on the tested ProMotion panel). An
+absolute Mach-clock scheduler remains the compatibility fallback. Set
+`DKC1_FPS_STATS=1` to print renderer, display-callback, workload-phase,
+submission, and present-wait telemetry when the app exits.
+`DKC1_DISABLE_DISPLAY_LINK=1` and `DKC1_DISABLE_VSYNC=1` are default-off A/B
+switches. `SNESRECOMP_INPUT_PLAY=path` supplies the same deterministic
+per-frame input playback supported by the Windows debugger for visible Mac QA.
 
 For visible widescreen debugging, `F7` pauses or resumes, `F8` advances one
 frame while paused, and `F9` exports the rolling repro history when the flight

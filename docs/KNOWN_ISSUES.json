@@ -132,6 +132,15 @@
       "expected": "The same scene-locked margin continuation used on the right applies symmetrically: only wholly transparent metatiles beyond either native lateral edge may reuse the nearest fully populated wall boundary. Native pixels, cartridge memory, partial openings, and every other level remain unchanged.",
       "first_seen": "2026-08-16",
       "fixed_note": "fixed 2026-08-16 by generalizing the guarded underwater boundary rule to both margins. The exact frame continues 93 presentation tiles and changes 2,357 pixels, all within the outermost 11 pixels of the left margin; center and right are byte-identical. The 57,344-pixel native center is exact, WRAM/VRAM remain exact, and three independent captures are byte-identical (SHA-256 96B1D386...)."
+    },
+    {
+      "id": "slip-slide-ride-moving-margin-calibration-flicker",
+      "status": "fixed",
+      "summary": "Slip-Slide Ride mode $0009, level $0051, entrance $006D could replace most of both widescreen margins with adjacent ROM tile columns while the camera moved. Independent floor-division first exposed 1-3 pixel camera smoothing; a later uphill/downhill repro showed that rounding an exact four-pixel half-tile tie away from zero still selected an adjacent column.",
+      "repro": "build/repros/ice-cave-flicker-20260830/exact-user.state plus traverse-right.inputs for the original traversal; build/repros/ice-cave-flicker-20260830/vertical-left-right/exact-user-new.state plus left-right.inputs for the four-pixel uphill/downhill tie",
+      "expected": "The scene-specific decoder quantizes the signed camera/PPU pixel delta once and resolves a half-tile tie toward zero, preserving zero X offset and the authored vertical phase without changing cartridge state or any other scene's accepted calibration path.",
+      "first_seen": "2026-08-30",
+      "fixed_note": "fixed 2026-08-30 with a presentation-only, scene-scoped signed-delta quantizer whose exact half-tile tie resolves toward zero. The original 330-frame A/B reduces world-aligned margin changes from 2,064,024 to 582,396 pixels (71.8%), improves 123 frames, and worsens none; its accepted offsets remain [0,64] for 329 frames and [0,-64] only at the PPU wrap. The later 780-frame uphill/downhill A/B replaces 120 [-1,-32] frames and seven [1,-32] frames with [0,-32] for all 780 frames. It changes 1,666,730 pixels across 129 frames, all in the two presentation margins and zero in the native center; final WRAM and VRAM are byte-identical, and retrodiction mismatches fall from 3,023 to 2,034. Three complete repeats are byte-identical (frame buffer 0010881A..., WRAM 42BAC94E..., VRAM 5F137C81..., CGRAM 33906DBD..., OAM 946088D1..., audio FNV-1a A7ACA5CD19AA7DC1). A controller-only Zinger death followed by map-node re-entry validates a fresh scene boundary: 765 accepted extended frames, 135 fail-closed entry frames, zero raw fallback, and zero policy violations. The correction is explicitly limited to mode $0009/level $0051/entrance $006D; other layouts retain the previous calibration expression."
     }
   ]
 }

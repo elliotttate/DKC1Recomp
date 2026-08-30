@@ -128,6 +128,7 @@ if(APPLE)
     target_link_libraries(dkc1_macos PRIVATE
         ${SNESRECOMP_RUNNER_LIBRARIES}
         "-framework AppKit"
+        "-framework QuartzCore"
         "-framework UniformTypeIdentifiers")
     snesrecomp_target_sdl(dkc1_macos)
     set_target_properties(dkc1_macos PROPERTIES

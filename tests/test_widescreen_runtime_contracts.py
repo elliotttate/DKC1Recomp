@@ -253,7 +253,7 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("Dkc1VideoCartridgeTerrainReady", video)
         self.assertIn("Dkc1VideoInvalidateStreamCoverage", video)
         self.assertIn("upper >= lower", video)
-        self.assertIn("2 * kDkc1VideoWidescreenExtra", video)
+        self.assertIn("2 * Dkc1VideoExtra()", video)
         self.assertIn("initialization_active", video)
         self.assertIn("0x809ec4u", game)
         self.assertIn("0x809ed6u", game)
@@ -401,10 +401,33 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
 
         offset_block = body.split("const int64_t best_offset_x", 1)[1].split(
             "const bool calibrated", 1)[0]
-        self.assertIn("cartridge_ppu_x >> 3", offset_block)
-        self.assertIn("cartridge_ppu_y >> 3", offset_block)
+        self.assertIn("Dkc1NearestTileDelta", offset_block)
+        self.assertIn("cartridge_ppu_x", offset_block)
+        self.assertIn("cartridge_ppu_y", offset_block)
+        self.assertIn("use_smoothed_camera_delta", offset_block)
+        self.assertIn("identity.mode == 0x0009u", body)
+        self.assertIn("identity.level == 0x0051u", body)
+        self.assertIn("identity.entrance == 0x006du", body)
         self.assertNotIn("wx >> 3", offset_block)
         self.assertNotIn("wy >> 3", offset_block)
+
+        # Slip-Slide Ride keeps the logical camera a few pixels ahead of the
+        # rendered BG1 scroll while traversing. Quantizing the signed delta
+        # with a half-tile tie toward zero keeps the observed four-pixel
+        # smoothing drift from flickering the ROM decoder between adjacent
+        # columns. A real five-pixel crossing still advances, and the authored
+        # +/-512px vertical phase still resolves to +/-64 tiles across a PPU
+        # wrap.
+        nearest_tile_delta = lambda source, ppu: int(
+            ((source - ppu) + (3 if source >= ppu else -3)) / 8)
+        self.assertEqual(nearest_tile_delta(816, 815), 0)
+        self.assertEqual(nearest_tile_delta(823, 824), 0)
+        self.assertEqual(nearest_tile_delta(820, 816), 0)
+        self.assertEqual(nearest_tile_delta(812, 816), 0)
+        self.assertEqual(nearest_tile_delta(821, 816), 1)
+        self.assertEqual(nearest_tile_delta(811, 816), -1)
+        self.assertEqual(nearest_tile_delta(2719, 2207), 64)
+        self.assertEqual(nearest_tile_delta(2655, 3166), -64)
 
         # A +43 presentation shift leaves only destination X=0..212 backed
         # by the cartridge's authentic 0..255 strip. World tiles 32 onward
@@ -816,16 +839,122 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("case kMenuAspectWidescreen:", source)
         self.assertIn("SetAspectMode(1);", source)
 
-    def test_macos_host_presents_on_an_absolute_native_deadline(self):
+    def test_macos_exposes_symmetric_16_10_presentation_mode(self):
+        header = (ROOT / "runner" / "dkc1_video.h").read_text(
+            encoding="utf-8")
+        video = (ROOT / "runner" / "dkc1_video.c").read_text(
+            encoding="utf-8")
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        host = (ROOT / "runner" / "sdl_host.c").read_text(
+            encoding="utf-8")
+        menu = (ROOT / "runner" / "macos_file_picker.m").read_text(
+            encoding="utf-8")
+
+        self.assertIn("kDkc1VideoWidescreen16x10Extra = 26", header)
+        self.assertIn("kDkc1VideoWidescreen16x10Width", header)
+        self.assertIn("kDkc1VideoAspect16x10", header)
+        self.assertIn("extra = kDkc1VideoWidescreen16x10Extra;", video)
+        self.assertIn("extra = kDkc1VideoWidescreenExtra;", video)
+        self.assertIn("(uint16_t)(2 * Dkc1VideoExtra())", video)
+        self.assertIn("(int32_t)lower + Dkc1VideoExtra()", video)
+        self.assertIn("s_ws_last_presentation_extra", game)
+        self.assertIn("Dkc1ResetWidescreenShadow();", game.split(
+            "s_ws_last_presentation_extra", 1)[1].split(
+                "SimpleHdma channels", 1)[0])
+
+        self.assertIn('@"Widescreen 16:10 (308x224)"', menu)
+        self.assertIn("kDkc1MacMenuAspect16x10", menu)
+        self.assertIn("aspect == kDkc1VideoAspect16x10", menu)
+        aspect = host.split("static void SetAspectMode", 1)[1].split(
+            "static void SetFullscreen", 1)[0]
+        self.assertIn("Dkc1VideoSetAspect(requested);", aspect)
+        self.assertIn("Dkc1VideoSetAspect(old_aspect);", aspect)
+        self.assertIn("const int source_x = old_width > new_width", aspect)
+        self.assertIn("const int dest_x = new_width > old_width", aspect)
+        self.assertIn("case kDkc1MacMenuAspect16x10:", host)
+        self.assertIn("SetAspectMode(kDkc1VideoAspect16x10);", host)
+        self.assertIn('strcmp(aspect, "16:10") == 0', host)
+        self.assertIn("kSnesPixelAspectNumerator = 7", host)
+        self.assertIn("kSnesPixelAspectDenominator = 6", host)
+        self.assertIn("static int PresentationWidth(void)", host)
+        self.assertIn("PresentationWidth() * kWindowScale", host)
+        self.assertIn(
+            'SDL_SetHint(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, "0")', host)
+        self.assertLess(host.index("SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES"),
+                        host.index("SDL_Init(SDL_INIT_VIDEO"))
+        self.assertIn("ApplyPresentationGeometry();", aspect)
+        fullscreen = host.split("static void SetFullscreen", 1)[1].split(
+            "static void HandleKey", 1)[0]
+        self.assertIn("ApplyPresentationGeometry();", fullscreen)
+        geometry = host.split(
+            "static void ApplyPresentationGeometry", 1)[1].split(
+                "static void ApplyWindowedSize", 1)[0]
+        self.assertIn("SDL_RenderSetLogicalSize(s_renderer, 0, 0)", geometry)
+        self.assertIn("SDL_GetRendererOutputSize", geometry)
+        self.assertIn("SDL_RenderSetIntegerScale(s_renderer, SDL_FALSE)",
+                      geometry)
+        self.assertIn("SDL_RenderSetViewport(s_renderer, NULL)", geometry)
+        present = host.split("static void Present", 1)[1].split(
+            "static void OpenFirstController", 1)[0]
+        self.assertIn("destination.w = output_width;", present)
+        self.assertIn("destination.h = output_height;", present)
+        self.assertIn("destination.x = (output_width - destination.w) / 2;",
+                      present)
+        self.assertIn("SDL_RenderCopy(s_renderer, s_texture, NULL,",
+                      present)
+        self.assertIn("destination_ptr);", present)
+        self.assertIn('EnvironmentEnabled("DKC1_START_FULLSCREEN")', host)
+        self.assertIn("SetFullscreen(1);", host)
+
+    def test_macos_host_uses_display_link_with_absolute_clock_fallback(self):
         source = (ROOT / "runner" / "sdl_host.c").read_text(
             encoding="utf-8")
+        bridge = (ROOT / "runner" / "macos_file_picker.m").read_text(
+            encoding="utf-8")
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn("mach_wait_until", source)
         self.assertIn("kNativeFramesPerSecond = 60.098811862", source)
+        self.assertIn("kHostWorkGuardSeconds = 0.006", source)
         self.assertIn("FramePacerWaitForWorkWindow(&pacer);", source)
+        self.assertIn("Dkc1MacDisplayLinkWait(0.050", source)
+        self.assertIn("pacer.next_deadline = target_timestamp * pacer.frequency",
+                      source)
+        self.assertIn("Dkc1MacDisplayLinkStart", source)
+        self.assertIn("displayLinkWithTarget:controller", bridge)
+        self.assertIn("preferredFrameRateRange", bridge)
+        self.assertIn("NSCondition", bridge)
+        self.assertIn('"-framework QuartzCore"', cmake)
         self.assertIn("lateness > pacer->frequency / 500.0", source)
+        work_window = source.split(
+            "static void FramePacerWaitForWorkWindow", 1)[1].split(
+                "static void FramePacerRecordWork", 1)[0]
+        self.assertIn(
+            "pacer->frequency * kHostWorkGuardSeconds",
+            work_window)
         self.assertNotIn("ticks_per_frame * 8.0", source)
+        self.assertIn('EnvironmentEnabled("DKC1_DISABLE_VSYNC")', source)
+        self.assertIn(
+            "SDL_RENDERER_ACCELERATED |\n"
+            "      (request_vsync ? SDL_RENDERER_PRESENTVSYNC : 0)",
+            source)
+        self.assertIn("SDL_GetRendererInfo(s_renderer, &info)", source)
+        self.assertIn("[fps-renderer] name=%s accelerated=%d vsync=%d",
+                      source)
+        self.assertIn("if (!single_step && !display_frame_sync)", source)
+        self.assertIn("FramePacerRecordPresentWait(&pacer", source)
+        self.assertIn("phase=render_present", source)
+        self.assertIn("phase=work_wake", source)
+        self.assertIn("work_ms=%.3f reserve_ms=%.3f wake_late_ms=%.3f",
+                      source)
+        self.assertIn("[fps-work]", source)
+        self.assertIn("[display-stall]", source)
+        self.assertIn("[display] intervals=", source)
+        self.assertIn('EnvironmentEnabled("DKC1_LIVE_TITLE")', source)
 
         loop = source.split("while (s_running) {", 1)[1]
+        self.assertLess(loop.index("Dkc1MacDisplayLinkWait(0.050"),
+                        loop.index("const double work_start"))
         self.assertLess(loop.index("FramePacerWaitForWorkWindow(&pacer);"),
                         loop.index("const double work_start"))
         active = loop.split("const double work_start", 1)[1].split(
@@ -833,7 +962,7 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertLess(active.index("PollInput()"),
                         active.index("FramePacerRecordWork"))
         self.assertLess(active.index(
-            "FramePacerWaitUntil(pacer.next_deadline"),
+            "if (!single_step && !display_frame_sync)"),
             active.index("Present();"))
 
         self.assertIn("s_reanchor_pacer = 1;", source.split(
