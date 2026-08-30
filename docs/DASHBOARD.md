@@ -1,6 +1,6 @@
 # DKC1Recomp regression dashboard
 
-Generated 2026-08-30 21:49 UTC at commit `0dc2ef4-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
+Generated 2026-08-30 22:02 UTC at commit `317631a`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
 
 ## Contracts
 
