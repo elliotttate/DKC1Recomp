@@ -17,6 +17,7 @@
 
 #include "common_cpu_infra.h"
 #include "common_rtl.h"
+#include "audio_trace.h"
 #include "snes/snes.h"
 
 #include <SDL.h>
@@ -47,10 +48,15 @@ enum {
   kAudioRate = 32040,
   kAudioChannels = 2,
   kAudioScratchFrames = 1024,
+  kAudioFramesPerBlock = 536,
+  kAudioRingStartFrames = 2136,
+  kAudioMaximumQueuedFrames = kAudioRate / 4,
 };
 
 static const double kNativeFramesPerSecond = 60.098811862;
 static const double kHostWorkGuardSeconds = 0.006;
+static const double kMacSubmitLeadSeconds = 0.001;
+static const double kMacFinalSpinSeconds = 0.0015;
 
 typedef struct Dkc1FramePacer {
   double frequency;
@@ -100,6 +106,23 @@ typedef struct Dkc1FrameWorkProfile {
   double title;
 } Dkc1FrameWorkProfile;
 
+typedef struct Dkc1PacingLog {
+  FILE *stream;
+  double last_submit;
+  double last_present;
+  double target;
+  double wait_ms;
+  double setup_ms;
+  double emulation_ms;
+  double render_ms;
+  double diagnostics_ms;
+  double audio_ms;
+  long test_stall_frame;
+  unsigned test_stall_ms;
+  int header_written;
+  int test_stall_fired;
+} Dkc1PacingLog;
+
 static uint8_t s_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
 static SDL_Window *s_window;
 static SDL_Renderer *s_renderer;
@@ -108,6 +131,17 @@ static SDL_AudioDeviceID s_audio_device;
 static SDL_GameController *s_controller;
 static int16_t s_audio_scratch[kAudioScratchFrames * kAudioChannels];
 static double s_audio_accumulator;
+static unsigned s_audio_preroll_blocks = 2;
+static unsigned s_audio_ring_start_threshold = kAudioRingStartFrames;
+static unsigned s_audio_last_queued_frames;
+static unsigned s_audio_ring_frames;
+static unsigned long s_audio_starvations;
+static unsigned long s_audio_drops;
+static unsigned long long s_audio_internal_underflows;
+static int s_audio_started;
+static int s_audio_waiting_for_ring = 1;
+static int s_audio_collect_stats;
+static int s_audio_recovery_requested;
 static int s_running = 1;
 static int s_paused;
 static int s_step_once;
@@ -145,11 +179,14 @@ static void FramePacerCpuRelax(void) {
 #endif
 }
 
-/* Sleep on an absolute Mach deadline, retaining only the final 250 us for a
- * low-power CPU spin. Relative millisecond sleeps accumulate phase error and
- * were the source of alternating short/long presentation intervals. */
+/* Sleep on an absolute Mach deadline, retaining the final 1.5 ms for a bounded
+ * CPU spin. On Apple Silicon the scheduler can coalesce an otherwise idle
+ * main-thread wake by more than the old 250 us margin, which turns an exact
+ * display target into alternating short/long Metal submissions. Relative
+ * millisecond sleeps still accumulate phase error, so keep the deadline
+ * absolute and absorb only the observed final-wake variance here. */
 static void FramePacerWaitUntil(double deadline, double frequency) {
-  const double spin_ticks = frequency / 4000.0;
+  const double spin_ticks = frequency * kMacFinalSpinSeconds;
   double now = FramePacerNow();
   if (deadline - now > spin_ticks)
     (void)mach_wait_until((uint64_t)(deadline - spin_ticks));
@@ -290,6 +327,8 @@ static void DisplayPacerRecord(Dkc1DisplayPacer *display,
     }
     if (callback_delta > 1) {
       display->skipped_callbacks += callback_delta - 1;
+      if (callback_delta >= 4 && s_audio_started)
+        s_audio_recovery_requested = 1;
       if (EnvironmentEnabled("DKC1_FPS_STATS")) {
         fprintf(stderr,
                 "[display-stall] frame=%ld callbacks_skipped=%llu "
@@ -301,6 +340,44 @@ static void DisplayPacerRecord(Dkc1DisplayPacer *display,
   }
   display->previous_timestamp = timestamp;
   display->previous_callback_number = callback_number;
+}
+
+static int DisplayPacerWaitForTarget(Dkc1FramePacer *pacer,
+                                     Dkc1DisplayPacer *display,
+                                     int require_complete_lead) {
+  for (;;) {
+    double timestamp = 0.0;
+    double target_timestamp = 0.0;
+    double duration = 0.0;
+    unsigned long long callback_number = 0;
+    const unsigned long long previous_callback_number =
+        display->previous_callback_number;
+    if (!Dkc1MacDisplayLinkWait(
+            previous_callback_number, 0.050,
+            &timestamp, &target_timestamp, &duration, &callback_number)) {
+      display->wait_timeouts++;
+      if (s_audio_started)
+        s_audio_recovery_requested = 1;
+      return 0;
+    }
+    DisplayPacerRecord(display, callback_number, timestamp, duration);
+    pacer->next_deadline = target_timestamp * pacer->frequency;
+    const double target_lead = pacer->next_deadline - FramePacerNow();
+    const int recovering_from_gap =
+        previous_callback_number > 0 &&
+        callback_number > previous_callback_number + 1;
+    if (target_lead >= pacer->ticks_per_frame * 0.75 ||
+        (!require_complete_lead && !recovering_from_gap))
+      return 1;
+    /* Consume a stale callback, but do not produce a short catch-up frame.
+     * Its successor provides a complete display interval for recovery. */
+    display->skipped_callbacks++;
+    if (EnvironmentEnabled("DKC1_FPS_STATS")) {
+      fprintf(stderr,
+              "[display-stale] frame=%ld target_lead_ms=%.3f\n",
+              s_host_frame + 1, target_lead * 1000.0 / pacer->frequency);
+    }
+  }
 }
 
 static void DisplayPacerPrintStats(const Dkc1DisplayPacer *display) {
@@ -320,6 +397,118 @@ static void DisplayPacerPrintStats(const Dkc1DisplayPacer *display) {
           display->interval_max * 1000.0,
           (unsigned long long)display->skipped_callbacks,
           (unsigned long long)display->wait_timeouts);
+}
+
+static void PacingLogInit(Dkc1PacingLog *log) {
+  memset(log, 0, sizeof *log);
+  const char *path = getenv("DKC1_PACING_LOG");
+  if (path && *path) {
+    log->stream = fopen(path, "wb");
+    if (!log->stream)
+      fprintf(stderr, "warning: unable to open pacing log: %s\n", path);
+    else
+      s_audio_collect_stats = 1;
+  }
+  const char *frame_text = getenv("DKC1_PACING_TEST_STALL_FRAME");
+  const char *ms_text = getenv("DKC1_PACING_TEST_STALL_MS");
+  if (frame_text && *frame_text && ms_text && *ms_text) {
+    char *frame_end = NULL;
+    char *ms_end = NULL;
+    const long frame = strtol(frame_text, &frame_end, 10);
+    const unsigned long milliseconds = strtoul(ms_text, &ms_end, 10);
+    if (frame_end && !*frame_end && ms_end && !*ms_end && frame > 0 &&
+        milliseconds > 0 && milliseconds <= 1000) {
+      log->test_stall_frame = frame;
+      log->test_stall_ms = (unsigned)milliseconds;
+    }
+  }
+}
+
+static int PacingLogWriteHeader(Dkc1PacingLog *log,
+                                const Dkc1DisplayPacer *display) {
+  if (!log->stream)
+    return 0;
+  if (log->header_written)
+    return 1;
+  /* The second CADisplayLink callback supplies the first measured interval.
+   * Defer the header until then so refresh_hz describes the actual panel
+   * cadence rather than the requested preferred rate. */
+  if (s_display_link_active && display->interval_count == 0)
+    return 0;
+  const double refresh_hz = display->callback_interval > 0.0
+      ? 1.0 / display->callback_interval : kNativeFramesPerSecond;
+  fprintf(log->stream,
+          "{\"schema\":\"dkc1.pacing.v3\",\"platform\":\"macos\","
+          "\"refresh_hz\":%.9f,\"display_hz\":%.9f,"
+          "\"clock_source\":\"%s\",\"submit_lead_ms\":%.4f,"
+          "\"audio_preroll\":%u,\"audio_ring_start_frames\":%u,"
+          "\"test_stall_frame\":%ld,\"test_stall_ms\":%u}\n",
+          refresh_hz, refresh_hz,
+          s_display_link_active ? "CADisplayLink" : "mach_absolute_time",
+          kMacSubmitLeadSeconds * 1000.0,
+          s_audio_preroll_blocks, s_audio_ring_start_threshold,
+          log->test_stall_frame, log->test_stall_ms);
+  log->header_written = 1;
+  return 1;
+}
+
+static void PacingLogInjectTestStall(Dkc1PacingLog *log, long host_frame) {
+  if (!log->test_stall_fired && log->test_stall_ms &&
+      host_frame == log->test_stall_frame) {
+    log->test_stall_fired = 1;
+    SDL_Delay(log->test_stall_ms);
+  }
+}
+
+static void PacingLogPresented(Dkc1PacingLog *log,
+                               const Dkc1FramePacer *pacer,
+                               const Dkc1DisplayPacer *display,
+                               double work_start, double work_end,
+                               double submit,
+                               double presented) {
+  if (!PacingLogWriteHeader(log, display))
+    return;
+  const double scale = 1000.0 / pacer->frequency;
+  const double present_interval = log->last_present > 0.0
+      ? (presented - log->last_present) * scale : 0.0;
+  const double submit_interval = log->last_submit > 0.0
+      ? (submit - log->last_submit) * scale : 0.0;
+  const double submit_error = log->target > 0.0
+      ? (submit - log->target) * scale : 0.0;
+  const double late = submit_error > 0.0 ? submit_error : 0.0;
+  const unsigned long long overruns = s_display_link_active
+      ? display->skipped_callbacks + display->wait_timeouts
+      : pacer->long_intervals;
+  fprintf(log->stream,
+          "{\"frame\":%ld,\"work_ms\":%.4f,\"wait_ms\":%.4f,"
+          "\"late_ms\":%.4f,\"present_interval_ms\":%.4f,"
+          "\"submit_interval_ms\":%.4f,\"submit_error_ms\":%.4f,"
+          "\"present_ms\":%.4f,\"setup_ms\":%.4f,"
+          "\"emulation_ms\":%.4f,\"render_ms\":%.4f,"
+          "\"diagnostics_ms\":%.4f,\"audio_ms\":%.4f,"
+          "\"audio_queued_frames\":%u,\"audio_starvations\":%lu,"
+          "\"audio_drops\":%lu,\"audio_ring_frames\":%u,"
+          "\"audio_internal_underflows\":%llu,\"overruns\":%llu}\n",
+          s_host_frame, (work_end - work_start) * scale, log->wait_ms,
+          late, present_interval, submit_interval, submit_error,
+          (presented - submit) * scale, log->setup_ms,
+          log->emulation_ms, log->render_ms, log->diagnostics_ms,
+          log->audio_ms, s_audio_last_queued_frames,
+          s_audio_starvations, s_audio_drops, s_audio_ring_frames,
+          s_audio_internal_underflows, overruns);
+  log->last_submit = submit;
+  log->last_present = presented;
+  if ((s_host_frame % 60) == 0)
+    fflush(log->stream);
+}
+
+static void PacingLogClose(Dkc1PacingLog *log) {
+  if (log->stream) {
+    fflush(log->stream);
+    fclose(log->stream);
+    log->stream = NULL;
+  }
+  s_audio_collect_stats = 0;
 }
 
 static void FramePacerRecordPresent(Dkc1FramePacer *pacer, double now) {
@@ -728,6 +917,12 @@ static uint32_t PollInput(void) {
 
 static bool InitAudio(void) {
   SDL_AudioSpec desired;
+  const char *preroll = getenv("DKC1_AUDIO_PREROLL");
+  if (preroll && *preroll) {
+    const int parsed = atoi(preroll);
+    if (parsed >= 1 && parsed <= 4)
+      s_audio_preroll_blocks = (unsigned)parsed;
+  }
   SDL_zero(desired);
   desired.freq = kAudioRate;
   desired.format = AUDIO_S16SYS;
@@ -739,13 +934,71 @@ static bool InitAudio(void) {
     fprintf(stderr, "warning: audio unavailable: %s\n", SDL_GetError());
     return false;
   }
-  SDL_PauseAudioDevice(s_audio_device, 0);
+  RtlSetAudioOutputRate(kAudioRate);
+  /* Do not start CoreAudio on an empty engine ring. The native producer needs
+   * a few cartridge frames to reach its normal occupancy, after which the SDL
+   * device receives a short host-side preroll. */
+  SDL_PauseAudioDevice(s_audio_device, 1);
+  AudioTraceStats stats;
+  audio_trace_get_stats(&stats);
+  s_audio_ring_frames = stats.occupancy_current;
+  s_audio_internal_underflows = stats.output_underflows;
+  s_audio_ring_start_threshold = stats.occupancy_current
+      ? kAudioFramesPerBlock + 2 : kAudioRingStartFrames;
+  s_audio_waiting_for_ring =
+      stats.occupancy_current < s_audio_ring_start_threshold;
+  s_audio_started = 0;
   return true;
+}
+
+static void ResetAudioTimeline(void) {
+  if (!s_audio_device)
+    return;
+  /* SDL's queue belongs to the abandoned host timeline after a rewind or
+   * pause. The runtime load already rebases the APU-port guest timeline; this
+   * clears the other half and resumes only after a fresh device preroll. */
+  SDL_ClearQueuedAudio(s_audio_device);
+  SDL_PauseAudioDevice(s_audio_device, 1);
+  s_audio_accumulator = 0.0;
+  s_audio_started = 0;
+  s_audio_last_queued_frames = 0;
+  AudioTraceStats stats;
+  audio_trace_get_stats(&stats);
+  s_audio_ring_frames = stats.occupancy_current;
+  s_audio_internal_underflows = stats.output_underflows;
+  s_audio_ring_start_threshold = kAudioFramesPerBlock + 2;
+  s_audio_waiting_for_ring =
+      stats.occupancy_current < s_audio_ring_start_threshold;
 }
 
 static void PumpAudio(void) {
   if (!s_audio_device)
     return;
+  if (s_audio_recovery_requested) {
+    /* SDL may report an empty software queue while CoreAudio still owns
+     * buffered samples, so zero queue occupancy alone is not starvation.
+     * A long skipped-callback gap is the reliable host-stall signal. */
+    s_audio_recovery_requested = 0;
+    s_audio_starvations++;
+    ResetAudioTimeline();
+  }
+  AudioTraceStats stats;
+  if (s_audio_waiting_for_ring || s_audio_collect_stats) {
+    audio_trace_get_stats(&stats);
+    s_audio_ring_frames = stats.occupancy_current;
+    s_audio_internal_underflows = stats.output_underflows;
+    if (s_audio_waiting_for_ring) {
+      if (stats.occupancy_current < s_audio_ring_start_threshold)
+        return;
+      s_audio_waiting_for_ring = 0;
+    }
+  }
+
+  const Uint32 bytes_per_frame =
+      kAudioChannels * (Uint32)sizeof(int16_t);
+  Uint32 queued_frames =
+      SDL_GetQueuedAudioSize(s_audio_device) / bytes_per_frame;
+  s_audio_last_queued_frames = queued_frames;
   /* Keep the queued device fed at the cadence macOS actually grants. A
    * ProMotion panel may resolve the requested 60.0988 Hz link to 60 Hz; using
    * the cartridge rate in that case loses almost one sample per displayed
@@ -758,11 +1011,28 @@ static void PumpAudio(void) {
     return;
   if (frames > kAudioScratchFrames)
     frames = kAudioScratchFrames;
+  if (queued_frames >= kAudioMaximumQueuedFrames) {
+    s_audio_drops++;
+    return;
+  }
   RtlRenderAudio(s_audio_scratch, frames, kAudioChannels);
   const Uint32 bytes = (Uint32)frames * kAudioChannels * sizeof(int16_t);
-  const Uint32 queued = SDL_GetQueuedAudioSize(s_audio_device);
-  if (queued < (Uint32)(kAudioRate * kAudioChannels * sizeof(int16_t) / 4))
-    SDL_QueueAudio(s_audio_device, s_audio_scratch, bytes);
+  if (SDL_QueueAudio(s_audio_device, s_audio_scratch, bytes) != 0) {
+    s_audio_drops++;
+    return;
+  }
+  queued_frames += (Uint32)frames;
+  s_audio_last_queued_frames = queued_frames;
+  if (s_audio_collect_stats) {
+    audio_trace_get_stats(&stats);
+    s_audio_ring_frames = stats.occupancy_current;
+    s_audio_internal_underflows = stats.output_underflows;
+  }
+  if (!s_audio_started &&
+      queued_frames >= s_audio_preroll_blocks * kAudioFramesPerBlock) {
+    SDL_PauseAudioDevice(s_audio_device, 0);
+    s_audio_started = 1;
+  }
 }
 
 static void QuickSave(void) {
@@ -778,6 +1048,7 @@ static void QuickLoad(void) {
   if (!RtlLoadSnapshot("quicksave.state")) {
     snprintf(s_status, sizeof s_status, "quick load FAILED");
   } else {
+    ResetAudioTimeline();
     char error[256];
     if (!Dkc1FlightRecorderReanchorAfterStateLoad(
             s_host_frame, error, sizeof error))
@@ -890,6 +1161,12 @@ static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
     Dkc1DebugSetLayerMask(masks[key - SDLK_F3]);
   } else if (key == SDLK_F7) {
     s_paused = !s_paused;
+    if (s_paused) {
+      if (s_audio_device)
+        SDL_PauseAudioDevice(s_audio_device, 1);
+    } else {
+      ResetAudioTimeline();
+    }
     s_step_once = 0;
     s_reanchor_pacer = 1;
   } else if (key == SDLK_F8 && s_paused) {
@@ -911,6 +1188,12 @@ void Dkc1MacMenuCommand(int command) {
       break;
     case kDkc1MacMenuPause:
       s_paused = !s_paused;
+      if (s_paused) {
+        if (s_audio_device)
+          SDL_PauseAudioDevice(s_audio_device, 1);
+      } else {
+        ResetAudioTimeline();
+      }
       s_step_once = 0;
       s_reanchor_pacer = 1;
       break;
@@ -1142,8 +1425,10 @@ int main(int argc, char **argv) {
 
   Dkc1FramePacer pacer;
   Dkc1DisplayPacer display_pacer;
+  Dkc1PacingLog pacing_log;
   FramePacerInit(&pacer);
   DisplayPacerInit(&display_pacer);
+  PacingLogInit(&pacing_log);
 
   while (s_running) {
     if (s_paused && !s_step_once) {
@@ -1159,6 +1444,8 @@ int main(int argc, char **argv) {
     }
 
     const int single_step = s_paused && s_step_once;
+    const double cadence_wait_start = FramePacerNow();
+    pacing_log.target = 0.0;
     if (single_step && s_reanchor_pacer) {
       FramePacerReanchor(&pacer, FramePacerNow());
       s_reanchor_pacer = 0;
@@ -1170,25 +1457,20 @@ int main(int argc, char **argv) {
         s_reanchor_pacer = 0;
       }
       if (s_display_link_active) {
-        double timestamp = 0.0;
-        double target_timestamp = 0.0;
-        double duration = 0.0;
-        unsigned long long callback_number = 0;
-        if (!Dkc1MacDisplayLinkWait(0.050, &timestamp, &target_timestamp,
-                                    &duration, &callback_number)) {
-          display_pacer.wait_timeouts++;
+        if (!DisplayPacerWaitForTarget(&pacer, &display_pacer, 0)) {
           PollEvents();
           s_reanchor_pacer = 1;
           continue;
         }
-        DisplayPacerRecord(&display_pacer, callback_number,
-                           timestamp, duration);
-        pacer.next_deadline = target_timestamp * pacer.frequency;
+        pacing_log.target = pacer.next_deadline;
         display_frame_sync = 1;
       } else {
         FramePacerWaitForWorkWindow(&pacer);
+        pacing_log.target = pacer.next_deadline;
       }
     }
+    pacing_log.wait_ms =
+        (FramePacerNow() - cadence_wait_start) * 1000.0 / pacer.frequency;
 
     const double work_start = FramePacerNow();
     double phase_start = work_start;
@@ -1270,18 +1552,50 @@ int main(int argc, char **argv) {
     FramePacerRecordWork(&pacer, work_end - work_start);
     FramePacerRecordWorkProfile(&pacer, &work_profile,
                                 work_end - work_start);
+    pacing_log.setup_ms =
+        (work_profile.events + work_profile.input) * 1000.0 / pacer.frequency;
+    pacing_log.emulation_ms =
+        work_profile.emulation * 1000.0 / pacer.frequency;
+    pacing_log.render_ms = work_profile.ppu * 1000.0 / pacer.frequency;
+    pacing_log.diagnostics_ms =
+        work_profile.diagnostics * 1000.0 / pacer.frequency;
+    pacing_log.audio_ms = work_profile.audio * 1000.0 / pacer.frequency;
+    PacingLogInjectTestStall(&pacing_log, s_host_frame);
 
-    /* The native display link wakes us for a concrete upcoming scanout and
-     * targetTimestamp, so enqueue immediately after producing that frame. The
-     * Mach clock remains a bounded fallback on systems without CADisplayLink;
-     * SDL's Metal PRESENTVSYNC flag alone is not a CPU-side pacing primitive. */
-    if (!single_step && !display_frame_sync)
-      FramePacerWaitUntil(pacer.next_deadline, pacer.frequency);
+    /* CADisplayLink wakes one interval before a concrete targetTimestamp.
+     * Finish the frame early, then submit at a fixed one-millisecond lead so
+     * variable emulation/render cost does not become variable Metal enqueue
+     * cadence. The bridge returns an already-fired but unconsumed callback on
+     * the next iteration, so waiting here cannot halve the frame rate. */
+    if (!single_step) {
+      if (display_frame_sync &&
+          FramePacerNow() > pacer.next_deadline -
+              pacer.frequency * kMacSubmitLeadSeconds) {
+        if (!DisplayPacerWaitForTarget(&pacer, &display_pacer, 1)) {
+          PollEvents();
+          s_reanchor_pacer = 1;
+          continue;
+        }
+        pacing_log.target = pacer.next_deadline;
+      }
+      const double final_wait_start = FramePacerNow();
+      if (display_frame_sync) {
+        FramePacerWaitUntil(
+            pacer.next_deadline - pacer.frequency * kMacSubmitLeadSeconds,
+            pacer.frequency);
+      } else {
+        FramePacerWaitUntil(pacer.next_deadline, pacer.frequency);
+      }
+      pacing_log.wait_ms +=
+          (FramePacerNow() - final_wait_start) * 1000.0 / pacer.frequency;
+    }
     const double present_start = FramePacerNow();
     Present();
     const double presented_at = FramePacerNow();
     FramePacerRecordPresentWait(&pacer, presented_at - present_start);
     FramePacerRecordPresent(&pacer, presented_at);
+    PacingLogPresented(&pacing_log, &pacer, &display_pacer,
+                       work_start, work_end, present_start, presented_at);
     if (single_step) {
       s_reanchor_pacer = 1;
     } else if (display_frame_sync) {
@@ -1302,6 +1616,7 @@ int main(int argc, char **argv) {
 
   FramePacerPrintStats(&pacer);
   DisplayPacerPrintStats(&display_pacer);
+  PacingLogClose(&pacing_log);
   Cleanup(rom);
   return 0;
 }

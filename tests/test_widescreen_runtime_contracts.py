@@ -916,14 +916,19 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("mach_wait_until", source)
         self.assertIn("kNativeFramesPerSecond = 60.098811862", source)
         self.assertIn("kHostWorkGuardSeconds = 0.006", source)
+        self.assertIn("kMacSubmitLeadSeconds = 0.001", source)
+        self.assertIn("kMacFinalSpinSeconds = 0.0015", source)
+        self.assertIn("frequency * kMacFinalSpinSeconds", source)
         self.assertIn("FramePacerWaitForWorkWindow(&pacer);", source)
-        self.assertIn("Dkc1MacDisplayLinkWait(0.050", source)
-        self.assertIn("pacer.next_deadline = target_timestamp * pacer.frequency",
+        self.assertIn("previous_callback_number, 0.050", source)
+        self.assertIn("pacer->next_deadline = target_timestamp * pacer->frequency",
                       source)
         self.assertIn("Dkc1MacDisplayLinkStart", source)
         self.assertIn("displayLinkWithTarget:controller", bridge)
         self.assertIn("preferredFrameRateRange", bridge)
         self.assertIn("NSCondition", bridge)
+        self.assertIn("callbackNumber <= after_callback_number", bridge)
+        self.assertIn("callbackNumber > after_callback_number", bridge)
         self.assertIn('"-framework QuartzCore"', cmake)
         self.assertIn("lateness > pacer->frequency / 500.0", source)
         work_window = source.split(
@@ -941,7 +946,9 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("SDL_GetRendererInfo(s_renderer, &info)", source)
         self.assertIn("[fps-renderer] name=%s accelerated=%d vsync=%d",
                       source)
-        self.assertIn("if (!single_step && !display_frame_sync)", source)
+        self.assertIn(
+            "pacer.next_deadline - pacer.frequency * kMacSubmitLeadSeconds",
+            source)
         self.assertIn("FramePacerRecordPresentWait(&pacer", source)
         self.assertIn("phase=render_present", source)
         self.assertIn("phase=work_wake", source)
@@ -949,11 +956,32 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
                       source)
         self.assertIn("[fps-work]", source)
         self.assertIn("[display-stall]", source)
+        self.assertIn("[display-stale]", source)
+        self.assertIn("target_lead >= pacer->ticks_per_frame * 0.75", source)
+        self.assertIn("callback_number > previous_callback_number + 1",
+                      source)
         self.assertIn("[display] intervals=", source)
         self.assertIn('EnvironmentEnabled("DKC1_LIVE_TITLE")', source)
+        self.assertIn("RtlSetAudioOutputRate(kAudioRate)", source)
+        self.assertIn("SDL_ClearQueuedAudio(s_audio_device)", source)
+        self.assertIn("s_audio_ring_start_threshold = kAudioRingStartFrames",
+                      source)
+        self.assertIn("s_audio_starvations++", source)
+        self.assertIn("s_audio_recovery_requested = 1", source)
+        self.assertIn("if (callback_delta >= 4 && s_audio_started)", source)
+        self.assertNotIn("s_audio_started && queued_frames == 0", source)
+        self.assertIn('getenv("DKC1_AUDIO_PREROLL")', source)
+        self.assertIn('getenv("DKC1_PACING_LOG")', source)
+        self.assertIn('getenv("DKC1_PACING_TEST_STALL_FRAME")', source)
+        self.assertIn('getenv("DKC1_PACING_TEST_STALL_MS")', source)
+        self.assertIn('"clock_source\\\":\\\"%s', source)
+        self.assertIn('s_display_link_active ? "CADisplayLink"', source)
+        self.assertIn("PacingLogInjectTestStall(&pacing_log, s_host_frame)",
+                      source)
 
         loop = source.split("while (s_running) {", 1)[1]
-        self.assertLess(loop.index("Dkc1MacDisplayLinkWait(0.050"),
+        self.assertLess(loop.index(
+            "DisplayPacerWaitForTarget(&pacer, &display_pacer, 0)"),
                         loop.index("const double work_start"))
         self.assertLess(loop.index("FramePacerWaitForWorkWindow(&pacer);"),
                         loop.index("const double work_start"))
@@ -961,16 +989,20 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             "if (s_smoke_test_frames", 1)[0]
         self.assertLess(active.index("PollInput()"),
                         active.index("FramePacerRecordWork"))
-        self.assertLess(active.index(
-            "if (!single_step && !display_frame_sync)"),
+        self.assertLess(active.index("const double final_wait_start"),
             active.index("Present();"))
 
         self.assertIn("s_reanchor_pacer = 1;", source.split(
             "static void QuickLoad", 1)[1].split(
                 "static void ExportRepro", 1)[0])
+        quick_load = source.split("static void QuickLoad", 1)[1].split(
+            "static void ExportRepro", 1)[0]
+        self.assertLess(quick_load.index("RtlLoadSnapshot"),
+                        quick_load.index("ResetAudioTimeline();"))
         pause = source.split("key == SDLK_F7", 1)[1].split(
             "key == SDLK_F8", 1)[0]
         self.assertIn("s_reanchor_pacer = 1;", pause)
+        self.assertIn("ResetAudioTimeline();", pause)
         self.assertIn('EnvironmentEnabled("DKC1_FPS_STATS")', source)
 
     def test_jump_animation_exit_callback_is_in_dispatch_contract(self):

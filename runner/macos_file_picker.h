@@ -38,7 +38,8 @@ void Dkc1MacMenuCommand(int command);
  * keeps all rendering on the main thread; this bridge only supplies the
  * display's actual callback cadence and never acquires a Metal drawable. */
 int Dkc1MacDisplayLinkStart(void *native_window, double preferred_fps);
-int Dkc1MacDisplayLinkWait(double timeout_seconds, double *timestamp,
+int Dkc1MacDisplayLinkWait(unsigned long long after_callback_number,
+                           double timeout_seconds, double *timestamp,
                            double *target_timestamp, double *duration,
                            unsigned long long *callback_number);
 void Dkc1MacDisplayLinkStop(void);

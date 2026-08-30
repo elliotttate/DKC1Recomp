@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         error = summary["submit_error_ms"]
         present = summary["present_ms"]
         print(f"absolute submit error p99 {error['p99']:.4f} ms; "
-              f"GDI present p99 {present['p99']:.4f} ms")
+              f"host present p99 {present['p99']:.4f} ms")
     if "steady_audio_starvations" in summary:
         queued = summary["audio_queued_frames"]
         print(f"audio queue p50 {queued['p50']:.0f}, "

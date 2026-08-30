@@ -276,7 +276,8 @@ int Dkc1MacDisplayLinkStart(void *native_window, double preferred_fps) {
   }
 }
 
-int Dkc1MacDisplayLinkWait(double timeout_seconds, double *out_timestamp,
+int Dkc1MacDisplayLinkWait(unsigned long long after_callback_number,
+                           double timeout_seconds, double *out_timestamp,
                            double *out_target_timestamp, double *out_duration,
                            unsigned long long *out_callback_number) {
   @autoreleasepool {
@@ -284,13 +285,13 @@ int Dkc1MacDisplayLinkWait(double timeout_seconds, double *out_timestamp,
     if (!controller || timeout_seconds <= 0.0)
       return 0;
     [controller->condition lock];
-    const unsigned long long baseline = controller->callbackNumber;
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout_seconds];
-    while (controller->callbackNumber == baseline && !controller->stopped) {
+    while (controller->callbackNumber <= after_callback_number &&
+           !controller->stopped) {
       if (![controller->condition waitUntilDate:deadline])
         break;
     }
-    const BOOL fired = controller->callbackNumber != baseline;
+    const BOOL fired = controller->callbackNumber > after_callback_number;
     if (fired) {
       if (out_timestamp)
         *out_timestamp = controller->timestamp;
