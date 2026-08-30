@@ -43,9 +43,13 @@ sidecars; loading a state from a different build warns.
 `DKC1_SAVESTATE_SAVE_AT` (save at frame), `DKC1_SRAM_INPUT`,
 `DKC1_SUPERZSNES_STATE` (import emulator state bundle),
 `DKC1_ROUTE_FRAME_LIMIT` / `DKC1_ROUTE_AUTOCLOSE_MS` /
-`DKC1_ROUTE_RESULT` (visible-host automation), `SNESRECOMP_FPS`.
+`DKC1_ROUTE_RESULT` (visible-host automation), `SNESRECOMP_FPS`,
+`DKC1_PRESENT_HZ` (optional 30-240 Hz presentation-cadence override;
+normally the host chooses an exact 60 Hz display divisor when available).
 
-**Evidence taps:** `DKC1_WS_TRACE` (per-frame widescreen decision/hash
+**Evidence taps:** `DKC1_PACING_LOG` (desktop-host frame work/wait/submit/
+GDI timing jsonl; summarize with `tools/analyze_pacing.py`),
+`DKC1_WS_TRACE` (per-frame widescreen decision/hash
 jsonl), `DKC1_WRAM_DUMP`=first-last + `DKC1_WRAM_DUMP_PATH` (+optional
 `_RANGES`) raw WRAM frames, `DKC1_WRAM_HASH_LOG` (per-frame WRAM
 fingerprint), `DKC1_WRAM_OUTPUT`/`DKC1_VRAM_OUTPUT` (final memory),
@@ -237,6 +241,9 @@ optional `quickload` leg seeded by a state the entry route itself saves.
 - `ingest_dkc1_disasm.py` — disassembly ingestion used for seeding.
 
 **Regression / sweeps**
+- `analyze_pacing.py LOG [--warmup N] [--json]` — summarize desktop
+  scheduler submit cadence separately from emulation/render work and GDI
+  completion; v1 and v2 pacing logs are accepted.
 - `run_regression.py CONTRACTS --rom R [--json-out]` — 3×-identical gate
   (checkpoints + end-of-run renderer/audio hashes + integrity budgets),
   entry + quickload legs.

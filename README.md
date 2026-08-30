@@ -51,6 +51,9 @@ defines the native debug-tool roadmap, ordered from per-frame decision traces
 and replayable snapshots through object-lifecycle analysis and whole-game
 level sweeps. [`docs/WIDESCREEN_HANDOFF.md`](docs/WIDESCREEN_HANDOFF.md)
 records the current evidence, hashes, open issues, and release gates.
+[`docs/HOST_PACING.md`](docs/HOST_PACING.md) documents the Windows compositor
+clock, audio/save-state recovery, JSONL profiler, measured baselines, and the
+deterministic stall-recovery test.
 
 ## Licensing and third-party code
 
