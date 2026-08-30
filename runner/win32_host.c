@@ -33,6 +33,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
 enum {
   kScale = 2,
   kPanelWidth = 380,
@@ -1276,6 +1280,196 @@ static void AudioPump(void) {
   s_wave_index = (s_wave_index + 1) % kAudioBuffers;
 }
 
+/* Present-time scheduler.  The old loop submitted the GDI frame first and
+ * slept afterward.  Any variation in emulation/render work therefore moved
+ * the next submission by the same amount, and a missed deadline was followed
+ * by a short catch-up frame.  Schedule the presentation itself instead: do
+ * the work, wait on an absolute QPC cadence, then submit.  Overruns re-anchor
+ * immediately so a hitch is never followed by a burst of tightly-spaced
+ * frames. */
+typedef struct HostFramePacer {
+  LARGE_INTEGER frequency;
+  HANDLE timer;
+  double refresh_hz;
+  double period_ticks;
+  double next_present_tick;
+  double last_submit_tick;
+  double last_present_tick;
+  double pending_submit_tick;
+  double pending_submit_interval_ms;
+  double pending_submit_error_ms;
+  double pending_work_ms;
+  double pending_wait_ms;
+  double pending_late_ms;
+  unsigned long overruns;
+  unsigned long frames;
+  int timer_resolution_active;
+  FILE *log;
+} HostFramePacer;
+
+static double HostFramePacerRefreshHz(void) {
+  const char *override = getenv("DKC1_PRESENT_HZ");
+  if (override && *override) {
+    char *end = NULL;
+    const double parsed = strtod(override, &end);
+    if (end && !*end && parsed >= 30.0 && parsed <= 240.0)
+      return parsed;
+  }
+  /* An exact SNES cadence drifts through a 60 Hz compositor and produces a
+   * periodic doubled/dropped presentation.  Prefer an exact display divisor
+   * only when it remains effectively 60 Hz; unusual refresh rates retain the
+   * hardware cadence rather than changing game speed substantially. */
+  HDC dc = GetDC(s_window);
+  const int display_hz = dc ? GetDeviceCaps(dc, VREFRESH) : 0;
+  if (dc) ReleaseDC(s_window, dc);
+  if (display_hz > 0) {
+    const int divisor = (display_hz + 30) / 60;
+    if (divisor > 0) {
+      const double divided_hz = (double)display_hz / (double)divisor;
+      if (divided_hz >= 59.5 && divided_hz <= 60.5)
+        return divided_hz;
+    }
+  }
+  return 60.098811862;
+}
+
+static int HostFramePacerInit(HostFramePacer *pacer) {
+  LARGE_INTEGER now;
+  memset(pacer, 0, sizeof *pacer);
+  if (!QueryPerformanceFrequency(&pacer->frequency) ||
+      !QueryPerformanceCounter(&now))
+    return 0;
+  pacer->refresh_hz = HostFramePacerRefreshHz();
+  pacer->period_ticks =
+      (double)pacer->frequency.QuadPart / pacer->refresh_hz;
+  pacer->next_present_tick = (double)now.QuadPart;
+  pacer->timer = CreateWaitableTimerExA(
+      NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+  if (!pacer->timer) {
+    pacer->timer = CreateWaitableTimerA(NULL, FALSE, NULL);
+    if (timeBeginPeriod(1) == TIMERR_NOERROR)
+      pacer->timer_resolution_active = 1;
+  }
+  {
+    const char *path = getenv("DKC1_PACING_LOG");
+    if (path && *path) {
+      pacer->log = fopen(path, "wb");
+      if (pacer->log)
+        fprintf(pacer->log,
+                "{\"schema\":\"dkc1.pacing.v2\",\"refresh_hz\":%.9f}\n",
+                pacer->refresh_hz);
+    }
+  }
+  return 1;
+}
+
+static void HostFramePacerReset(HostFramePacer *pacer) {
+  LARGE_INTEGER now;
+  QueryPerformanceCounter(&now);
+  pacer->next_present_tick = (double)now.QuadPart;
+  pacer->last_submit_tick = 0.0;
+  pacer->last_present_tick = 0.0;
+}
+
+static void HostFramePacerWaitForPresent(HostFramePacer *pacer,
+                                         double work_start_tick) {
+  LARGE_INTEGER now;
+  QueryPerformanceCounter(&now);
+  double before_wait = (double)now.QuadPart;
+  double target = pacer->next_present_tick + pacer->period_ticks;
+  pacer->pending_work_ms =
+      (before_wait - work_start_tick) * 1000.0 /
+      (double)pacer->frequency.QuadPart;
+  pacer->pending_late_ms = 0.0;
+
+  if (before_wait > target) {
+    pacer->pending_late_ms =
+        (before_wait - target) * 1000.0 /
+        (double)pacer->frequency.QuadPart;
+    pacer->overruns++;
+    /* Do not chase the missed deadline.  Present now, then give the next
+     * frame a complete interval; this removes the visible long/short pair. */
+    target = before_wait;
+  }
+  pacer->next_present_tick = target;
+
+  for (;;) {
+    QueryPerformanceCounter(&now);
+    const double remaining = target - (double)now.QuadPart;
+    if (remaining <= 0.0) break;
+    const double remaining_ms =
+        remaining * 1000.0 / (double)pacer->frequency.QuadPart;
+    if (pacer->timer && remaining_ms > 1.25) {
+      /* Wake one millisecond before the deadline, then spin only for the
+       * bounded tail.  Waiting closer to the target exposed scheduler wake
+       * jitter near one millisecond on an otherwise idle machine. */
+      double coarse_ms = remaining_ms - 1.0;
+      LARGE_INTEGER due;
+      due.QuadPart = -(LONGLONG)(coarse_ms * 10000.0);
+      if (!due.QuadPart) due.QuadPart = -1;
+      if (SetWaitableTimer(pacer->timer, &due, 0, NULL, NULL, FALSE)) {
+        WaitForSingleObject(pacer->timer, INFINITE);
+        continue;
+      }
+    }
+    YieldProcessor();
+  }
+  QueryPerformanceCounter(&now);
+  pacer->pending_wait_ms =
+      ((double)now.QuadPart - before_wait) * 1000.0 /
+      (double)pacer->frequency.QuadPart;
+}
+
+static void HostFramePacerBeginPresent(HostFramePacer *pacer) {
+  LARGE_INTEGER now;
+  QueryPerformanceCounter(&now);
+  pacer->pending_submit_tick = (double)now.QuadPart;
+  pacer->pending_submit_interval_ms = pacer->last_submit_tick > 0.0
+      ? (pacer->pending_submit_tick - pacer->last_submit_tick) * 1000.0 /
+            (double)pacer->frequency.QuadPart
+      : 0.0;
+  pacer->pending_submit_error_ms =
+      (pacer->pending_submit_tick - pacer->next_present_tick) * 1000.0 /
+      (double)pacer->frequency.QuadPart;
+  pacer->last_submit_tick = pacer->pending_submit_tick;
+}
+
+static void HostFramePacerPresented(HostFramePacer *pacer, long host_frame) {
+  LARGE_INTEGER now;
+  QueryPerformanceCounter(&now);
+  const double present_tick = (double)now.QuadPart;
+  const double interval_ms = pacer->last_present_tick > 0.0
+      ? (present_tick - pacer->last_present_tick) * 1000.0 /
+            (double)pacer->frequency.QuadPart
+      : 0.0;
+  const double present_ms =
+      (present_tick - pacer->pending_submit_tick) * 1000.0 /
+      (double)pacer->frequency.QuadPart;
+  pacer->last_present_tick = present_tick;
+  pacer->frames++;
+  if (pacer->log) {
+    fprintf(pacer->log,
+            "{\"frame\":%ld,\"work_ms\":%.4f,\"wait_ms\":%.4f,"
+            "\"late_ms\":%.4f,\"present_interval_ms\":%.4f,"
+            "\"submit_interval_ms\":%.4f,\"submit_error_ms\":%.4f,"
+            "\"present_ms\":%.4f,\"overruns\":%lu}\n",
+            host_frame, pacer->pending_work_ms, pacer->pending_wait_ms,
+            pacer->pending_late_ms, interval_ms,
+            pacer->pending_submit_interval_ms,
+            pacer->pending_submit_error_ms, present_ms,
+            pacer->overruns);
+  }
+}
+
+static void HostFramePacerClose(HostFramePacer *pacer) {
+  if (pacer->log) {
+    fflush(pacer->log);
+    fclose(pacer->log);
+  }
+  if (pacer->timer) CloseHandle(pacer->timer);
+  if (pacer->timer_resolution_active) timeEndPeriod(1);
+}
+
 int main(int argc, char **argv) {
   InitBuildIdentity();
   /* Contain default-named tier2 discovery captures instead of littering
@@ -1500,13 +1694,19 @@ int main(int argc, char **argv) {
 
   AudioInit();
 
-  LARGE_INTEGER freq, next, now;
-  QueryPerformanceFrequency(&freq);
-  QueryPerformanceCounter(&next);
-  const double ticks_per_frame = (double)freq.QuadPart / 60.098811862;
-  double next_tick = (double)next.QuadPart;
+  HostFramePacer pacer;
+  if (!HostFramePacerInit(&pacer)) {
+    MessageBoxA(s_window, "high-resolution clock unavailable",
+                "DKC1Recomp", MB_ICONERROR);
+    free(rom);
+    return 5;
+  }
+  LARGE_INTEGER freq;
+  freq = pacer.frequency;
 
   while (s_running) {
+    LARGE_INTEGER work_start;
+    QueryPerformanceCounter(&work_start);
     MSG msg;
     while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
       TranslateMessage(&msg);
@@ -1626,6 +1826,7 @@ int main(int argc, char **argv) {
       HDC dc = GetDC(s_window);
       PresentFrame(dc);
       ReleaseDC(s_window, dc);
+      HostFramePacerReset(&pacer);
       Sleep(16);
       continue;
     }
@@ -1768,26 +1969,15 @@ int main(int argc, char **argv) {
       }
     }
 
+    HostFramePacerWaitForPresent(&pacer, (double)work_start.QuadPart);
     HDC dc = GetDC(s_window);
+    HostFramePacerBeginPresent(&pacer);
     PresentFrame(dc);
     ReleaseDC(s_window, dc);
+    HostFramePacerPresented(&pacer, s_host_frame);
     if ((s_host_frame % 15) == 0) UpdateDebugTitle();
     s_step_once = 0;
 
-    next_tick += ticks_per_frame;
-    for (;;) {
-      QueryPerformanceCounter(&now);
-      double remaining = next_tick - (double)now.QuadPart;
-      if (remaining <= 0) break;
-      double ms = remaining * 1000.0 / (double)freq.QuadPart;
-      if (ms > 2.0)
-        Sleep((DWORD)(ms - 1.0));
-      else
-        Sleep(0);
-    }
-    QueryPerformanceCounter(&now);
-    if ((double)now.QuadPart - next_tick > ticks_per_frame * 8)
-      next_tick = (double)now.QuadPart;  /* fell far behind; resync */
   }
 
   if (s_waveout) {
@@ -1805,6 +1995,7 @@ int main(int argc, char **argv) {
     WriteRouteResult("aborted");
   Dkc1ScriptFree();
   Dkc1InputPlaybackFree(&s_input_playback);
+  HostFramePacerClose(&pacer);
   free(rom);
   return 0;
 }

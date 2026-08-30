@@ -95,3 +95,42 @@ For every retained optimization:
    it off.
 
 Performance claims without an oracle match are exploratory, not shippable.
+
+## Host pacing and follow-up measurements (2026-08-30)
+
+The desktop host now schedules the presentation boundary on an absolute QPC
+cadence. Emulation, rendering, and audio pumping finish first; a high-resolution
+waitable timer plus a bounded one-millisecond spin tail waits until the submit
+deadline. A missed deadline re-anchors immediately instead of producing a
+long frame followed by a short catch-up frame. Pause and state-load paths reset
+the schedule so stale backlog is never replayed.
+
+On displays whose refresh rate has an integer divisor effectively equal to
+60 Hz (60/120/180/240 Hz), presentation uses that exact divisor. This removes
+the periodic beat between the SNES's 60.0988 Hz cadence and a 60 Hz desktop.
+Other display rates retain the hardware cadence; `DKC1_PRESENT_HZ` is an
+explicit diagnostic override.
+
+`DKC1_PACING_LOG` records work, wait, lateness, submission interval/deadline
+error, GDI cost, and completion interval. `tools/analyze_pacing.py` summarizes
+the steady portion without conflating submit cadence with variable GDI return
+time. A 600-frame Jungle capture on the 60 Hz development display, excluding
+30 cold-start frames, recorded zero overruns: submit interval p50 16.6661 ms,
+p95 16.7893 ms, p99 17.0600 ms; absolute deadline error p99 0.4255 ms; frame
+work p99 2.0953 ms. The bounded spin tail consumes roughly 6% of one CPU core
+while running at 60 Hz; this is an intentional smoothness/CPU tradeoff.
+
+### Rejected in this pass
+
+- Inlining a countdown in all 14,578 generated watchdog sites was
+  hash-identical but reduced median Jungle throughput from about 735 to 674
+  frames/second (about 8.6% slower). The extra hot-site code outweighed fewer
+  watchdog calls.
+- Compiling out the production no-op function-name hook and full-VRAM PPU DMA
+  history scan produced 713.1/731.1/735.1 FPS across three runs, within noise
+  of the retained build, and did not improve visible tail latency. Diagnostic
+  availability was kept rather than accepting an unproven split.
+- Whole-program `/GL` + `/LTCG` was hash-identical but changed Jungle by
+  +0.18% elapsed time and underwater by -0.28%. That is not a repeatable win
+  and would greatly increase iteration/link cost, so `/O1` remains the player
+  build default.
