@@ -10,7 +10,9 @@ import statistics
 import sys
 
 
-SUPPORTED_SCHEMAS = {"dkc1.pacing.v1", "dkc1.pacing.v2"}
+SUPPORTED_SCHEMAS = {
+    "dkc1.pacing.v1", "dkc1.pacing.v2", "dkc1.pacing.v3"
+}
 
 
 def percentile(values: list[float], percent: float) -> float:
@@ -81,7 +83,7 @@ def analyze(header: dict, frames: list[dict], warmup: int = 30) -> dict:
     steady = frames[warmup:]
     schema = header["schema"]
     interval_field = ("submit_interval_ms"
-                      if schema == "dkc1.pacing.v2"
+                      if schema in {"dkc1.pacing.v2", "dkc1.pacing.v3"}
                       else "present_interval_ms")
     interval_values = [float(item[interval_field]) for item in steady
                        if float(item[interval_field]) > 0.0]
@@ -102,7 +104,7 @@ def analyze(header: dict, frames: list[dict], warmup: int = 30) -> dict:
         "late_ms": metric([float(item["late_ms"]) for item in steady]),
         "steady_overruns": int(steady[-1]["overruns"]) - first_overruns,
     }
-    if schema == "dkc1.pacing.v2":
+    if schema in {"dkc1.pacing.v2", "dkc1.pacing.v3"}:
         summary["submit_error_ms"] = metric(
             [abs(float(item["submit_error_ms"])) for item in steady])
         summary["present_ms"] = metric(
@@ -110,6 +112,29 @@ def analyze(header: dict, frames: list[dict], warmup: int = 30) -> dict:
         summary["completion_interval_ms"] = metric(
             [float(item["present_interval_ms"]) for item in steady
              if float(item["present_interval_ms"]) > 0.0])
+    if schema == "dkc1.pacing.v3":
+        for field in ("setup_ms", "emulation_ms", "render_ms",
+                      "diagnostics_ms", "audio_ms",
+                      "audio_queued_frames"):
+            summary[field] = metric(
+                [float(item[field]) for item in steady])
+        first_starvations = int(
+            frames[warmup - 1]["audio_starvations"]) if warmup else 0
+        first_drops = int(frames[warmup - 1]["audio_drops"]) if warmup else 0
+        summary["steady_audio_starvations"] = (
+            int(steady[-1]["audio_starvations"]) - first_starvations)
+        summary["steady_audio_drops"] = (
+            int(steady[-1]["audio_drops"]) - first_drops)
+        if all("audio_ring_frames" in item for item in steady):
+            summary["audio_ring_frames"] = metric(
+                [float(item["audio_ring_frames"]) for item in steady])
+        if all("audio_internal_underflows" in item for item in frames):
+            first_internal_underflows = int(
+                frames[warmup - 1]["audio_internal_underflows"]
+            ) if warmup else 0
+            summary["steady_audio_internal_underflows"] = (
+                int(steady[-1]["audio_internal_underflows"])
+                - first_internal_underflows)
     return summary
 
 
@@ -144,6 +169,19 @@ def main(argv: list[str] | None = None) -> int:
         present = summary["present_ms"]
         print(f"absolute submit error p99 {error['p99']:.4f} ms; "
               f"GDI present p99 {present['p99']:.4f} ms")
+    if "steady_audio_starvations" in summary:
+        queued = summary["audio_queued_frames"]
+        print(f"audio queue p50 {queued['p50']:.0f}, "
+              f"min {queued['min']:.0f} frames; "
+              f"steady starvations {summary['steady_audio_starvations']}, "
+              f"drops {summary['steady_audio_drops']}")
+        if ("steady_audio_internal_underflows" in summary and
+                "audio_ring_frames" in summary):
+            ring = summary["audio_ring_frames"]
+            print(f"engine audio ring p50 {ring['p50']:.0f}, "
+                  f"min {ring['min']:.0f} native frames; "
+                  f"steady internal underflows "
+                  f"{summary['steady_audio_internal_underflows']}")
     return 0
 
 

@@ -26,6 +26,23 @@ def frame(number: int, interval: float, overruns: int = 0) -> dict:
     }
 
 
+def frame_v3(number: int, interval: float, overruns: int = 0) -> dict:
+    item = frame(number, interval, overruns)
+    item.update({
+        "setup_ms": 0.1,
+        "emulation_ms": 0.8,
+        "render_ms": 0.5,
+        "diagnostics_ms": 0.05,
+        "audio_ms": 0.02,
+        "audio_queued_frames": 1068,
+        "audio_starvations": 1,
+        "audio_drops": 0,
+        "audio_ring_frames": 2136,
+        "audio_internal_underflows": 0,
+    })
+    return item
+
+
 class AnalyzePacingTests(unittest.TestCase):
     def test_v2_prefers_submit_cadence_and_discards_warmup(self):
         header = {"schema": "dkc1.pacing.v2", "refresh_hz": 60.0}
@@ -49,6 +66,17 @@ class AnalyzePacingTests(unittest.TestCase):
         self.assertEqual(summary["interval_source"],
                          "present_interval_ms")
         self.assertNotIn("present_ms", summary)
+
+    def test_v3_reports_phase_and_audio_health(self):
+        header = {"schema": "dkc1.pacing.v3", "refresh_hz": 60.0}
+        frames = [frame_v3(1, 16.6), frame_v3(2, 16.7)]
+        summary = MODULE.analyze(header, frames, warmup=0)
+        self.assertAlmostEqual(summary["emulation_ms"]["p50"], 0.8)
+        self.assertEqual(summary["audio_queued_frames"]["min"], 1068)
+        self.assertEqual(summary["steady_audio_starvations"], 1)
+        self.assertEqual(summary["steady_audio_drops"], 0)
+        self.assertEqual(summary["audio_ring_frames"]["min"], 2136)
+        self.assertEqual(summary["steady_audio_internal_underflows"], 0)
 
     def test_loader_validates_schema(self):
         with tempfile.TemporaryDirectory() as directory:
