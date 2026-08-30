@@ -351,3 +351,56 @@ overlay, first-divergence locator, and lifecycle tools. See
   block AppKit during the first few startup frames and is excluded by the
   warm-up. This is a host-only traversal/presentation fix; it does not promote
   a new cartridge widescreen capability or claim a complete 40-entrance matrix.
+
+## 2026-08-30 — decoupled 120 Hz Metal scanout and sharp-bilinear scaling
+
+- **Symptom/domain:** after the fixed 60 Hz Mach-clock work, traversal was
+  substantially better but still not visually perfect on the ProMotion Mac.
+  The earlier trace ended at CPU submission and could not distinguish a game
+  cadence miss from a drawable scanned late by Core Animation. This change is
+  entirely in host presentation; cartridge state and the native 256 x 224
+  image are unchanged.
+- **Change:** a native `CAMetalDisplayLink` now owns a `CAMetalLayer` overlay
+  on the SDL window. The main thread continues input, emulation, PPU rendering,
+  and audio at one absolute 60 Hz deadline, then copies each complete frame and
+  immutable camera/PPU metadata into a three-slot queue. The display thread
+  starts with one buffered frame and normally scans each source twice at 120
+  Hz. It may repeat a completed frame but never advances game state or performs
+  a short catch-up. Focus and minimize pause the link and discard stale
+  host-only queue contents before resume. Setting
+  `DKC1_DISABLE_METAL_PRESENTER=1` retains the SDL compatibility path.
+- **Sampling:** the View menu now exposes three persistent fullscreen modes.
+  `Sharp Bilinear` is the new default, using a narrow approximately
+  one-output-pixel blend only at source-texel boundaries; `Smooth (Linear)` and
+  `Pixel Sharp (Nearest)` remain selectable. All use the same maximum-area fit
+  and change no source pixels.
+- **Physical evidence:** `DKC1_SCANOUT_LOG` writes the
+  `dkc1.scanout.v1` trace from drawable completion, including actual
+  `presentedTime`, target timestamps, source/host frame, repeat index, queue
+  integrity counters, camera X/Y, and BG1-BG3 scroll. A clean visible sample
+  after 120 warm-up presentations recorded 271 physical draws at approximately
+  120 Hz: p50/p95/p99/max spacing was
+  8.333333/8.337395/8.337888/8.339292 ms, 135 source frames were repeated twice,
+  and there were no missing/backward source frames, queue drops/skips, or
+  starved callbacks.
+- **Determinism/state identity:** the clean ROM SHA-256 remains
+  `fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15`.
+  The immutable Slip-Slide Ride state and 780-frame uphill/downhill input were
+  replayed three times. All result files have SHA-256
+  `5ed0caf63e9da2b38ec8c118cb1ccf24ef616c08d92665e189de4632156f172e`;
+  final framebuffer/WRAM/VRAM hashes are respectively
+  `01bad752bf22b100b83384b92d32b280d46968f2b0e4ee7bdfcbd94d215b1935`,
+  `1ded5bfb40ca4472b8f49ae33cc89efd51fac395754f19d956c37fa39ba8425a`,
+  and `7baf4eb402e9570852877c4f71aab3b60588de78c320167be2fe428bd24214fa`.
+- **Validation:** `./build_macos.sh` completed, 224 Python tests passed with one
+  unavailable local imported-state fixture skipped, `git diff --check` passed,
+  deep strict code-sign verification accepted the app, and the executable
+  links Metal and QuartzCore. The real fullscreen application and all three
+  checked View-menu choices were inspected.
+- **Residual scope:** later visible samples kept perfect queue/source integrity
+  while actual drawable p99 rose to about 12 ms and source-transition p99 to
+  about 20.5 ms; their CPU cadence remained near 16.667 ms. Covered or occluded
+  windows also produce a zero `presentedTime` and are excluded. The remaining
+  physical scanout variability is therefore tracked as an open host-compositor
+  issue. This host-only change does not claim a new cartridge widescreen
+  capability or a complete 40-entrance matrix.

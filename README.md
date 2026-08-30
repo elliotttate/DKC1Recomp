@@ -116,20 +116,26 @@ fullscreen. Native Game and View menus expose those commands plus checked
 4:3, 16:10 (308x224), and 16:9 (342x224) aspect-ratio options, layer
 isolation, and provenance controls. `DKC1_ASPECT=16:10` selects the
 Mac-oriented mode at startup. The Mac host presents SNES pixels at their 7:6
-pixel aspect; fullscreen uses a fractional linear presentation fit so 16:10
-fills the display width without uneven nearest-neighbor column widths. The
-View menu's checked `Full Screen Scaling` submenu can instead select persistent
-`Pixel Sharp (Nearest)` sampling; `Smooth (Linear)` remains the default. Both
-choices fill the same area, and the source framebuffer and native 256-pixel
-center remain unchanged. Saves and
+pixel aspect. Fullscreen uses the maximum undistorted fractional fit and offers
+three persistent host-only samplers: the default `Sharp Bilinear` keeps flat
+source-pixel interiors with an approximately one-output-pixel transition,
+`Smooth (Linear)` applies conventional bilinear filtering, and `Pixel Sharp
+(Nearest)` retains hard edges with uneven output-column widths at fractional
+scales. All three fill the same area, and the source framebuffer and native
+256-pixel center remain unchanged. Saves and
 diagnostics live under macOS Application Support. For controlled launch or QA,
 `DKC1_START_FULLSCREEN=1` enters the same fullscreen path after the renderer is
-created. The release host uses one absolute 60 Hz Mach-clock schedule, prepares
-the texture and Metal copy before the final deadline, and submits the prepared
-drawable four milliseconds early. SDL renderer vsync is disabled so it cannot
-form a second blocking cadence gate. Set
+created. The release host keeps cartridge emulation on one absolute 60 Hz
+Mach-clock schedule. A native `CAMetalDisplayLink` presenter independently
+requests 120 Hz and normally scans each immutable game frame twice from a
+three-frame host queue. SDL renderer vsync is disabled so it cannot form a
+second blocking cadence gate. Set
 `DKC1_FPS_STATS=1` to print renderer, display-callback, workload-phase,
 submission, and present-wait telemetry when the app exits.
+`DKC1_SCANOUT_LOG=path` records actual drawable `presentedTime` together with
+source-frame, camera, and PPU-scroll identity; summarize it with
+`tools/analyze_scanout.py`. `DKC1_DISABLE_METAL_PRESENTER=1` restores the
+SDL/Mach compatibility path.
 `DKC1_USE_DISPLAY_LINK_PACING=1` opts into the macOS 14+ window-bound
 display-link path for A/B testing; `DKC1_KEEP_RENDERER_VSYNC=1` restores the
 renderer wait independently. `DKC1_DISABLE_DISPLAY_LINK=1` and

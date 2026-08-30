@@ -14,6 +14,7 @@
 #include "dkc1_video.h"
 #include "input_playback.h"
 #include "macos_file_picker.h"
+#include "macos_metal_presenter.h"
 #include "verified_rom.h"
 #include "wram_dump.h"
 
@@ -57,6 +58,7 @@ enum {
 };
 
 static const double kHostPresentationFramesPerSecond = 60.0;
+static const double kMacNativeDisplayFramesPerSecond = 120.0;
 static const double kHostWorkGuardSeconds = 0.006;
 static const double kMacSubmitLeadSeconds = 0.004;
 static const double kMacFinalSpinSeconds = 0.0015;
@@ -167,12 +169,13 @@ static int s_running = 1;
 static int s_paused;
 static int s_step_once;
 static int s_fullscreen;
-static int s_fullscreen_pixel_sharp;
+static Dkc1MacFullscreenScaling s_fullscreen_scaling;
 static int s_width;
 static int s_presentation_output_width;
 static int s_presentation_output_height;
 static int s_renderer_vsync;
 static int s_display_link_active;
+static int s_metal_presenter_active;
 static long s_host_frame;
 static long s_smoke_test_frames;
 static int s_reanchor_pacer;
@@ -706,7 +709,7 @@ static void UpdateWindowTitle(void) {
 static void UpdateTitle(void) {
   UpdateWindowTitle();
   Dkc1MacUpdateMenuState(s_paused, s_fullscreen,
-                         s_fullscreen_pixel_sharp,
+                         s_fullscreen_scaling,
                          Dkc1VideoGetAspect(),
                          Dkc1DebugLayerMask(),
                          Dkc1DebugProvenanceOverlay(), s_msu1 != NULL);
@@ -793,13 +796,18 @@ static int PresentationWidth(void) {
 static void ApplyPresentationGeometry(void) {
   s_presentation_output_width = 0;
   s_presentation_output_height = 0;
+  if (s_metal_presenter_active) {
+    Dkc1MacMetalPresenterSetGeometry(PresentationWidth(), s_fullscreen);
+    Dkc1MacMetalPresenterSetScaling(s_fullscreen_scaling);
+  }
   if (s_texture) {
     /* Retain exact source pixels. Smooth avoids differently sized output
      * columns at a fractional Retina scale; Pixel Sharp keeps hard nearest-
      * neighbor edges. This preference changes only the host sampler. */
     (void)SDL_SetTextureScaleMode(
         s_texture,
-        s_fullscreen && !s_fullscreen_pixel_sharp
+        s_fullscreen &&
+                s_fullscreen_scaling != kDkc1MacFullscreenPixelSharp
             ? SDL_ScaleModeLinear
             : SDL_ScaleModeNearest);
   }
@@ -887,13 +895,27 @@ static bool InitVideo(void) {
 }
 
 static void InitDisplayLink(void) {
+  SDL_SysWMinfo window_info;
+  SDL_VERSION(&window_info.version);
+  const int have_native_window =
+      SDL_GetWindowWMInfo(s_window, &window_info) != 0;
+  if (!EnvironmentEnabled("DKC1_DISABLE_METAL_PRESENTER")) {
+    if (!have_native_window) {
+      fprintf(stderr,
+              "warning: native window unavailable for Metal presenter: %s\n",
+              SDL_GetError());
+    } else {
+      s_metal_presenter_active = Dkc1MacMetalPresenterStart(
+          window_info.info.cocoa.window, kMacNativeDisplayFramesPerSecond,
+          s_fullscreen_scaling, s_fullscreen);
+    }
+  }
   const int request_display_link =
+      !s_metal_presenter_active &&
       EnvironmentEnabled("DKC1_USE_DISPLAY_LINK_PACING") &&
       !EnvironmentEnabled("DKC1_DISABLE_DISPLAY_LINK");
   if (request_display_link) {
-    SDL_SysWMinfo window_info;
-    SDL_VERSION(&window_info.version);
-    if (!SDL_GetWindowWMInfo(s_window, &window_info)) {
+    if (!have_native_window) {
       fprintf(stderr,
               "warning: native window unavailable for display link: %s\n",
               SDL_GetError());
@@ -917,6 +939,10 @@ static void InitDisplayLink(void) {
     }
   }
   if (EnvironmentEnabled("DKC1_FPS_STATS")) {
+    fprintf(stderr,
+            "[metal-presenter] active=%d requested_hz=%.6f\n",
+            s_metal_presenter_active,
+            kMacNativeDisplayFramesPerSecond);
     fprintf(stderr, "[display-link] active=%d requested_fps=%.6f\n",
             s_display_link_active, kHostPresentationFramesPerSecond);
     fprintf(stderr, "[display-authority] display_link=%d renderer_vsync=%d\n",
@@ -925,6 +951,21 @@ static void InitDisplayLink(void) {
 }
 
 static void PreparePresentation(void) {
+  if (s_metal_presenter_active) {
+    Dkc1MacPresentationFrameInfo info = {
+      .host_frame = s_host_frame,
+      .camera_x = ReadWram16(0x088b),
+      .camera_y = ReadWram16(0x0895),
+    };
+    for (int layer = 0; layer < 4; layer++) {
+      info.bg_hscroll[layer] = g_ppu->hScroll[layer];
+      info.bg_vscroll[layer] = g_ppu->vScroll[layer];
+    }
+    Dkc1MacMetalPresenterQueueFrame(
+        (const uint32_t *)s_pixels, s_width, kDkc1VideoHeight,
+        PresentationWidth(), &info);
+    return;
+  }
   SDL_Rect destination;
   SDL_Rect *destination_ptr = NULL;
   if (s_fullscreen) {
@@ -958,7 +999,8 @@ static void PreparePresentation(void) {
 }
 
 static void SubmitPresentation(void) {
-  SDL_RenderPresent(s_renderer);
+  if (!s_metal_presenter_active)
+    SDL_RenderPresent(s_renderer);
 }
 
 static void Present(void) {
@@ -1378,12 +1420,18 @@ static void SetFullscreen(int fullscreen) {
   UpdateTitle();
 }
 
-static void SetFullscreenPixelSharp(int pixel_sharp) {
-  s_fullscreen_pixel_sharp = pixel_sharp != 0;
-  Dkc1MacSetFullscreenPixelSharp(s_fullscreen_pixel_sharp);
+static void SetFullscreenScaling(Dkc1MacFullscreenScaling scaling) {
+  if (scaling < kDkc1MacFullscreenSmooth ||
+      scaling >= kDkc1MacFullscreenScalingCount)
+    scaling = kDkc1MacFullscreenSharpBilinear;
+  s_fullscreen_scaling = scaling;
+  Dkc1MacSetFullscreenScaling(s_fullscreen_scaling);
   ApplyPresentationGeometry();
+  static const char *const names[] = {
+    "smooth", "sharp bilinear", "pixel sharp"
+  };
   snprintf(s_status, sizeof s_status, "fullscreen scaling: %s",
-           s_fullscreen_pixel_sharp ? "pixel sharp" : "smooth");
+           names[s_fullscreen_scaling]);
   s_reanchor_pacer = 1;
   Present();
   UpdateTitle();
@@ -1478,10 +1526,13 @@ void Dkc1MacMenuCommand(int command) {
       SetFullscreen(!s_fullscreen);
       return;
     case kDkc1MacMenuFullscreenSmooth:
-      SetFullscreenPixelSharp(0);
+      SetFullscreenScaling(kDkc1MacFullscreenSmooth);
+      return;
+    case kDkc1MacMenuFullscreenSharpBilinear:
+      SetFullscreenScaling(kDkc1MacFullscreenSharpBilinear);
       return;
     case kDkc1MacMenuFullscreenPixelSharp:
-      SetFullscreenPixelSharp(1);
+      SetFullscreenScaling(kDkc1MacFullscreenPixelSharp);
       return;
     case kDkc1MacMenuAspectNative:
       SetAspectMode(kDkc1VideoAspectNative);
@@ -1534,6 +1585,16 @@ static void PollEvents(void) {
         ControllerRemoved(event.cdevice.which);
         break;
       case SDL_WINDOWEVENT:
+        if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
+          Dkc1MacMetalPresenterSetActive(1);
+        } else if (event.window.event == SDL_WINDOWEVENT_RESTORED ||
+                   event.window.event == SDL_WINDOWEVENT_SHOWN) {
+          Dkc1MacMetalPresenterSetActive(1);
+        } else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
+                   event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
+                   event.window.event == SDL_WINDOWEVENT_HIDDEN) {
+          Dkc1MacMetalPresenterSetActive(0);
+        }
         if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED ||
             event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
             event.window.event == SDL_WINDOWEVENT_RESIZED ||
@@ -1556,6 +1617,8 @@ static void Cleanup(uint8_t *rom) {
   Dkc1InputPlaybackFree(&s_input_playback);
   Dkc1MacDisplayLinkStop();
   s_display_link_active = 0;
+  Dkc1MacMetalPresenterStop();
+  s_metal_presenter_active = 0;
   HapticWorkerStop();
   if (s_controller) {
     (void)SDL_GameControllerRumble(s_controller, 0, 0, 0);
@@ -1660,7 +1723,7 @@ int main(int argc, char **argv) {
   }
 
   s_paused = EnvironmentEnabled("DKC1_START_PAUSED");
-  s_fullscreen_pixel_sharp = Dkc1MacSavedFullscreenPixelSharp();
+  s_fullscreen_scaling = Dkc1MacSavedFullscreenScaling();
   s_haptics_enabled = !getenv("DKC1_HAPTICS") ||
                       EnvironmentEnabled("DKC1_HAPTICS");
   if (!HapticWorkerStart()) {
@@ -1731,8 +1794,9 @@ int main(int argc, char **argv) {
   if (EnvironmentEnabled("DKC1_START_FULLSCREEN"))
     SetFullscreen(1);
   UpdateTitle();
-  Present();
   InitDisplayLink();
+  ApplyPresentationGeometry();
+  Present();
 
   Dkc1FramePacer pacer;
   Dkc1DisplayPacer display_pacer;

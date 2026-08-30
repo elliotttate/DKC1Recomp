@@ -907,7 +907,9 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("SDL_SetTextureScaleMode", geometry)
         self.assertIn("SDL_ScaleModeLinear", geometry)
         self.assertIn("SDL_ScaleModeNearest", geometry)
-        self.assertIn("!s_fullscreen_pixel_sharp", geometry)
+        self.assertIn(
+            "s_fullscreen_scaling != kDkc1MacFullscreenPixelSharp",
+            geometry)
         self.assertIn("SDL_RenderSetLogicalSize(s_renderer, 0, 0)", geometry)
         self.assertIn("SDL_GetRendererOutputSize", geometry)
         self.assertIn("SDL_RenderSetIntegerScale(s_renderer, SDL_FALSE)",
@@ -933,21 +935,70 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
             encoding="utf-8")
         self.assertIn('AddSubmenu(view, @"Full Screen Scaling"', bridge)
         self.assertIn('@"Smooth (Linear)"', bridge)
+        self.assertIn('@"Sharp Bilinear"', bridge)
         self.assertIn('@"Pixel Sharp (Nearest)"', bridge)
         self.assertIn("kDkc1MacMenuFullscreenSmooth", header)
+        self.assertIn("kDkc1MacMenuFullscreenSharpBilinear", header)
         self.assertIn("kDkc1MacMenuFullscreenPixelSharp", header)
-        self.assertIn("Dkc1MacSavedFullscreenPixelSharp", bridge)
-        self.assertIn("Dkc1MacSetFullscreenPixelSharp", bridge)
-        self.assertIn('@"DKC1FullscreenPixelSharp"', bridge)
+        self.assertIn("Dkc1MacSavedFullscreenScaling", bridge)
+        self.assertIn("Dkc1MacSetFullscreenScaling", bridge)
+        self.assertIn('@"DKC1FullscreenScaling"', bridge)
         self.assertIn(
-            "s_fullscreen_pixel_sharp = Dkc1MacSavedFullscreenPixelSharp();",
+            "s_fullscreen_scaling = Dkc1MacSavedFullscreenScaling();",
             host)
         self.assertIn("case kDkc1MacMenuFullscreenSmooth:", host)
-        self.assertIn("SetFullscreenPixelSharp(0);", host)
+        self.assertIn(
+            "SetFullscreenScaling(kDkc1MacFullscreenSmooth);", host)
+        self.assertIn("case kDkc1MacMenuFullscreenSharpBilinear:", host)
+        self.assertIn(
+            "SetFullscreenScaling(kDkc1MacFullscreenSharpBilinear);", host)
         self.assertIn("case kDkc1MacMenuFullscreenPixelSharp:", host)
-        self.assertIn("SetFullscreenPixelSharp(1);", host)
+        self.assertIn(
+            "SetFullscreenScaling(kDkc1MacFullscreenPixelSharp);", host)
         self.assertIn("SDL_ScaleModeLinear", host)
         self.assertIn("SDL_ScaleModeNearest", host)
+
+    def test_macos_metal_presenter_decouples_emulation_and_scanout(self):
+        host = (ROOT / "runner" / "sdl_host.c").read_text(
+            encoding="utf-8")
+        presenter = (ROOT / "runner" / "macos_metal_presenter.m").read_text(
+            encoding="utf-8")
+        presenter_header = (
+            ROOT / "runner" / "macos_metal_presenter.h").read_text(
+                encoding="utf-8")
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "kMacNativeDisplayFramesPerSecond = 120.0", host)
+        self.assertIn(
+            "kHostPresentationFramesPerSecond = 60.0", host)
+        self.assertIn("Dkc1MacMetalPresenterStart", host)
+        self.assertIn("Dkc1MacMetalPresenterQueueFrame", host)
+        self.assertIn("if (!s_metal_presenter_active)", host)
+        self.assertIn("camera_x = ReadWram16(0x088b)", host)
+        self.assertIn("camera_y = ReadWram16(0x0895)", host)
+        self.assertIn("g_ppu->hScroll[layer]", host)
+        self.assertIn("g_ppu->vScroll[layer]", host)
+
+        self.assertIn("<CAMetalDisplayLinkDelegate>", presenter)
+        self.assertIn("kDkc1MetalFrameSlots = 3", presenter)
+        self.assertIn("count >= 2", presenter)
+        self.assertIn("repeatGoal = interval < (1.0 / 90.0) ? 2u : 1u",
+                      presenter)
+        self.assertIn("CAFrameRateRangeMake(rate, rate, rate)", presenter)
+        self.assertIn("addPresentedHandler", presenter)
+        self.assertIn("presentDrawable:drawable", presenter)
+        self.assertIn("drawable.presentedTime", presenter)
+        self.assertIn('getenv("DKC1_SCANOUT_LOG")', presenter)
+        self.assertIn("dkc1.scanout.v1", presenter)
+        self.assertIn("camera_x\\\":%u", presenter)
+        self.assertIn("bg1_hscroll\\\":%u", presenter)
+        self.assertIn("Dkc1MacPresentationFrameInfo", presenter_header)
+        self.assertIn("Dkc1MacMetalPresenterSetActive", presenter_header)
+        self.assertIn("SDL_WINDOWEVENT_FOCUS_LOST", host)
+        self.assertIn("SDL_WINDOWEVENT_FOCUS_GAINED", host)
+        self.assertIn("runner/macos_metal_presenter.m", cmake)
+        self.assertIn('"-framework Metal"', cmake)
 
     def test_macos_host_uses_display_link_with_absolute_clock_fallback(self):
         source = (ROOT / "runner" / "sdl_host.c").read_text(

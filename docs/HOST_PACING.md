@@ -1,8 +1,9 @@
 # Desktop pacing and audio continuity
 
-The Windows and native macOS hosts present one emulated frame per display-clock
-interval. Emulation remains single-threaded and deterministic; only the
-deadline calculation, wait strategy, and audio handoff are host concerns.
+Emulation remains single-threaded and deterministic. Windows presents one
+emulated frame per selected compositor interval. Native macOS keeps emulation
+at fixed 60 Hz while a separate host-only Metal presenter may scan the same
+immutable frame more than once on a higher-refresh panel.
 
 ## Frame clock
 
@@ -28,19 +29,28 @@ removes scheduler wake jitter.
 
 ### macOS
 
-The native host uses one absolute Mach-clock schedule at exactly 60 Hz. The SDL
-Metal renderer's blocking vsync is off, so there is one cadence authority rather
-than two gates that can quantize the same frame onto different refresh slots.
-The host uploads the texture and encodes the copy before the final wait, then
-queues only the prepared drawable at a fixed four-millisecond lead. The final
-absolute wait reserves a bounded 1.5 ms spin because an otherwise-idle Apple
-Silicon main thread can wake more than the old 250 us margin late and produce
-alternating short/long submissions.
+The native host uses one absolute Mach-clock schedule at exactly 60 Hz for
+input, cartridge emulation, PPU rendering, and audio. A separate
+`CAMetalDisplayLink` owns a `CAMetalLayer` overlay and requests 120 Hz from the
+active screen. The main thread copies each complete frame plus immutable
+camera/PPU metadata into a three-slot host queue. The display thread starts
+with one buffered frame and normally presents every source frame for exactly
+two 8.333 ms drawables. A host stall repeats the current completed frame; it
+never advances or catches up cartridge state. Focus/minimize events pause the
+link and discard stale queued presentation frames before resume.
 
-The View menu's `Full Screen Scaling` preference changes only the final texture
-sampler: `Smooth (Linear)` is the default, and `Pixel Sharp (Nearest)` retains
-hard pixel edges while filling the same area. It does not change the frame
-clock, source framebuffer, emulation state, or audio cadence.
+The SDL Metal renderer remains as a fail-closed compatibility path and has
+blocking vsync off. `DKC1_DISABLE_METAL_PRESENTER=1` selects that path. Its
+absolute schedule retains the four-millisecond submit lead and bounded 1.5 ms
+spin used by the version-3 CPU pacing trace.
+
+The View menu's `Full Screen Scaling` preference changes only the native Metal
+fragment sampler. `Sharp Bilinear` is the default and narrows filtering to an
+approximately one-output-pixel transition around source-texel boundaries.
+`Smooth (Linear)` uses conventional bilinear filtering, while `Pixel Sharp
+(Nearest)` retains hard pixel edges and the fractional fit's uneven column
+widths. None changes the frame clock, source framebuffer, emulation state, or
+audio cadence.
 
 `DKC1_USE_DISPLAY_LINK_PACING=1` restores the window-bound `CADisplayLink` path
 for A/B diagnosis on macOS 14 and newer. That bridge requests 60 Hz, consumes
@@ -107,6 +117,23 @@ occupancy, underruns, drops, starvations, and cumulative deadline overruns.
 `submit_interval_ms` is the relevant cadence measurement. The host completion
 timestamp is diagnostic and is not proof of physical scanout time.
 
+On macOS, record actual drawable completion independently:
+
+```bash
+DKC1_SCANOUT_LOG=build/scanout-macos.jsonl \
+DKC1_PACING_LOG=build/pacing-macos.jsonl \
+  build/macos/DKC1Recomp.app/Contents/MacOS/DKC1Recomp "$ROM"
+python tools/analyze_scanout.py build/scanout-macos.jsonl --warmup 120
+```
+
+The scanout trace is `dkc1.scanout.v1`. Each completed drawable records
+`targetTimestamp`, `targetPresentationTimestamp`, actual `presentedTime`,
+source sequence/host frame, repeat index/goal, queue loss counters, camera X/Y,
+and BG1-BG3 PPU scroll. A zero `presentedTime` means Core Animation skipped an
+occluded drawable and is never counted as physical presentation. Keep the real
+game window visible for scanout evidence; a fully covered window is not a
+display oracle.
+
 A deterministic recovery test can inject one host stall:
 
 ```powershell
@@ -158,6 +185,20 @@ The final fixed-clock path produced none and had 0.0031 ms submit-interval stand
 deviation. Evidence is preserved under
 `build/repros/macos-motion-pacing-20260830/` in `candidate-fullscreen/` and
 `final-clean/`.
+
+The follow-up native Metal presenter preserves that 60 Hz game clock while
+requesting a separate 120 Hz drawable stream. Three complete 780-frame cave
+replays are byte-identical in framebuffer, WRAM, VRAM, CGRAM, both OAM copies,
+and audio. In a clean visible sample after a 120-presentation warm-up, 271
+physical presentations held p50/p95/p99/max intervals of
+8.333333/8.337395/8.337888/8.339292 ms, with 135 source frames repeated exactly
+twice, no missing or backward source frames, and no queue drops, skips, or
+starvation. Two later current-build visible samples kept those integrity
+counters at zero but reached approximately 12 ms p99 drawable spacing and
+20.5 ms p99 source-transition spacing. The matching CPU traces remained near
+16.667 ms. This isolates the remaining measured variability to physical host
+presentation rather than emulation cadence; it is still an open visible-QA
+item, not a claim of perfect motion.
 
 These numbers are regression baselines for this machine, not universal GPU or
 scanout guarantees. Acceptance on another system still requires a fresh trace

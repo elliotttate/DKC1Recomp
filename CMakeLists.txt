@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(dkc1_port
-    VERSION 0.0.4
+    VERSION 0.0.5
     DESCRIPTION "Native PC recompilation of Donkey Kong Country"
     LANGUAGES C)
 
@@ -110,6 +110,7 @@ if(APPLE)
         runner/dkc1_haptics.c
         runner/dkc1_msu1.c
         runner/sdl_host.c
+        runner/macos_metal_presenter.m
         runner/macos_file_picker.m)
     set_source_files_properties(assets/macos/DKC1Recomp.icns PROPERTIES
         MACOSX_PACKAGE_LOCATION "Resources")
@@ -130,6 +131,7 @@ if(APPLE)
     target_link_libraries(dkc1_macos PRIVATE
         ${SNESRECOMP_RUNNER_LIBRARIES}
         "-framework AppKit"
+        "-framework Metal"
         "-framework QuartzCore"
         "-framework UniformTypeIdentifiers")
     snesrecomp_target_sdl(dkc1_macos)

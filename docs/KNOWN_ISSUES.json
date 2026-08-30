@@ -153,12 +153,12 @@
     },
     {
       "id": "macos-promotion-motion-microstutter",
-      "status": "fixed",
-      "summary": "Horizontal and vertical traversal on a ProMotion Mac showed recurring micro-stutters even though emulation work stayed far below one frame. The window-bound display-link target stream intermittently advanced by roughly 29 ms, directly turning callback variability into missed cartridge submissions.",
-      "repro": "build/repros/macos-motion-pacing-20260830/candidate-fullscreen/pacing.jsonl with the immutable Slip-Slide Ride state and vertical-left-right/left-right.inputs",
-      "expected": "One steady 60 Hz host submission every 16.6667 ms during movement, with no second renderer-vsync authority, synchronous MSU-1 refill, or main-thread rumble call.",
+      "status": "open",
+      "summary": "The fixed 60 Hz game loop is steady, but physical ProMotion scanout can still shift an otherwise complete source frame by one or more 120 Hz intervals. The old window-bound callback no longer advances emulation, so the remaining hitch is isolated to host presentation rather than cartridge timing.",
+      "repro": "build/repros/macos-metal-pacing-20260830/final-short-visible*/scanout.jsonl with the immutable Slip-Slide Ride state and vertical-left-right/left-right.inputs",
+      "expected": "Each complete 60 Hz source frame is scanned exactly twice on a 120 Hz panel, with approximately 8.333 ms drawable intervals and approximately 16.667 ms physical source transitions; no missing, backward, or coalesced source frames.",
       "first_seen": "2026-08-30",
-      "fixed_note": "fixed 2026-08-30 by making the absolute 60 Hz Mach clock the single release authority, disabling SDL renderer vsync by default, preparing texture upload/copy before a four-millisecond submit lead, raising main-thread QoS, memory-mapping MSU-1 PCM, and dispatching rumble on a worker. In the same 720 steady traversal frames the display-link A/B had p99 29.1673 ms, max 45.8350 ms, and 11 intervals over 20 ms; the final fixed-clock leg had p99 16.6764 ms, max 16.6908 ms, zero steady overruns, zero audio errors, and 0.0031 ms interval standard deviation. A 120 ms injected stall produced one expected long interval, one CoreAudio repreroll, then 16.9145 ms and normal cadence with no short catch-up or engine underflow. Display-link pacing and renderer vsync remain opt-in diagnostics."
+      "mitigation_note": "The 2026-08-30 fixed-clock change removed the measured 29-46 ms game-loop stalls. The follow-up native Metal path keeps emulation at that fixed 60 Hz and uses an independent CAMetalDisplayLink, a three-frame immutable queue, one-frame presentation lead, and two 120 Hz draws per source frame. Sharp Bilinear became the fullscreen default, with Smooth and Pixel Sharp retained as explicit choices. Three 780-frame runs remain byte-identical and the presenter reports no producer drops, consumer skips, missing source frames, backward transitions, or starvation. A clean visible sample held 8.333 ms physical intervals and 16.667 ms source transitions, but other current-build visible samples reached approximately 12 ms p99 drawable intervals and approximately 20.5 ms p99 source transitions even while the CPU loop stayed near 16.667 ms. The new dkc1.scanout.v1 trace records actual drawable presentedTime beside camera and BG1-BG3 scroll so the remaining compositor-level variability can be diagnosed without changing game state."
     }
   ]
 }

@@ -283,6 +283,8 @@ void Dkc1MacInstallMenu(void) {
         [[NSMenu alloc] initWithTitle:@"Full Screen Scaling"];
     AddCommand(fullscreenScaling, @"Smooth (Linear)",
                kDkc1MacMenuFullscreenSmooth, @"", 0);
+    AddCommand(fullscreenScaling, @"Sharp Bilinear",
+               kDkc1MacMenuFullscreenSharpBilinear, @"", 0);
     AddCommand(fullscreenScaling, @"Pixel Sharp (Nearest)",
                kDkc1MacMenuFullscreenPixelSharp, @"", 0);
     AddSubmenu(view, @"Full Screen Scaling", fullscreenScaling);
@@ -298,7 +300,7 @@ void Dkc1MacInstallMenu(void) {
 }
 
 void Dkc1MacUpdateMenuState(int paused, int fullscreen,
-                            int fullscreen_pixel_sharp,
+                            Dkc1MacFullscreenScaling fullscreen_scaling,
                             Dkc1VideoAspect aspect,
                             unsigned char layer_mask, int provenance,
                             int replacement_music) {
@@ -313,9 +315,14 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
   s_menu_items[kDkc1MacMenuFullscreen].state =
       fullscreen ? NSControlStateValueOn : NSControlStateValueOff;
   s_menu_items[kDkc1MacMenuFullscreenSmooth].state =
-      fullscreen_pixel_sharp ? NSControlStateValueOff : NSControlStateValueOn;
+      fullscreen_scaling == kDkc1MacFullscreenSmooth
+          ? NSControlStateValueOn : NSControlStateValueOff;
+  s_menu_items[kDkc1MacMenuFullscreenSharpBilinear].state =
+      fullscreen_scaling == kDkc1MacFullscreenSharpBilinear
+          ? NSControlStateValueOn : NSControlStateValueOff;
   s_menu_items[kDkc1MacMenuFullscreenPixelSharp].state =
-      fullscreen_pixel_sharp ? NSControlStateValueOn : NSControlStateValueOff;
+      fullscreen_scaling == kDkc1MacFullscreenPixelSharp
+          ? NSControlStateValueOn : NSControlStateValueOff;
   s_menu_items[kDkc1MacMenuAspectNative].state =
       aspect == kDkc1VideoAspectNative ? NSControlStateValueOn
                                        : NSControlStateValueOff;
@@ -532,17 +539,26 @@ void Dkc1MacClearMsu1(void) {
   }
 }
 
-int Dkc1MacSavedFullscreenPixelSharp(void) {
+Dkc1MacFullscreenScaling Dkc1MacSavedFullscreenScaling(void) {
   @autoreleasepool {
-    return [[NSUserDefaults standardUserDefaults]
-        boolForKey:@"DKC1FullscreenPixelSharp"] ? 1 : 0;
+    NSInteger saved = [[NSUserDefaults standardUserDefaults]
+        integerForKey:@"DKC1FullscreenScaling"];
+    if (saved >= kDkc1MacFullscreenSmooth &&
+        saved < kDkc1MacFullscreenScalingCount &&
+        [[NSUserDefaults standardUserDefaults]
+            objectForKey:@"DKC1FullscreenScaling"] != nil)
+      return (Dkc1MacFullscreenScaling)saved;
+    return kDkc1MacFullscreenSharpBilinear;
   }
 }
 
-void Dkc1MacSetFullscreenPixelSharp(int enabled) {
+void Dkc1MacSetFullscreenScaling(Dkc1MacFullscreenScaling scaling) {
   @autoreleasepool {
+    if (scaling < kDkc1MacFullscreenSmooth ||
+        scaling >= kDkc1MacFullscreenScalingCount)
+      scaling = kDkc1MacFullscreenSharpBilinear;
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [defaults setBool:enabled != 0 forKey:@"DKC1FullscreenPixelSharp"];
+    [defaults setInteger:scaling forKey:@"DKC1FullscreenScaling"];
     [defaults synchronize];
   }
 }

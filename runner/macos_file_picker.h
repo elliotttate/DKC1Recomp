@@ -3,6 +3,13 @@
 
 #include "dkc1_video.h"
 
+typedef enum Dkc1MacFullscreenScaling {
+  kDkc1MacFullscreenSmooth = 0,
+  kDkc1MacFullscreenSharpBilinear = 1,
+  kDkc1MacFullscreenPixelSharp = 2,
+  kDkc1MacFullscreenScalingCount
+} Dkc1MacFullscreenScaling;
+
 enum Dkc1MacMenuCommand {
   kDkc1MacMenuQuit = 1,
   kDkc1MacMenuPause,
@@ -14,6 +21,7 @@ enum Dkc1MacMenuCommand {
   kDkc1MacMenuDisableMusicPack,
   kDkc1MacMenuFullscreen,
   kDkc1MacMenuFullscreenSmooth,
+  kDkc1MacMenuFullscreenSharpBilinear,
   kDkc1MacMenuFullscreenPixelSharp,
   kDkc1MacMenuAspectNative,
   kDkc1MacMenuAspect16x10,
@@ -37,16 +45,16 @@ char *Dkc1MacChooseMsu1(void);
 char *Dkc1MacSavedMsu1(void);
 void Dkc1MacClearMsu1(void);
 
-/* Fullscreen sampling is a host-only preference. Smooth is the default when
- * the preference has never been set. */
-int Dkc1MacSavedFullscreenPixelSharp(void);
-void Dkc1MacSetFullscreenPixelSharp(int enabled);
+/* Fullscreen sampling is a host-only preference. Sharp Bilinear is the
+ * default when the three-state preference has never been set. */
+Dkc1MacFullscreenScaling Dkc1MacSavedFullscreenScaling(void);
+void Dkc1MacSetFullscreenScaling(Dkc1MacFullscreenScaling scaling);
 
 /* Installs the native menu bar. Dkc1MacMenuCommand is implemented by the
  * SDL host and receives menu actions on the application's main thread. */
 void Dkc1MacInstallMenu(void);
 void Dkc1MacUpdateMenuState(int paused, int fullscreen,
-                            int fullscreen_pixel_sharp,
+                            Dkc1MacFullscreenScaling fullscreen_scaling,
                             Dkc1VideoAspect aspect,
                             unsigned char layer_mask, int provenance,
                             int replacement_music);

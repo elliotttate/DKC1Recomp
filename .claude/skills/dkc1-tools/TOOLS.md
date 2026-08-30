@@ -49,11 +49,16 @@ normally the host chooses an exact 60 Hz display divisor when available),
 `DKC1_USE_DISPLAY_LINK_PACING` (macOS A/B: opt into window-bound display-link
 cadence), `DKC1_KEEP_RENDERER_VSYNC` (macOS A/B: restore blocking SDL Metal
 vsync), `DKC1_DISABLE_DISPLAY_LINK` / `DKC1_DISABLE_VSYNC` (explicit negative
-overrides). The macOS release default is one fixed 60 Hz Mach authority with
-renderer vsync off.
+overrides), `DKC1_DISABLE_METAL_PRESENTER` (macOS A/B: restore SDL
+presentation). The macOS release default keeps emulation on one fixed 60 Hz
+Mach authority while a host-only Metal display link presents immutable frames
+independently at the requested 120 Hz panel cadence.
 
 **Evidence taps:** `DKC1_PACING_LOG` (desktop-host frame work/wait/submit/
 GDI timing jsonl; summarize with `tools/analyze_pacing.py`),
+`DKC1_SCANOUT_LOG` (macOS physical drawable `presentedTime`, source-frame
+repeat, queue, camera, and PPU-scroll jsonl; summarize with
+`tools/analyze_scanout.py` while the app is visibly unobscured),
 `DKC1_WS_TRACE` (per-frame widescreen decision/hash
 jsonl), `DKC1_WRAM_DUMP`=first-last + `DKC1_WRAM_DUMP_PATH` (+optional
 `_RANGES`) raw WRAM frames, `DKC1_WRAM_HASH_LOG` (per-frame WRAM

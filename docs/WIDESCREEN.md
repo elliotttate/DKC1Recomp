@@ -16,15 +16,16 @@ startup. For scripted/headless runs, `DKC1_WIDESCREEN=1` selects 16:9 and
 `DKC1_WIDESCREEN=0` selects native 4:3.
 
 The macOS texture always retains its native source width (256, 308, or 342
-pixels). The SDL presentation width applies the SNES 7:6 pixel aspect, giving
-approximately 299x224, 359x224, or 399x224 on screen. Windowed mode keeps
-integer scaling. Fullscreen uses a fractional fit: the default `Smooth
-(Linear)` sampler avoids uneven output-column widths during movement, while the
-View menu's persistent `Pixel Sharp (Nearest)` option preserves hard pixel
-edges. Both consume the same maximum display area on a 16:10-class Mac panel,
-with only the small remainder required by the panel's exact drawable aspect.
-This scaling is presentation-only and never changes PPU pixels or cartridge
-state.
+pixels). The Metal presentation width applies the SNES 7:6 pixel aspect,
+giving approximately 299x224, 359x224, or 399x224 on screen. Windowed mode
+keeps nearest-neighbor integer scaling. Fullscreen uses a fractional fit. The
+default `Sharp Bilinear` sampler keeps most of each source texel flat and
+blends only across an approximately one-output-pixel boundary; it avoids both
+full-frame blur and the alternating 9/10-pixel columns produced by a nearest
+fit on the tested Retina panel. The View menu also retains persistent `Smooth
+(Linear)` and `Pixel Sharp (Nearest)` choices. Every choice consumes the same
+maximum display area. This scaling is presentation-only and never changes PPU
+pixels or cartridge state.
 
 ## Whole-game model: a virtual presentation tilemap
 
