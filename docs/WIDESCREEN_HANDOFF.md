@@ -1276,6 +1276,44 @@ pre-change oracle (`340921CEE8B8D1B871578C02CC5F1FE9DE2B1CF5005423EE2D848832723C
 The 204-test offline suite completes in approximately four seconds; broad
 route replay is deliberately deferred until after this focused pixel gate.
 
+## Wall presentation is a locked view with mirrored terrain
+
+The inward presentation bias described above stayed in the build until the
+same rule was play-tested in DKC2Recomp on 2026-09-01 and reported as an
+abrupt background jump when stepping away from a wall. The trace from the
+Jungle Hijinxs entry state shows why: with the camera moving from frame 74,
+the presented view stayed at world 0 until frame 91 (camera X=44) and then
+caught up, so the picture froze under moving sprites for seventeen frames.
+
+`runner/dkc1_edge_policy.h` now decides the wall presentation per frame from
+`$088B/$1B23/$1B25` alone. `reflect` keeps the view locked to the
+camera and asks the engine to mirror the terrain layer about a line one
+tile inside the wall (`PpuSetWidescreenLayerMirrorAxis`, a per-layer policy
+in the pinned engine that reflects a layer's rendered wide line about two
+columns, rewrites margin columns only, and resets with the other policies).
+The inset skips the map's edge tile: Jungle Hijinxs' first three BG1
+columns are transparent (hidden by CRT overscan on hardware), and the first
+cut, reflecting exactly about the wall, doubled that strip into a visible
+six-pixel slit through the treehouse. `bars` clamps the margin at the wall,
+`shift` is the previous behavior, byte-identical, and `glide`, now the
+default, is that inward clamp released one pixel per eight pixels of camera
+travel, added at the owner's request so the 4:3 edge can stay pinned at the
+wall without the stop-and-go. The macOS View menu exposes the four choices and remembers the
+selection in the app's user defaults. The shadow, its
+coordinate space, the snapshot format, and the cull adapters are unchanged;
+under the default the bias they receive is simply zero. Mirroring at the
+pixel level rather than in the world-keyed shadow was deliberate: the
+shadow keys world columns from zero, and placing mirrored tiles at negative
+world columns would have required moving its origin, which the engine's
+upload-mirror chunk attribution (`WsShadowOnVramWrite`) uses to tell a
+level-entry column upload from a stale leftward stage.
+
+Evidence: the wall state's 16:9 center is pixel-exact against native under
+`reflect` and `bars`; `shift` reproduces the previous composite byte for
+byte; five mid-level and vertical-room states are identical before and
+after; the held-Right trace tracks the camera from frame 74 under the
+default. The clamp-era text above is retained as history.
+
 ## Underwater right margins use the nearest proven wall source
 
 A later Croctopus Chase state at level `$0061`, entrance `$00C0`, camera X

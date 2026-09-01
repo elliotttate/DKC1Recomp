@@ -196,6 +196,45 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn(
             "proxy->words[kDkc1ProxyWordDrawOrder] = proxy_draw_order", end)
 
+    def test_edge_policy_keeps_the_view_locked_to_the_cartridge_camera(self):
+        game = (ROOT / "runner" / "dkc1_game.c").read_text(
+            encoding="utf-8")
+        ppu_h = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
+                 "ppu.h").read_text(encoding="utf-8")
+        ppu_c = (ROOT / "snesrecomp" / "runner" / "src" / "snes" /
+                 "ppu.c").read_text(encoding="utf-8")
+        # The presentation decision comes from the pure policy header, and the
+        # bias path is only one of its outcomes.
+        self.assertIn("Dkc1VideoEdgePresentation(", game)
+        self.assertIn("return edge.bias;", game)
+        # reflect continues the terrain past the wall by mirroring its own
+        # rendered columns about the wall's screen position; the engine owns
+        # that per-layer policy and resets it with the others every frame.
+        self.assertIn(
+            "PpuSetWidescreenLayerMirrorAxis(g_ppu, (uint8_t)terrain_layer,",
+            game)
+        self.assertIn("edge_policy == kDkc1EdgeReflect && edge.beyond_extent",
+                      game)
+        self.assertIn("void PpuSetWidescreenLayerMirrorAxis(", ppu_h)
+        self.assertIn("ppu->wsMirrorAxisMask = 0;", ppu_c)
+        # bars clamps the visible margin per side and blanks the clamped
+        # columns; nothing past the wall is ever repeated or invented.
+        self.assertIn("PpuSetExtraSideSpace(g_ppu, edge.left, edge.right,",
+                      game)
+        self.assertIn("if (left_bytes) memset(row, 0, left_bytes);", game)
+        # Every host exposes the same switch.
+        for host in ("sdl_host.c", "headless_main.c", "layer_capture_main.c",
+                     "win32_host.c"):
+            text = (ROOT / "runner" / host).read_text(encoding="utf-8")
+            self.assertIn('getenv("DKC1_WIDESCREEN_EDGE")', text, host)
+            self.assertIn("Dkc1VideoSetEdgePolicy(edge_policy)", text, host)
+        # No policy touches the logical camera, bounds, or simulation.
+        video = (ROOT / "runner" / "dkc1_video.c").read_text(encoding="utf-8")
+        body = video.split("void Dkc1VideoSetEdgePolicy", 1)[1].split(
+            "enum {", 1)[0]
+        self.assertNotIn("g_ram", body)
+        self.assertNotIn("Dkc1Write", body)
+
     def test_presentation_bias_does_not_write_logical_camera_or_bounds(self):
         game = (ROOT / "runner" / "dkc1_game.c").read_text(
             encoding="utf-8")

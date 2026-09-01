@@ -1117,24 +1117,24 @@ static void Dkc1RejectWidescreenShadow(void) {
   Dkc1ClearWidescreenShadow(false);
 }
 
-/* Clamp only the host presentation camera near level ends. A symmetric wide
- * viewport centered on camera X=lower asks for negative world columns, which
- * is why the left side stayed black until the player first scrolled. Moving
- * the presentation center inward exposes real level art immediately while
- * leaving collision, exits, camera bounds, and simulation untouched. */
+/* Level-wall presentation for this frame (dkc1_edge_policy.h). A symmetric
+ * wide viewport centered on camera X=lower asks for world columns before the
+ * level. The original answer shifted the presentation center inward by up to
+ * one margin, which kept the wide frame inside the level but froze the
+ * picture for the first margin of camera travel away from a wall while every
+ * screen-space sprite slid across it. The default now keeps the view locked
+ * to the cartridge camera and mirrors the authored terrain past the wall;
+ * the shift remains selectable. Collision, exits, camera bounds, and
+ * simulation are untouched by every policy. */
+static void Dkc1WidescreenPresentation(Dkc1EdgePresentation *edge) {
+  Dkc1VideoEdgePresentation(Dkc1ReadWram16(0x088b), Dkc1ReadWram16(0x1b23),
+                            Dkc1ReadWram16(0x1b25), edge);
+}
+
 static int Dkc1WidescreenPresentationBias(void) {
-  const uint32_t camera = Dkc1ReadWram16(0x088b);
-  const uint32_t lower = Dkc1ReadWram16(0x1b23);
-  const uint32_t upper = Dkc1ReadWram16(0x1b25);
-  const uint32_t extra = (uint32_t)Dkc1VideoExtra();
-  if (upper < lower || upper - lower < extra * 2u)
-    return 0;
-  uint32_t target = camera;
-  if (target < lower + extra)
-    target = lower + extra;
-  if (target > upper - extra)
-    target = upper - extra;
-  return (int32_t)target - (int32_t)camera;
+  Dkc1EdgePresentation edge;
+  Dkc1WidescreenPresentation(&edge);
+  return edge.bias;
 }
 
 /* Word address of a tile in a 64x32 SNES tilemap (world-keyed rolling map:
@@ -1909,8 +1909,14 @@ void Dkc1DrawPpuFrame(void) {
    * level layout. This prevents stale gameplay/logo data in the margins. */
   const int presentation_bias =
       wide_layer_mask != 0 ? Dkc1WidescreenPresentationBias() : 0;
+  Dkc1EdgePresentation edge;
+  Dkc1WidescreenPresentation(&edge);
+  const Dkc1EdgePolicy edge_policy = Dkc1VideoGetEdgePolicy();
   trace.wide_layer_mask = wide_layer_mask;
   trace.presentation_bias = presentation_bias;
+  trace.edge_policy = edge_policy;
+  trace.margin_left = edge.left;
+  trace.margin_right = edge.right;
   const bool debug_forced_fallback =
       wide_layer_mask != 0 && Dkc1DebugForceWidescreenFallback();
   trace.debug_forced_fallback = debug_forced_fallback;
@@ -1942,6 +1948,10 @@ void Dkc1DrawPpuFrame(void) {
   if (extend_world) {
     Dkc1VideoSetPresentationBias(presentation_bias);
     PpuSetExtraSpace(g_ppu, (uint8_t)Dkc1VideoExtra());
+    /* Under bars a side whose margin would run past the authored level is
+     * clamped; the other policies keep both margins. */
+    PpuSetExtraSideSpace(g_ppu, edge.left, edge.right,
+                         g_ppu->extraBottomCur);
     PpuSetWidescreenPresentationXBias(g_ppu, presentation_bias);
     /* Repeat only enabled background planes that cannot address a second
      * tilemap screen.  The terrain-shadow mask intentionally covers only
@@ -1957,7 +1967,13 @@ void Dkc1DrawPpuFrame(void) {
       const uint8_t bit = (uint8_t)(1u << layer);
       if (!(enabled & bit))
         continue;
-      if (PPU_bgTilemapWider(g_ppu, layer) != 0)
+      /* A physical 64-column BG3 shows its raw ring past an authored wall,
+       * where the cartridge never wrote anything meaningful. While a locked
+       * view's margin runs past the level, fall back to its rendered-line
+       * repeat there, as a bounded plane would. */
+      const bool raw_past_wall =
+          layer == 2 && edge.beyond_extent && edge_policy != kDkc1EdgeShift;
+      if (PPU_bgTilemapWider(g_ppu, layer) != 0 && !raw_past_wall)
         physical_wide_mask = (uint8_t)(physical_wide_mask | bit);
       else
         repeat_mask = (uint8_t)(repeat_mask | bit);
@@ -1972,6 +1988,17 @@ void Dkc1DrawPpuFrame(void) {
     PpuSetWidescreenBg3Widen(
         g_ppu, (physical_wide_mask & 0x04u) != 0 ? 1u : 0u);
     PpuSetWidescreenLayerRepeat(g_ppu, repeat_mask);
+    /* reflect: continue the terrain past an authored wall with its own
+     * columns mirrored about the wall's screen position. Only the terrain
+     * layer scrolls with the camera; a parallax plane keeps its periodic
+     * continuation, and a bounded plane its hardware wrap. */
+    if (edge_policy == kDkc1EdgeReflect && edge.beyond_extent) {
+      const int terrain_layer = Dkc1VideoTerrainLayer(
+          wide_layer_mask, g_ppu->bgXsc, Dkc1ReadWram16(0x1b13));
+      if (terrain_layer >= 0)
+        PpuSetWidescreenLayerMirrorAxis(g_ppu, (uint8_t)terrain_layer,
+                                        edge.left_axis, edge.right_axis);
+    }
     trace.render_layer_mask = render_mask;
     trace.repeat_layer_mask = repeat_mask;
     trace.edge_extension = true;
@@ -2023,6 +2050,25 @@ void Dkc1DrawPpuFrame(void) {
     }
     for (int channel = 0; channel < 8; channel++) {
       if (active[channel]) SimpleHdma_DoLine(&channels[channel]);
+    }
+  }
+
+  /* bars: the renderer leaves a clamped margin's columns untouched, so blank
+   * them here; nothing authored exists past the wall to show there. */
+  if (extend_world &&
+      (edge.left < Dkc1VideoExtra() || edge.right < Dkc1VideoExtra())) {
+    const int extra = Dkc1VideoExtra();
+    const size_t left_bytes =
+        (size_t)(extra - edge.left) * kDkc1VideoBytesPerPixel;
+    const size_t right_bytes =
+        (size_t)(extra - edge.right) * kDkc1VideoBytesPerPixel;
+    const size_t right_offset =
+        (size_t)(extra + kDkc1VideoNativeWidth + edge.right) *
+        kDkc1VideoBytesPerPixel;
+    for (int y = 0; y < kDkc1VideoHeight; y++) {
+      uint8_t *row = g_ppu->renderBuffer + (size_t)y * g_ppu->renderPitch;
+      if (left_bytes) memset(row, 0, left_bytes);
+      if (right_bytes) memset(row + right_offset, 0, right_bytes);
     }
   }
 

@@ -2,6 +2,7 @@
 #define DKC1_VIDEO_H
 
 #include <stdbool.h>
+#include "dkc1_edge_policy.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -58,6 +59,16 @@ uint16_t Dkc1VideoObjectScannerCullSpan(uint16_t native_span);
 uint16_t Dkc1VideoPromoteOamXHigh(uint16_t screen_x);
 void Dkc1VideoSetPresentationBias(int bias);
 int Dkc1VideoPresentationBias(void);
+
+/* Level-wall presentation policy (see dkc1_edge_policy.h). Default glide;
+ * hosts select it from DKC1_WIDESCREEN_EDGE=reflect|bars|shift|glide;
+ * the macOS host also offers it in View > Level Edge and remembers it. */
+void Dkc1VideoSetEdgePolicy(Dkc1EdgePolicy policy);
+Dkc1EdgePolicy Dkc1VideoGetEdgePolicy(void);
+/* Resolve the active policy for one frame from the logical camera and its
+ * published bounds, at the active extension. Reads nothing itself. */
+void Dkc1VideoEdgePresentation(uint32_t camera_x, uint32_t lower,
+                               uint32_t upper, Dkc1EdgePresentation *out);
 
 /* Private vertical-rope renderer adapters.  BiasCullX is used only for the
  * existing visibility comparisons; the original coordinate remains in the

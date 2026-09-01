@@ -710,7 +710,7 @@ static void UpdateTitle(void) {
   UpdateWindowTitle();
   Dkc1MacUpdateMenuState(s_paused, s_fullscreen,
                          s_fullscreen_scaling,
-                         Dkc1VideoGetAspect(),
+                         Dkc1VideoGetAspect(), Dkc1VideoGetEdgePolicy(),
                          Dkc1DebugLayerMask(),
                          Dkc1DebugProvenanceOverlay(), s_msu1 != NULL);
 }
@@ -1437,6 +1437,18 @@ static void SetFullscreenScaling(Dkc1MacFullscreenScaling scaling) {
   UpdateTitle();
 }
 
+/* Level-wall presentation is host-only and takes effect on the next frame;
+ * nothing in the cartridge or the shadow depends on it, so no reload. */
+static void SetEdgePolicy(Dkc1EdgePolicy policy) {
+  if (policy < kDkc1EdgeReflect || policy >= kDkc1EdgePolicyCount)
+    policy = kDkc1EdgeGlide;
+  Dkc1VideoSetEdgePolicy(policy);
+  Dkc1MacSetWidescreenEdge(policy);
+  snprintf(s_status, sizeof s_status, "level edge: %s",
+           Dkc1EdgePolicyName(policy));
+  UpdateTitle();
+}
+
 static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
   if ((mod & KMOD_GUI) && key == SDLK_q) {
     s_running = 0;
@@ -1542,6 +1554,18 @@ void Dkc1MacMenuCommand(int command) {
       return;
     case kDkc1MacMenuAspect16x9:
       SetAspectMode(kDkc1VideoAspect16x9);
+      return;
+    case kDkc1MacMenuEdgeReflect:
+      SetEdgePolicy(kDkc1EdgeReflect);
+      return;
+    case kDkc1MacMenuEdgeBars:
+      SetEdgePolicy(kDkc1EdgeBars);
+      return;
+    case kDkc1MacMenuEdgeShift:
+      SetEdgePolicy(kDkc1EdgeShift);
+      return;
+    case kDkc1MacMenuEdgeGlide:
+      SetEdgePolicy(kDkc1EdgeGlide);
       return;
     case kDkc1MacMenuLayerComposite:
       Dkc1DebugSetLayerMask(0xff);
@@ -1694,6 +1718,16 @@ int main(int argc, char **argv) {
     Dkc1VideoSetAspect(kDkc1VideoAspectNative);
   else
     Dkc1VideoSetWidescreen(!(widescreen && *widescreen == '0'));
+  {
+    /* Level-wall presentation: the View menu's saved choice (glide when
+     * never set), overridden by DKC1_WIDESCREEN_EDGE for this run only. */
+    Dkc1VideoSetEdgePolicy(Dkc1MacSavedWidescreenEdge());
+    const char *edge_text = getenv("DKC1_WIDESCREEN_EDGE");
+    Dkc1EdgePolicy edge_policy;
+    if (edge_text && *edge_text &&
+        Dkc1EdgePolicyFromName(edge_text, &edge_policy))
+      Dkc1VideoSetEdgePolicy(edge_policy);
+  }
   Dkc1VideoSetRom(rom, rom_size);
   RtlRegisterGame(Dkc1GameInfo());
   if (!SnesInit(rom, (int)rom_size)) {

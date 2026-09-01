@@ -297,6 +297,66 @@ CGRAM, OAM, scene state, and widescreen grade. The available map root does not
 unlock the other 36 entrances in the committed capability floor, so this is
 not recorded as a complete all-entrance promotion result.
 
+## Level-wall presentation policy
+
+The inward presentation clamp above fixed the black left margin, but it also
+froze the picture. Under a held Right from the Jungle Hijinxs entry the
+cartridge camera starts moving at frame 74 and reaches X=44 by frame 91; the
+clamp held the presented view at world 0 for those seventeen frames while DK
+and every other screen-space sprite slid across a stationary background, and
+only then did the view begin scrolling. Play testing of the same rule in
+DKC2Recomp reported it as a large, abrupt background jump.
+
+The wall presentation is now a host policy (`runner/dkc1_edge_policy.h`,
+selected with `DKC1_WIDESCREEN_EDGE=reflect|bars|shift|glide` on every
+host; the macOS app also offers it under View > Level Edge and remembers
+the choice, with the environment variable overriding it for one run):
+
+- `reflect` keeps the presented view locked to the cartridge
+  camera. When a margin runs past an authored wall, the terrain layer
+  continues with its own rendered columns mirrored about a line one tile
+  inside the wall (`PpuSetWidescreenLayerMirrorAxis`, a per-layer engine
+  policy reset every frame like clamp/repeat, which never rewrites a native
+  column). The one-tile inset exists because DKC's map edge columns were
+  hidden by CRT overscan and can hold unfinished art: Jungle Hijinxs' first
+  three BG1 columns are transparent, and a reflection exactly about the wall
+  doubled that strip into a six-pixel slit through the treehouse. Only the
+  terrain layer is mirrored: parallax planes keep their periodic
+  continuation and a bounded BG3 its hardware wrap. A physical 64-column BG3
+  falls back to its rendered-line repeat while the margin is past the wall,
+  because its raw ring holds nothing authored there.
+- `bars` keeps the view locked and shows nothing past the wall: that side's
+  visible margin is clamped to the authored extent (`PpuSetExtraSideSpace`)
+  and the clamped columns are blanked.
+- `shift` is the previous inward clamp, byte-identical to the earlier build.
+- `glide` (default) pins the wide frame inside the level exactly like `shift`, but
+  releases the inward shift one pixel per eight pixels of camera travel
+  instead of all at once: the background scrolls at seven eighths of the
+  camera speed for the first eight margins (344 pixels at 16:9) away from
+  a wall, so nothing past the wall is ever shown and the relative motion
+  between sprites and background is a slow drift rather than a stop.
+
+Every policy leaves the logical camera, the published bounds, collision,
+exits, streaming, and OAM untouched; the decision is recomputed from
+`$088B/$1B23/$1B25` each frame and never persisted. Under `reflect` and
+`bars` the presentation bias is always zero, so save states written under
+them load unchanged on the previous build.
+
+Evidence (headless, 16:9, Jungle Hijinxs entry state at camera 0 with bounds
+0..5120): `reflect` and `bars` keep the 256-pixel center pixel-exact against
+the native 4:3 render, `shift` reproduces the previous build's composite
+byte for byte, and the held-Right trace under `reflect` shows the presented
+view moving with the camera from frame 74 with no HUD motion. Five
+mid-level and vertical-room states (ice cave, underwater, both live
+quicksaves) render identically before and after because their margins never
+leave the authored level. The model test (`tests/edge_policy_model.c`), the
+engine's mirror-axis unit test, and the runtime contracts cover the policy.
+The `jungle-entry` closure contract stays deterministic across its three
+repeats under every policy; its retrodiction budget of zero was already
+exceeded by 1,766 east-margin events on the untouched build before this
+change (the same events, byte for byte, under `shift`), so that failure is
+recorded here as pre-existing rather than caused by the policy.
+
 ## Structural vertical-wall continuation
 
 Vertical rooms can contain wholly transparent lateral map cells that stock

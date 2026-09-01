@@ -168,7 +168,8 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"stream_vram\":%u},"
       "\"identity\":{\"hash\":\"%016llx\",\"change_mask\":%u},"
       "\"camera\":{\"x\":%u,\"y\":%u,\"lower\":%u,"
-      "\"upper\":%u,\"presentation_bias\":%d},"
+      "\"upper\":%u,\"presentation_bias\":%d,"
+      "\"edge\":\"%s\",\"left\":%d,\"right\":%d},"
       "\"prepare_ppu\":{\"bgmode\":%u,\"inidisp\":%u,"
       "\"main\":%u,\"sub\":%u,\"bgsc\":[%u,%u,%u,%u],"
       "\"h\":[%u,%u,%u,%u],\"v\":[%u,%u,%u,%u]},"
@@ -214,7 +215,10 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       (unsigned)frame->identity_change_mask,
       (unsigned)ReadWram16(0x088b), (unsigned)ReadWram16(0x0895),
       (unsigned)ReadWram16(0x1b23), (unsigned)ReadWram16(0x1b25),
-      frame->presentation_bias, (unsigned)frame->prepare_bgmode,
+      frame->presentation_bias,
+      Dkc1EdgePolicyName((Dkc1EdgePolicy)frame->edge_policy),
+      frame->margin_left, frame->margin_right,
+      (unsigned)frame->prepare_bgmode,
       (unsigned)frame->prepare_inidisp,
       (unsigned)frame->prepare_main_layers,
       (unsigned)frame->prepare_sub_layers,

@@ -306,6 +306,8 @@ cross-run semantic mismatch. Accepted evidence is under
 tooling: actors that legitimately remain visible in a wide margin after stock
 culls them still require an explicit gameplay policy and route oracle.
 
+`DKC1_WIDESCREEN_EDGE=reflect|bars|shift|glide` selects the level-wall presentation on every host (default `glide`; the macOS View > Level Edge menu sets the same policy and remembers it); the widescreen trace records the active policy and the visible margin per side in its `camera` object as `edge`, `left`, and `right`. Running the same state under `shift` reproduces the pre-policy build exactly, which makes it the A/B reference for wall reports.
+
 Fresh-entry tracking must seed actor identities from the pre-scanner frame
 boundary, not from the first behavior dispatch. The latter occurs after the
 widened scanner may already have allocated a margin-only record and therefore

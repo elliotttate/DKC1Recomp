@@ -32,6 +32,10 @@ enum Dkc1MacMenuCommand {
   kDkc1MacMenuLayerBg3,
   kDkc1MacMenuLayerObj,
   kDkc1MacMenuProvenance,
+  kDkc1MacMenuEdgeReflect,
+  kDkc1MacMenuEdgeBars,
+  kDkc1MacMenuEdgeShift,
+  kDkc1MacMenuEdgeGlide,
   kDkc1MacMenuCommandCount
 };
 
@@ -50,12 +54,17 @@ void Dkc1MacClearMsu1(void);
 Dkc1MacFullscreenScaling Dkc1MacSavedFullscreenScaling(void);
 void Dkc1MacSetFullscreenScaling(Dkc1MacFullscreenScaling scaling);
 
+/* Level-wall presentation (dkc1_edge_policy.h) is a host-only preference.
+ * glide is the default when it has never been set. */
+Dkc1EdgePolicy Dkc1MacSavedWidescreenEdge(void);
+void Dkc1MacSetWidescreenEdge(Dkc1EdgePolicy policy);
+
 /* Installs the native menu bar. Dkc1MacMenuCommand is implemented by the
  * SDL host and receives menu actions on the application's main thread. */
 void Dkc1MacInstallMenu(void);
 void Dkc1MacUpdateMenuState(int paused, int fullscreen,
                             Dkc1MacFullscreenScaling fullscreen_scaling,
-                            Dkc1VideoAspect aspect,
+                            Dkc1VideoAspect aspect, Dkc1EdgePolicy edge,
                             unsigned char layer_mask, int provenance,
                             int replacement_music);
 void Dkc1MacMenuCommand(int command);

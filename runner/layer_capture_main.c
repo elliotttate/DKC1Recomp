@@ -93,6 +93,14 @@ int main(int argc, char **argv) {
   {
     const char *widescreen_text = getenv("DKC1_WIDESCREEN");
     Dkc1VideoSetWidescreen(!(widescreen_text && *widescreen_text == '0'));
+    {
+      /* Level-wall presentation: glide (default), reflect, bars, or shift. */
+      const char *edge_text = getenv("DKC1_WIDESCREEN_EDGE");
+      Dkc1EdgePolicy edge_policy;
+      if (edge_text && *edge_text &&
+          Dkc1EdgePolicyFromName(edge_text, &edge_policy))
+        Dkc1VideoSetEdgePolicy(edge_policy);
+    }
   }
   size_t rom_size = 0;
   char rom_error[160];

@@ -269,6 +269,14 @@ void Dkc1MacInstallMenu(void) {
                kDkc1MacMenuAspect16x10, @"", 0);
     AddCommand(aspect, @"Widescreen 16:9 (342x224)",
                kDkc1MacMenuAspect16x9, @"", 0);
+    NSMenu *edge = [[NSMenu alloc] initWithTitle:@"Level Edge"];
+    AddCommand(edge, @"Reflect Terrain Past the Wall", kDkc1MacMenuEdgeReflect,
+               @"", 0);
+    AddCommand(edge, @"Black Past the Wall", kDkc1MacMenuEdgeBars, @"", 0);
+    AddCommand(edge, @"Shift View Inward at the Wall", kDkc1MacMenuEdgeShift,
+               @"", 0);
+    AddCommand(edge, @"Glide View Inward at the Wall", kDkc1MacMenuEdgeGlide,
+               @"", 0);
     NSMenu *layers = [[NSMenu alloc] initWithTitle:@"Layers"];
     AddCommand(layers, @"Composite", kDkc1MacMenuLayerComposite, @"", 0);
     AddCommand(layers, @"BG1 Only", kDkc1MacMenuLayerBg1, @"", 0);
@@ -290,6 +298,7 @@ void Dkc1MacInstallMenu(void) {
     AddSubmenu(view, @"Full Screen Scaling", fullscreenScaling);
     [view addItem:[NSMenuItem separatorItem]];
     AddSubmenu(view, @"Aspect Ratio", aspect);
+    AddSubmenu(view, @"Level Edge", edge);
     AddSubmenu(view, @"Layers", layers);
     [view addItem:[NSMenuItem separatorItem]];
     AddCommand(view, @"Provenance Overlay", kDkc1MacMenuProvenance, @"", 0);
@@ -301,7 +310,7 @@ void Dkc1MacInstallMenu(void) {
 
 void Dkc1MacUpdateMenuState(int paused, int fullscreen,
                             Dkc1MacFullscreenScaling fullscreen_scaling,
-                            Dkc1VideoAspect aspect,
+                            Dkc1VideoAspect aspect, Dkc1EdgePolicy edge,
                             unsigned char layer_mask, int provenance,
                             int replacement_music) {
   if (!s_menu_controller)
@@ -332,6 +341,19 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
   s_menu_items[kDkc1MacMenuAspect16x9].state =
       aspect == kDkc1VideoAspect16x9 ? NSControlStateValueOn
                                      : NSControlStateValueOff;
+  const int edge_commands[] = {
+    kDkc1MacMenuEdgeReflect, kDkc1MacMenuEdgeBars, kDkc1MacMenuEdgeShift,
+    kDkc1MacMenuEdgeGlide
+  };
+  const Dkc1EdgePolicy edge_policies[] = {
+    kDkc1EdgeReflect, kDkc1EdgeBars, kDkc1EdgeShift, kDkc1EdgeGlide
+  };
+  for (int i = 0; i < 4; i++) {
+    s_menu_items[edge_commands[i]].state =
+        edge == edge_policies[i] ? NSControlStateValueOn
+                                 : NSControlStateValueOff;
+    s_menu_items[edge_commands[i]].enabled = aspect != kDkc1VideoAspectNative;
+  }
   const int layer_commands[] = {
     kDkc1MacMenuLayerComposite, kDkc1MacMenuLayerBg1,
     kDkc1MacMenuLayerBg2, kDkc1MacMenuLayerBg3, kDkc1MacMenuLayerObj
@@ -549,6 +571,27 @@ Dkc1MacFullscreenScaling Dkc1MacSavedFullscreenScaling(void) {
             objectForKey:@"DKC1FullscreenScaling"] != nil)
       return (Dkc1MacFullscreenScaling)saved;
     return kDkc1MacFullscreenSharpBilinear;
+  }
+}
+
+Dkc1EdgePolicy Dkc1MacSavedWidescreenEdge(void) {
+  @autoreleasepool {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSInteger saved = [defaults integerForKey:@"DKC1WidescreenEdge"];
+    if ([defaults objectForKey:@"DKC1WidescreenEdge"] != nil &&
+        saved >= kDkc1EdgeReflect && saved < kDkc1EdgePolicyCount)
+      return (Dkc1EdgePolicy)saved;
+    return kDkc1EdgeGlide;
+  }
+}
+
+void Dkc1MacSetWidescreenEdge(Dkc1EdgePolicy policy) {
+  @autoreleasepool {
+    if (policy < kDkc1EdgeReflect || policy >= kDkc1EdgePolicyCount)
+      policy = kDkc1EdgeGlide;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setInteger:policy forKey:@"DKC1WidescreenEdge"];
+    [defaults synchronize];
   }
 }
 

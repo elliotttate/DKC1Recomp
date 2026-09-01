@@ -90,7 +90,13 @@ placed-object activation after the host proves a supported gameplay layout.
   Fixed screens (logos, title, map transitions) pillarbox via
   `PpuSetExtraSpaceCentered`.
 - `DKC1_WIDESCREEN=1` opts in the headless harness; the desktop host
-  defaults to 16:9 (`DKC1_WIDESCREEN=0` starts in 4:3). The visible host also
+  defaults to 16:9 (`DKC1_WIDESCREEN=0` starts in 4:3).
+  `DKC1_WIDESCREEN_EDGE=reflect|bars|shift|glide` selects the level-wall
+  presentation (default `glide`: the inward clamp released over eight
+  margins of camera travel; `reflect`: view locked to the camera, terrain
+  mirrored past the wall; `bars`: view locked, margin clamped at the wall;
+  `shift`: the former inward clamp). The macOS app offers the same choice
+  under View > Level Edge. See `docs/WIDESCREEN.md`. The visible host also
   exposes `View -> Aspect Ratio` so either presentation can be selected while
   paused or playing without reloading the ROM or save state.
 - The post-generation override pass ports the proven SuperZSNES visibility

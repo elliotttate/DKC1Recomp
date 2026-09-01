@@ -38,6 +38,9 @@ sidecars; loading a state from a different build warns.
 ## Environment variables (all default-off)
 
 **Run control:** `DKC1_WIDESCREEN` (default 1; 0=native 4:3),
+`DKC1_WIDESCREEN_EDGE` (level-wall presentation: `glide` default = the
+inward clamp released over eight margins of travel, `reflect`, `bars`,
+`shift` = pre-policy inward clamp, the A/B reference for wall reports),
 `DKC1_SCRIPT` (route .dks), `SNESRECOMP_INPUT_PLAY` (raw input replay),
 `DKC1_SAVESTATE_INPUT` (load state at boot), `DKC1_SAVESTATE_OUTPUT` /
 `DKC1_SAVESTATE_SAVE_AT` (save at frame), `DKC1_SRAM_INPUT`,

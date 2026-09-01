@@ -91,7 +91,12 @@ With a Visual Studio developer environment available:
 ```
 
 The desktop host enables widescreen by default. Set `DKC1_WIDESCREEN=0` for
-the exact 256x224 presentation path. The headless validator accepts a frame
+the exact 256x224 presentation path. At a level's authored walls the
+4:3 edge stays pinned at the wall and the inward view is released gradually
+over eight margins of travel, so nothing past the level is shown; View >
+Level Edge on macOS (or `DKC1_WIDESCREEN_EDGE=reflect|bars|shift|glide`)
+switches to a view locked to the camera with the terrain mirrored past the
+wall, black past the wall, or the earlier inward clamp. The headless validator accepts a frame
 count and supports deterministic input playback and private frame/state
 captures; its environment variables are documented in `docs/BRINGUP.md`.
 

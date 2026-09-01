@@ -12,6 +12,7 @@ bool g_ws_active;
 int g_ws_extra;
 static bool s_terrain_ready;
 static int s_presentation_bias;
+static Dkc1EdgePolicy s_edge_policy = kDkc1EdgeGlide;
 
 typedef struct Dkc1PlacedActorPhase {
   uint16_t id;
@@ -324,6 +325,21 @@ void Dkc1VideoSetPresentationBias(int bias) {
 
 int Dkc1VideoPresentationBias(void) {
   return g_ws_active ? s_presentation_bias : 0;
+}
+
+void Dkc1VideoSetEdgePolicy(Dkc1EdgePolicy policy) {
+  s_edge_policy = (unsigned)policy < (unsigned)kDkc1EdgePolicyCount
+                      ? policy : kDkc1EdgeGlide;
+}
+
+Dkc1EdgePolicy Dkc1VideoGetEdgePolicy(void) {
+  return s_edge_policy;
+}
+
+void Dkc1VideoEdgePresentation(uint32_t camera_x, uint32_t lower,
+                               uint32_t upper, Dkc1EdgePresentation *out) {
+  Dkc1EdgePresent(s_edge_policy, camera_x, lower, upper,
+                  g_ws_active ? g_ws_extra : 0, out);
 }
 
 enum {
