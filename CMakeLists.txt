@@ -22,10 +22,10 @@ endif()
 if(NOT DEFINED SNESRECOMP_ROOT)
     set(SNESRECOMP_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/snesrecomp)
 endif()
-if(APPLE AND NOT DEFINED SNESRECOMP_SDL_BACKEND)
-    # The DKC1 macOS frontend currently uses SDL2's queued-audio API. Keep
-    # this project on the engine's explicit compatibility backend until its
-    # SDL3 audio-stream equivalent is implemented and validated.
+if(UNIX AND NOT DEFINED SNESRECOMP_SDL_BACKEND)
+    # The DKC1 SDL frontend currently uses SDL2's queued-audio API. Keep this
+    # project on the engine's explicit compatibility backend until its SDL3
+    # audio-stream equivalent is implemented and validated.
     set(SNESRECOMP_SDL_BACKEND "SDL2" CACHE STRING
         "Desktop SDL backend (SDL3 or SDL2)")
 endif()
@@ -85,6 +85,9 @@ target_compile_definitions(dkc1_snesrecomp_headless PRIVATE
     SNESRECOMP_REVERSE_DEBUG=0
     SNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1
     SYSTEM_VOLUME_MIXER_AVAILABLE=0)
+if(UNIX)
+    target_compile_definitions(dkc1_snesrecomp_headless PRIVATE _GNU_SOURCE)
+endif()
 if(MSVC)
     # Do not use /MP here. This generated-source workload has reproduced an
     # MSVC race where cl.exe returns before every bank object is available to
@@ -146,4 +149,44 @@ if(APPLE)
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
+endif()
+
+if(UNIX AND NOT APPLE)
+    if(NOT SNESRECOMP_SDL_BACKEND STREQUAL "SDL2")
+        message(FATAL_ERROR
+            "The DKC1 Linux frontend currently requires "
+            "-DSNESRECOMP_SDL_BACKEND=SDL2")
+    endif()
+
+    add_executable(dkc1_snesrecomp_sdl
+        ${DKC1_ENGINE_SOURCES}
+        ${DKC1_SNESRECOMP_GEN_SOURCES}
+        ${DKC1_RUNNER_SOURCES}
+        runner/headless_host.c
+        runner/dkc1_haptics.c
+        runner/dkc1_msu1.c
+        runner/sdl_host.c
+        runner/nonapple_sdl_platform.c)
+    target_include_directories(dkc1_snesrecomp_sdl PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/runner
+        ${CMAKE_CURRENT_SOURCE_DIR}/recomp
+        ${SNESRECOMP_RUNNER_INCLUDE_DIRS}
+        ${SNESRECOMP_ROOT}/runner/src/desktop)
+    target_compile_definitions(dkc1_snesrecomp_sdl PRIVATE
+        _GNU_SOURCE
+        SNESRECOMP_TRACE=0
+        SNESRECOMP_REVERSE_DEBUG=0
+        SNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1
+        SYSTEM_VOLUME_MIXER_AVAILABLE=0
+        DKC1_BUILD_COMMIT="${DKC1_BUILD_COMMIT}"
+        DKC1_BUILD_CONFIG="linux")
+    target_compile_options(dkc1_snesrecomp_sdl PRIVATE
+        -Wno-unused-function)
+    target_link_libraries(dkc1_snesrecomp_sdl PRIVATE
+        ${SNESRECOMP_RUNNER_LIBRARIES})
+    find_package(Threads REQUIRED)
+    target_link_libraries(dkc1_snesrecomp_sdl PRIVATE Threads::Threads)
+    snesrecomp_target_sdl(dkc1_snesrecomp_sdl)
+    set_target_properties(dkc1_snesrecomp_sdl PROPERTIES
+        OUTPUT_NAME "DKC1Recomp")
 endif()

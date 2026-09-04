@@ -7,7 +7,7 @@ framework — following the working [`DKC2Recomp`](https://github.com/Nicktendon
 project (same Rare engine family) as the template.
 
 **Status: playable bring-up.** The project has 100% statically generated game
-code, a headless validation host, playable Windows and native macOS hosts,
+code, a headless validation host, playable Windows, Linux SDL2, and native macOS hosts,
 continuous audio, and an opt-in 342x224 widescreen presentation path. See `docs/BRINGUP.md` for the
 chronological bring-up record and `docs/WIDESCREEN.md` for the widescreen
 architecture, ported SuperZSNES findings, validation, and limitations.
@@ -99,6 +99,33 @@ switches to a view locked to the camera with the terrain mirrored past the
 wall, black past the wall, or the earlier inward clamp. The headless validator accepts a frame
 count and supports deterministic input playback and private frame/state
 captures; its environment variables are documented in `docs/BRINGUP.md`.
+
+### Linux
+
+Install a C compiler, CMake, Ninja, Python 3, Cargo, and the SDL2 development
+package. On Debian/Ubuntu:
+
+```sh
+sudo apt install build-essential cmake ninja-build python3 cargo libsdl2-dev
+```
+
+Then build both the playable SDL2 host and the headless validator. The first
+build uses the verified ROM to generate private ignored C sources; the ROM is
+never copied into the repository or executable.
+
+```sh
+git submodule update --init --recursive
+./build_linux.sh "/path/to/Donkey Kong Country (USA).sfc"
+./build/linux/DKC1Recomp
+```
+
+The Linux frontend accepts the ROM path as its first argument or through
+`DKC1_ROM`. It uses SDL2 for the window, keyboard/controller input, queued
+audio, fullscreen, and rendering. Native macOS menus and file pickers are not
+present, so Linux-only options use the existing environment variables. Keys
+match the other visible hosts: arrows, Z/X/S/A, Q/W, Return, Right Shift,
+F7/F8 pause and step, F9 export, F11/F12 quick save/load, Alt-Return
+fullscreen, and Escape to leave fullscreen or quit.
 
 ### macOS
 
