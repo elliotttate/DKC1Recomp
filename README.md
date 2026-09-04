@@ -116,7 +116,7 @@ never copied into the repository or executable.
 ```sh
 git submodule update --init --recursive
 ./build_linux.sh "/path/to/Donkey Kong Country (USA).sfc"
-./build/linux/DKC1Recomp "/path/to/Donkey Kong Country (USA).sfc"
+./build/linux/DKC1Recomp
 ```
 
 The Linux frontend accepts the ROM path as its first argument or through
