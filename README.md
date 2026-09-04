@@ -153,8 +153,10 @@ Kong's DKC3 gameplay frames and a heavier, Kiddy-inspired movement profile.
 Choose **Mods > Choose DKC3 ROM...** once to select the exact supported,
 headerless North American DKC3 ROM; it is verified and decoded only in memory,
 never copied into the app or repository. The mod is off by default and can be
-toggled during play. See [docs/BABY_KONG_MOD.md](docs/BABY_KONG_MOD.md) for
-the ROM identity, controlled-launch variables, behavior, and scope.
+toggled during play. DKC1's own semantic animation state drives Kiddy idle,
+walk, run, jump, roll, carry, throw, hurt, rope, swim, and other matching pose
+groups. See [docs/BABY_KONG_MOD.md](docs/BABY_KONG_MOD.md) for the ROM identity,
+controlled-launch variables, behavior, and scope.
 
 The native Mac host also supports controller feedback and external MSU-1
 replacement music. A successful enemy stomp produces a short controller

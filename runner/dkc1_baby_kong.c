@@ -1,5 +1,6 @@
 #include "dkc1_baby_kong.h"
 
+#include "dkc1_baby_kong_animation.h"
 #include "dkc1_baby_kong_layout.h"
 #include "dkc1_baby_kong_movement.h"
 #include "dkc1_wram_gen.h"
@@ -33,6 +34,7 @@ typedef struct Dkc1BabyFrame {
   const char *name;
   int16_t x0;
   int16_t y0;
+  int16_t opaque_y0;
   int16_t opaque_y1;
   uint16_t width;
   uint16_t height;
@@ -56,10 +58,8 @@ static uint8_t s_capture[kDkc1BabyCaptureWidth *
 static const Dkc1BabyFrame *s_draw_frame;
 static int s_draw_anchor_x;
 static bool s_draw_flip;
-static unsigned s_animation_tick;
-static char s_animation_group[40];
-static bool s_was_airborne;
-static unsigned s_landing_frames;
+static Dkc1BabyKongAlignment s_draw_alignment;
+static Dkc1BabyKongAnimationTracker s_animation_tracker;
 
 static void SetError(char *error, size_t error_size, const char *message) {
   if (error && error_size)
@@ -133,6 +133,7 @@ static bool DecodeFrame(const uint8_t *rom,
   if (!pixels)
     return false;
   const uint8_t *graphics = rom + start + header_size;
+  int opaque_y0 = 32767;
   int opaque_y1 = -32768;
   for (unsigned i = 0; i < piece_count; i++) {
     const int piece_x = (int)rom[start + 8u + i * 2u] - 0x80;
@@ -169,6 +170,8 @@ static bool DecodeFrame(const uint8_t *rom,
                 (size_t)(tile_y + y - y0) * (size_t)width +
                 (size_t)(tile_x + x - x0);
             pixels[destination] = pixel;
+            if (tile_y + y < opaque_y0)
+              opaque_y0 = tile_y + y;
             if (tile_y + y > opaque_y1)
               opaque_y1 = tile_y + y;
           }
@@ -184,6 +187,7 @@ static bool DecodeFrame(const uint8_t *rom,
   frame->name = manifest->name;
   frame->x0 = (int16_t)x0;
   frame->y0 = (int16_t)y0;
+  frame->opaque_y0 = (int16_t)opaque_y0;
   frame->opaque_y1 = (int16_t)opaque_y1;
   frame->width = (uint16_t)width;
   frame->height = (uint16_t)height;
@@ -256,10 +260,7 @@ bool Dkc1BabyKongLoadRom(const char *path, char *error, size_t error_size) {
   s_frames = frames;
   s_frame_count = count;
   memcpy(s_palette, palette, sizeof s_palette);
-  s_animation_tick = 0;
-  s_animation_group[0] = '\0';
-  s_was_airborne = false;
-  s_landing_frames = 0;
+  Dkc1BabyKongAnimationReset(&s_animation_tracker);
   (void)snprintf(s_status, sizeof s_status,
                  "%zu Kiddy Kong frames ready", s_frame_count);
   if (error && error_size)
@@ -273,6 +274,7 @@ void Dkc1BabyKongUnload(void) {
   s_frame_count = 0;
   s_enabled = false;
   s_draw_frame = NULL;
+  Dkc1BabyKongAnimationReset(&s_animation_tracker);
   (void)snprintf(s_status, sizeof s_status,
                  "select a supported DKC3 ROM");
 }
@@ -335,13 +337,9 @@ void Dkc1BabyKongApplyMoves(uint8_t *wram) {
 
   int16_t x_velocity = (int16_t)Dkc1Actor_SprXVelocity(wram, slot);
   int16_t y_velocity = (int16_t)Dkc1Actor_SprYVelocity(wram, slot);
-  const uint16_t surface_y = Dkc1Actor_SprSurfaceY(wram, slot);
-  const uint16_t actor_y = Dkc1Actor_SprYPos(wram, slot);
-  const int16_t surface_delta = (int16_t)(surface_y - actor_y);
-  const bool grounded = y_velocity == 0;
-  const bool has_airborne_surface =
-      surface_y != 0 && (surface_delta > 4 || surface_delta < -4);
-  if (!grounded && !has_airborne_surface)
+  const uint16_t state = Dkc1Actor_RAMTable1029Lo(wram, slot);
+  const bool grounded = Dkc1BabyKongStateIsGrounded(state);
+  if (!grounded && !Dkc1BabyKongStateIsAirborne(state))
     return;
 
   Dkc1BabyKongTuneVelocity(
@@ -352,14 +350,19 @@ void Dkc1BabyKongApplyMoves(uint8_t *wram) {
   Dkc1Actor_SetSprYVelocity(wram, slot, (uint16_t)y_velocity);
 }
 
+static bool FrameBelongsToGroup(const char *name, const char *prefix) {
+  const size_t prefix_size = strlen(prefix);
+  return strcmp(name, prefix) == 0 ||
+      (strncmp(name, prefix, prefix_size) == 0 &&
+       isdigit((unsigned char)name[prefix_size]));
+}
+
 static const Dkc1BabyFrame *FindGroupFrame(const char *prefix,
                                             unsigned ordinal) {
-  const size_t prefix_size = strlen(prefix);
   unsigned seen = 0;
   for (size_t i = 0; i < s_frame_count; i++) {
     const char *name = s_frames[i].name;
-    if (strncmp(name, prefix, prefix_size) == 0 &&
-        isdigit((unsigned char)name[prefix_size])) {
+    if (FrameBelongsToGroup(name, prefix)) {
       if (seen++ == ordinal)
         return &s_frames[i];
     }
@@ -368,70 +371,34 @@ static const Dkc1BabyFrame *FindGroupFrame(const char *prefix,
 }
 
 static unsigned GroupSize(const char *prefix) {
-  const size_t prefix_size = strlen(prefix);
   unsigned count = 0;
   for (size_t i = 0; i < s_frame_count; i++) {
-    if (strncmp(s_frames[i].name, prefix, prefix_size) == 0 &&
-        isdigit((unsigned char)s_frames[i].name[prefix_size]))
+    if (FrameBelongsToGroup(s_frames[i].name, prefix))
       count++;
   }
   return count;
 }
 
 static const Dkc1BabyFrame *SelectFrame(const uint8_t *wram,
-                                        uint32_t slot) {
-  const int16_t x_velocity = (int16_t)Dkc1Actor_SprXVelocity(wram, slot);
-  const int16_t y_velocity = (int16_t)Dkc1Actor_SprYVelocity(wram, slot);
-  const uint16_t held = Dkc1WramU16(wram, DKC1_WRAM_JoypadHeld);
-  const uint16_t state = Dkc1Actor_RAMTable1029Lo(wram, slot);
-  const bool airborne = y_velocity != 0;
-  if (s_was_airborne && !airborne)
-    s_landing_frames = 9;
-  else if (airborne)
-    s_landing_frames = 0;
-  const char *group = "Kiddy_Walk";
-  unsigned delay = 5;
-  unsigned ordinal = 0;
-
-  if (state >= 0x20u) {
-    group = "Kiddy_Swim";
-    delay = 4;
-  } else if (airborne) {
-    group = "Kiddy_Jump";
-    const int value = y_velocity < -0x600 ? -0x600
-                    : y_velocity > 0x600 ? 0x600 : y_velocity;
-    ordinal = (unsigned)((value + 0x600) * 7 / 0x0c00);
-  } else if (s_landing_frames != 0) {
-    group = "Kiddy_Land";
-    delay = 3;
-  } else if ((held & 0x4000u) != 0 && x_velocity != 0) {
-    group = "Kiddy_Roll";
-    delay = 2;
-  } else if (x_velocity > 0x0180 || x_velocity < -0x0180) {
-    group = "Kiddy_Run";
-    delay = 3;
-  } else if (x_velocity > 0x0020 || x_velocity < -0x0020) {
-    group = "Kiddy_Walk";
-    delay = 4;
-  } else if (s_animation_tick > 120u) {
-    group = "Kiddy_LookAroundIdle";
-    delay = 7;
-  }
-
-  if (strcmp(s_animation_group, group) != 0) {
-    (void)snprintf(s_animation_group, sizeof s_animation_group, "%s", group);
-    s_animation_tick = 0;
-  }
-  const unsigned count = GroupSize(group);
+                                        uint32_t slot,
+                                        Dkc1BabyKongAlignment *alignment) {
+  const Dkc1BabyKongAnimationInput input = {
+    .animation_id = Dkc1Actor_SprAnimID(wram, slot),
+    .state = Dkc1Actor_RAMTable1029Lo(wram, slot),
+    .native_pose = Dkc1Actor_DisplayedPoseLo(wram, slot),
+    .x_velocity = (int16_t)Dkc1Actor_SprXVelocity(wram, slot),
+    .y_velocity = (int16_t)Dkc1Actor_SprYVelocity(wram, slot),
+  };
+  const Dkc1BabyKongAnimationChoice choice =
+      Dkc1BabyKongClassifyAnimation(&input);
+  const unsigned count = GroupSize(choice.group);
   if (!count)
     return FindGroupFrame("Kiddy_Walk", 0);
-  if (strcmp(group, "Kiddy_Jump") != 0)
-    ordinal = (s_animation_tick / delay) % count;
-  s_animation_tick++;
-  if (s_landing_frames != 0)
-    s_landing_frames--;
-  s_was_airborne = airborne;
-  return FindGroupFrame(group, ordinal < count ? ordinal : count - 1u);
+  *alignment = choice.alignment;
+  const unsigned ordinal = Dkc1BabyKongAnimationFrame(
+      &s_animation_tracker, &input, choice, count);
+  return FindGroupFrame(choice.group,
+                        ordinal < count ? ordinal : count - 1u);
 }
 
 static int DecodeOamX(const Ppu *ppu, int slot) {
@@ -495,7 +462,8 @@ void Dkc1BabyKongPrepareFrame(Ppu *ppu, const uint8_t *wram,
   const uint32_t slot = FindDonkeySlot(wram);
   if (!slot)
     return;
-  const Dkc1BabyFrame *frame = SelectFrame(wram, slot);
+  Dkc1BabyKongAlignment alignment = kDkc1BabyKongAlignFeet;
+  const Dkc1BabyFrame *frame = SelectFrame(wram, slot, &alignment);
   if (!frame)
     return;
   const int frame_width = (int)(ppu->renderPitch / 4u);
@@ -526,24 +494,35 @@ void Dkc1BabyKongPrepareFrame(Ppu *ppu, const uint8_t *wram,
   s_draw_frame = frame;
   s_draw_anchor_x = anchor_x;
   s_draw_flip = (properties & 0x40u) != 0;
+  s_draw_alignment = alignment;
 }
 
-static int CapturedOpaqueBottom(const Ppu *ppu) {
+static bool CapturedOpaqueBounds(const Ppu *ppu, int *top, int *bottom) {
   const int output_width = (int)(ppu->renderPitch / 4u);
   const int output_extra = (output_width - kPpuXPixels) / 2;
   int x0 = s_draw_anchor_x - 80 + output_extra;
   int x1 = s_draw_anchor_x + 80 + output_extra;
   if (x0 < 0) x0 = 0;
   if (x1 > output_width) x1 = output_width;
-  for (int y = 223; y >= 0; y--) {
+  int found_top = -1;
+  int found_bottom = -1;
+  for (int y = 0; y < 224; y++) {
     const uint32_t *row = (const uint32_t *)(
         s_capture + (size_t)y * ppu->renderPitch);
     for (int x = x0; x < x1; x++) {
-      if (row[x] != 0)
-        return y;
+      if (row[x] != 0) {
+        if (found_top < 0)
+          found_top = y;
+        found_bottom = y;
+        break;
+      }
     }
   }
-  return -1;
+  if (found_top < 0)
+    return false;
+  *top = found_top;
+  *bottom = found_bottom;
+  return true;
 }
 
 void Dkc1BabyKongDrawFrame(Ppu *ppu) {
@@ -551,11 +530,15 @@ void Dkc1BabyKongDrawFrame(Ppu *ppu) {
   s_draw_frame = NULL;
   if (!frame || !ppu || !ppu->renderBuffer)
     return;
-  const int native_bottom = CapturedOpaqueBottom(ppu);
-  if (native_bottom < 0)
+  int native_top = 0;
+  int native_bottom = 0;
+  if (!CapturedOpaqueBounds(ppu, &native_top, &native_bottom))
     return;
-  const int draw_anchor_y = Dkc1BabyKongAnchorFromOpaqueBottom(
-      native_bottom, frame->opaque_y1);
+  const int draw_anchor_y = s_draw_alignment == kDkc1BabyKongAlignCenter
+      ? Dkc1BabyKongAnchorFromOpaqueCenters(
+            native_top, native_bottom, frame->opaque_y0, frame->opaque_y1)
+      : Dkc1BabyKongAnchorFromOpaqueBottom(
+            native_bottom, frame->opaque_y1);
   const int output_width = (int)(ppu->renderPitch / 4u);
   const int output_extra = (output_width - kPpuXPixels) / 2;
   for (unsigned y = 0; y < frame->height; y++) {

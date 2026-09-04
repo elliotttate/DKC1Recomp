@@ -32,14 +32,18 @@ An absent or mismatched ROM leaves the mod disabled.
 - All 354 gameplay frames in the Kiddy sprite map are decoded in memory from
   the verified user-owned DKC3 ROM. No graphics or palettes are stored in the
   repository, app bundle, preferences, or save data.
-- The native renderer identifies Donkey's exact contiguous OAM run, removes
-  only those OBJ pixels from the composite, and aligns the Kiddy frame to the
-  captured native sprite's opaque lower edge. This remains stable when DKC1's
-  airborne OAM wraps through scanline 255. Diddy, enemies, particles,
-  collision, and level rendering stay on the original DKC1 path.
-- Walk, run, roll, jump, land, idle-look, and swim frames are selected from
-  DKC1 actor state, velocity, and input. Facing direction follows the original
-  actor.
+- The native renderer identifies Donkey's exact contiguous OAM run and removes
+  only those OBJ pixels from the composite. Grounded poses align at the feet;
+  airborne, swimming, rope, and other suspended poses align by opaque center.
+  This remains stable when DKC1's airborne OAM wraps through scanline 255.
+  Diddy, enemies, particles, collision, and level rendering stay on the
+  original DKC1 path.
+- DKC1's semantic Donkey animation ID selects the closest available Kiddy
+  group. The complete Donkey ID range covers idle, walk, run, turn, jump,
+  bounce, roll, hurt/death, pickup/carry/throw, duck/crawl, animal buddies,
+  ropes, swimming, victory/failure, ground slap, and scripted entrances or
+  exits. Each selected group advances through its poses instead of holding a
+  velocity-derived still. Facing direction follows the original actor.
 - Holding run while grounded builds roll momentum up to a capped speed. In
   the air, a new jump press shortens the rise and the heavier body accelerates
   downward faster. DKC1 remains the collision and interaction oracle.
@@ -48,6 +52,10 @@ This is a Kiddy-inspired moveset fitted to DKC1's systems, not a transplant of
 DKC3's entire player engine. Team-up throws, water skipping, partner-specific
 level scripting, and DKC3-only collision states do not have equivalent DKC1
 systems and are not claimed here.
+
+DKC1 reports `-$0300` Y velocity while Donkey is standing on ordinary ground.
+The mod therefore uses the actor's state for grounded/airborne movement tuning
+and never treats nonzero Y velocity alone as a jump signal.
 
 ## Validation
 

@@ -11,8 +11,10 @@ Users must provide the supported ROM themselves.
   history.
 - Structural metadata in `recomp/*.cfg` derives from the GPL-3
   Yoshifanatic1 Donkey Kong Country 1 disassembly. Each generated metadata file
-  records its provenance. The disassembly itself and ROM-derived assembly are
-  not copied into this repository.
+  records its provenance. The optional Baby Kong animation map also uses its
+  numeric Donkey animation identifiers and semantic names, cross-checked at
+  revision `c2080f40469c716923f550706509a0d354229841`. The disassembly itself,
+  its comments, and ROM-derived assembly are not copied into this repository.
 - Portions of the host integration follow the MIT-licensed DKC2Recomp project.
 - The optional Baby Kong mod's source-only Kiddy frame map records names,
   addresses, sizes, and palette location derived from the GPL-3 H4v0c21

@@ -479,3 +479,34 @@ overlay, first-divergence locator, and lifecycle tools. See
   Enabling Baby Kong changed only that framebuffer: WRAM, VRAM, CGRAM, PPU
   OAM, and source OAM retained their disabled hashes. The rebuilt arm64 ZIP is
   `2e4188b5e0a236b6cea80a3c125333e93aa5e8f23d13e4d2930b3e164d034329`.
+
+## 2026-09-03 — Baby Kong animation-state correction
+
+- **Acceptance failure:** visible play after the layout correction still showed
+  Kiddy floating in a mostly fixed jump pose during ordinary movement. The
+  sprite was assembled correctly, but the selected animation was wrong.
+- **Root cause:** DKC1's grounded Donkey actor normally carries Y velocity
+  `-$0300`; the mod treated every nonzero Y velocity as airborne. Live
+  per-frame lifecycle traces proved that grounded idle, walk, and run use
+  actor state `0` with animation IDs `1`, `3`, and `2`, while jump, roll, and
+  hurt use IDs `5`, `24`, and `16`. The old `state >= $20` swim shortcut also
+  mislabeled entrance and transition states.
+- **Change:** the cartridge's semantic Donkey animation ID now selects the
+  closest Kiddy group for the complete ID range `$0001-$0068`. Looping groups
+  cycle, one-shot groups stop on their last pose, and jump frames follow the
+  actual rise/fall velocity only after the animation ID identifies a jump.
+  Grounded movement is based on observed actor states `0`, `18`, and `19`;
+  state `1` owns airborne tuning. Ground poses remain foot-aligned, while
+  airborne, swimming, rope, and suspended poses align by opaque center.
+- **Provenance:** Donkey animation ID meanings were cross-checked against the
+  GPL-3 Yoshifanatic1 DKC1 disassembly revision
+  `c2080f40469c716923f550706509a0d354229841`. Only numeric identifiers and
+  semantic names were consulted; no assembly, comments, graphics, or data were
+  copied.
+- **Visible evidence:** the same external Jungle Hijinxs snapshot was replayed
+  with the mod enabled. Manual inspection of 66 ten-frame captures covered the
+  entrance, idle, walk, roll, landing, and hurt sequence, and a second five-
+  frame capture set covered takeoff, rise, apex, descent, enemy bounce, and
+  landing. Kiddy displayed distinct poses throughout and Donkey did not
+  reappear. All PPM/PNG images, traces, and private snapshots remain under the
+  ignored `build/repros/` tree.

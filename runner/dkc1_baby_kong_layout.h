@@ -40,4 +40,11 @@ static inline int Dkc1BabyKongAnchorFromOpaqueBottom(int native_bottom,
   return native_bottom - local_bottom;
 }
 
+static inline int Dkc1BabyKongAnchorFromOpaqueCenters(int native_top,
+                                                      int native_bottom,
+                                                      int local_top,
+                                                      int local_bottom) {
+  return (native_top + native_bottom - local_top - local_bottom) / 2;
+}
+
 #endif
