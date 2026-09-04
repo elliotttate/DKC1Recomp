@@ -1,8 +1,9 @@
-/* Native macOS SDL2 frontend for DKC1Recomp.
+/* Native SDL2 frontend for DKC1Recomp.
  *
  * The recompiled cartridge/runtime stays identical to the Win32 and headless
  * hosts. This file owns only host presentation, input, queued audio, timing,
- * and user-facing save/repro shortcuts.
+ * and user-facing save/repro shortcuts. macOS adds native menus, file pickers,
+ * and Metal scanout; other Unix hosts retain the portable SDL path.
  */
 #include "dkc1_blank_scan.h"
 #include "dkc1_baby_kong.h"
@@ -25,12 +26,16 @@
 #include "snes/snes.h"
 
 #include <SDL.h>
+#ifdef __APPLE__
 #include <SDL_syswm.h>
+#endif
 
 #include <float.h>
 #include <limits.h>
+#ifdef __APPLE__
 #include <mach/mach_time.h>
 #include <pthread.h>
+#endif
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,7 +48,15 @@
 #define DKC1_BUILD_COMMIT "untracked"
 #endif
 #ifndef DKC1_BUILD_CONFIG
-#define DKC1_BUILD_CONFIG "macos-dev"
+#define DKC1_BUILD_CONFIG "sdl-dev"
+#endif
+
+#ifdef __APPLE__
+#define DKC1_HOST_PLATFORM "macos"
+#define DKC1_HOST_CLOCK "mach_absolute_time"
+#else
+#define DKC1_HOST_PLATFORM "linux"
+#define DKC1_HOST_CLOCK "SDL_GetPerformanceCounter"
 #endif
 
 enum {
@@ -193,7 +206,11 @@ static int EnvironmentEnabled(const char *name) {
 }
 
 static double FramePacerNow(void) {
+#ifdef __APPLE__
   return (double)mach_absolute_time();
+#else
+  return (double)SDL_GetPerformanceCounter();
+#endif
 }
 
 static void FramePacerCpuRelax(void) {
@@ -215,13 +232,26 @@ static void FramePacerCpuRelax(void) {
 static void FramePacerWaitUntil(double deadline, double frequency) {
   const double spin_ticks = frequency * kMacFinalSpinSeconds;
   double now = FramePacerNow();
+#ifdef __APPLE__
   if (deadline - now > spin_ticks)
     (void)mach_wait_until((uint64_t)(deadline - spin_ticks));
+#else
+  while (deadline - now > spin_ticks) {
+    const double coarse_ticks = deadline - now - spin_ticks;
+    const Uint32 coarse_ms =
+        (Uint32)(coarse_ticks * 1000.0 / frequency);
+    if (!coarse_ms)
+      break;
+    SDL_Delay(coarse_ms);
+    now = FramePacerNow();
+  }
+#endif
   while (FramePacerNow() < deadline)
     FramePacerCpuRelax();
 }
 
 static void FramePacerInit(Dkc1FramePacer *pacer) {
+#ifdef __APPLE__
   mach_timebase_info_data_t timebase = {0, 0};
   mach_timebase_info(&timebase);
   if (!timebase.numer || !timebase.denom) {
@@ -231,6 +261,12 @@ static void FramePacerInit(Dkc1FramePacer *pacer) {
   memset(pacer, 0, sizeof *pacer);
   pacer->frequency = 1000000000.0 * (double)timebase.denom /
                      (double)timebase.numer;
+#else
+  memset(pacer, 0, sizeof *pacer);
+  pacer->frequency = (double)SDL_GetPerformanceFrequency();
+  if (pacer->frequency <= 0.0)
+    pacer->frequency = 1000.0;
+#endif
   pacer->ticks_per_frame =
       pacer->frequency / kHostPresentationFramesPerSecond;
   pacer->next_deadline = FramePacerNow() + pacer->ticks_per_frame;
@@ -483,13 +519,13 @@ static int PacingLogWriteHeader(Dkc1PacingLog *log,
       ? 1.0 / display->callback_interval
       : kHostPresentationFramesPerSecond;
   fprintf(log->stream,
-          "{\"schema\":\"dkc1.pacing.v3\",\"platform\":\"macos\","
+          "{\"schema\":\"dkc1.pacing.v3\",\"platform\":\"%s\","
           "\"refresh_hz\":%.9f,\"display_hz\":%.9f,"
           "\"clock_source\":\"%s\",\"submit_lead_ms\":%.4f,"
           "\"audio_preroll\":%u,\"audio_ring_start_frames\":%u,"
           "\"test_stall_frame\":%ld,\"test_stall_ms\":%u}\n",
-          refresh_hz, refresh_hz,
-          s_display_link_active ? "CADisplayLink" : "mach_absolute_time",
+          DKC1_HOST_PLATFORM, refresh_hz, refresh_hz,
+          s_display_link_active ? "CADisplayLink" : DKC1_HOST_CLOCK,
           kMacSubmitLeadSeconds * 1000.0,
           s_audio_preroll_blocks, s_audio_ring_start_threshold,
           log->test_stall_frame, log->test_stall_ms);
@@ -779,8 +815,13 @@ static int ResolveRomPath(int argc, char **argv, char output[PATH_MAX]) {
   const char *candidate = argc > 1 ? argv[1] : getenv("DKC1_ROM");
   char *picked = NULL;
   if (!candidate || !*candidate) {
+#ifdef __APPLE__
     picked = Dkc1MacChooseRom();
     candidate = picked;
+#else
+    fprintf(stderr, "usage: DKC1Recomp <rom.sfc>\n");
+    return -1;
+#endif
   }
   if (!candidate) {
     output[0] = 0;
@@ -915,6 +956,7 @@ static bool InitVideo(void) {
 }
 
 static void InitDisplayLink(void) {
+#ifdef __APPLE__
   SDL_SysWMinfo window_info;
   SDL_VERSION(&window_info.version);
   const int have_native_window =
@@ -968,6 +1010,13 @@ static void InitDisplayLink(void) {
     fprintf(stderr, "[display-authority] display_link=%d renderer_vsync=%d\n",
             s_display_link_active, s_renderer_vsync);
   }
+#else
+  if (EnvironmentEnabled("DKC1_FPS_STATS")) {
+    fprintf(stderr,
+            "[display-authority] fixed_clock=1 renderer_vsync=%d\n",
+            s_renderer_vsync);
+  }
+#endif
 }
 
 static void PreparePresentation(void) {
@@ -1698,7 +1747,9 @@ static void Cleanup(uint8_t *rom) {
 
 int main(int argc, char **argv) {
   SDL_SetMainReady();
+#ifdef __APPLE__
   (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
   /* A native macOS fullscreen Space constrains SDL to the panel's inset safe
    * area (3949x2464 on the target 4112x2658 MacBook display). Set this before
    * the Cocoa video backend initializes so FULLSCREEN_DESKTOP uses the full
@@ -1710,9 +1761,10 @@ int main(int argc, char **argv) {
   }
 
   char rom_path[PATH_MAX] = {0};
-  if (!ResolveRomPath(argc, argv, rom_path)) {
+  const int rom_path_result = ResolveRomPath(argc, argv, rom_path);
+  if (rom_path_result <= 0) {
     SDL_Quit();
-    return 0;
+    return rom_path_result < 0 ? 2 : 0;
   }
 
   size_t rom_size = 0;
