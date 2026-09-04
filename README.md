@@ -148,6 +148,14 @@ renderer wait independently. `DKC1_DISABLE_DISPLAY_LINK=1` and
 `SNESRECOMP_INPUT_PLAY=path` supplies the same deterministic
 per-frame input playback supported by the Windows debugger for visible Mac QA.
 
+The optional **Mods > Baby Kong** switch replaces active Donkey with Kiddy
+Kong's DKC3 gameplay frames and a heavier, Kiddy-inspired movement profile.
+Choose **Mods > Choose DKC3 ROM...** once to select the exact supported,
+headerless North American DKC3 ROM; it is verified and decoded only in memory,
+never copied into the app or repository. The mod is off by default and can be
+toggled during play. See [docs/BABY_KONG_MOD.md](docs/BABY_KONG_MOD.md) for
+the ROM identity, controlled-launch variables, behavior, and scope.
+
 The native Mac host also supports controller feedback and external MSU-1
 replacement music. A successful enemy stomp produces a short controller
 rumble; normal jumps and contact damage do not. Set `DKC1_HAPTICS=0` to disable

@@ -410,3 +410,72 @@ overlay, first-divergence locator, and lifecycle tools. See
   physical scanout variability is therefore tracked as an open host-compositor
   issue. This host-only change does not claim a new cartridge widescreen
   capability or a complete 40-entrance matrix.
+
+## 2026-09-03 — toggleable Baby Kong reference mod
+
+- **Decision:** implement the requested Baby Kong option as Kiddy Kong from
+  DKC3, but keep both Nintendo ROMs and every extracted asset outside Git. The
+  exact 4 MiB headerless North American DKC3 ROM is hash-gated, and all 354
+  mapped gameplay frames plus the active palette are decoded only into process
+  memory. The source map contains names, offsets, and sizes derived from
+  H4v0c21 DKC3 disassembly revision
+  `bed96892f5e85eabd5c920306f00b361c2e1f34c`.
+- **Presentation:** the host correlates the active Donkey actor with a
+  contiguous OAM range, uses the PPU's bounded remove-from-composite capture,
+  and draws the selected Kiddy frame at the same actor anchor. Identification
+  failures retain stock Donkey rather than removing an uncertain sprite.
+  Diddy and every unrelated OBJ remain cartridge-rendered.
+- **Gameplay:** isolated, testable tuning preserves DKC1 collision and actor
+  logic while adding capped run/roll momentum and a shorter, heavier jump arc.
+  Kiddy walk, run, roll, jump, land, idle-look, and swim groups are selected
+  from observed DKC1 state. DKC3 team-up, water-skip, and game-specific player
+  states are not reconstructed and remain explicitly outside this milestone.
+- **Toggle:** macOS exposes **Mods > Baby Kong** and **Choose DKC3 ROM...**;
+  path and toggle preference persist, while `DKC1_BABY_KONG_ROM` and
+  `DKC1_BABY_KONG` provide deterministic launch control. Missing or invalid
+  private input makes enablement a no-op.
+- **Evidence:** a zero-frame render of the existing external Slip-Slide Ride
+  snapshot retained the established disabled framebuffer, WRAM, VRAM, CGRAM,
+  and OAM hashes. The enabled leg changed only the framebuffer at that state;
+  a 60-frame jump-run leg changed gameplay WRAM and rendered a moving Kiddy
+  frame. A mismatched ROM kept the exact stock framebuffer and WRAM hashes.
+  These private images and WRAM dumps stayed under `/tmp`. All 230 Python
+  tests passed with one unavailable imported-state fixture skipped;
+  `./build_macos.sh` completed and deep strict code-sign verification accepted
+  the resulting app.
+
+## 2026-09-03 — Baby Kong visual-layout correction
+
+- **Acceptance failure:** the first implementation passed its source tests and
+  state/hash checks but failed visible gameplay review. Kiddy was assembled
+  from scrambled 8x8 tiles, and Donkey reappeared during the jump arc. The
+  earlier nonvisual evidence was therefore insufficient for this feature.
+- **Root causes:** the decoder treated each 16x16 piece as four consecutive
+  ROM tiles. DKC3 instead references a 16-tile-wide virtual VRAM sheet whose
+  source data may be split across two DMA segments. Separately, the replacement
+  policy treated DKC1 actor Y as screen Y; that coincidence held on the ground
+  but failed as the airborne actor coordinate and camera diverged.
+- **Change:** sprite pieces now resolve through the header's group-1 count,
+  group-2 destination/count, and the virtual 16-tile row stride. Donkey's OAM
+  identity remains a contiguous, matching-attribute run near the validated
+  actor X, without using the unstable actor Y. The renderer captures that run
+  across the visible height and aligns Kiddy's opaque lower edge to the native
+  sprite pixels after scanout, including OAM that wraps through scanline 255.
+- **Provenance:** the format interpretation was cross-checked read-only against
+  RainbowZ Editor revision `3a8badfec278ba11c1581ea3df02463077666619`.
+  Its all-rights-reserved code, comments, binaries, and assets were not copied.
+- **Visible evidence:** the exact external Jungle Hijinxs snapshot and
+  500-frame route were recaptured with frames sampled every ten frames. Manual
+  inspection covered grounded motion, takeoff, the wrapped high point,
+  descent, and landing. Kiddy remained coherently assembled and present at all
+  ten selected checkpoints (relative frames 200, 240, 300, 320, 330, 340,
+  350, 360, 400, and 490); Donkey did not remain or reappear. The private PPM,
+  PNG, OAM, and WRAM evidence stayed under `/tmp`.
+- **Validation:** all 231 Python tests passed with one unavailable local
+  imported-state fixture skipped; `./build_macos.sh`, `git diff --check`, ZIP
+  integrity, and deep strict code-sign verification passed. The disabled
+  zero-frame Slip-Slide oracle retained framebuffer hash
+  `23d8a78dabff683f2959f25e17736265b3815c6cb5d4a3a4ad28323270db6b0e`.
+  Enabling Baby Kong changed only that framebuffer: WRAM, VRAM, CGRAM, PPU
+  OAM, and source OAM retained their disabled hashes. The rebuilt arm64 ZIP is
+  `2e4188b5e0a236b6cea80a3c125333e93aa5e8f23d13e4d2930b3e164d034329`.

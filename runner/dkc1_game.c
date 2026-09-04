@@ -1,4 +1,5 @@
 #include "dkc1_game.h"
+#include "dkc1_baby_kong.h"
 #include "dkc1_video.h"
 #include "dkc1_ws_trace.h"
 
@@ -59,6 +60,7 @@ static void Dkc1InterpreterInitialColumnCount(CpuState *cpu,
 }
 
 static void Dkc1Initialize(void) {
+  Dkc1BabyKongInitializeFromEnvironment();
   /* The main engine can reach both initializers while executing through the
    * bank-$00 HiROM interpreter mirror. Generated-C adapters alone therefore
    * miss those entries. Mirror the same two constant substitutions at the
@@ -129,6 +131,8 @@ static void Dkc1RunOneFrame(void) {
     s_last_lle_result =
         interp_bridge_run_until_quiescent(&g_cpu, s_resume_pc);
   }
+
+  Dkc1BabyKongApplyMoves(g_ram);
 
   interp_bridge_set_master_deadline(0);
   s_resume_pc = interp_bridge_lle_resume_pc();
@@ -2028,6 +2032,8 @@ void Dkc1DrawPpuFrame(void) {
     PpuSetWidescreenPresentationXBias(g_ppu, 0);
   }
 
+  Dkc1BabyKongPrepareFrame(g_ppu, g_ram, presentation_bias);
+
   dma_startDma(g_dma, g_snesrecomp_last_hdmaen, true);
   WsShadowDebugBeginFrame();
   for (int channel = 0; channel < 8; channel++) {
@@ -2071,6 +2077,8 @@ void Dkc1DrawPpuFrame(void) {
       if (right_bytes) memset(row + right_offset, 0, right_bytes);
     }
   }
+
+  Dkc1BabyKongDrawFrame(g_ppu);
 
   /* Model the VBlank boundary after the visible lines so the PPU reloads its
    * internal OAM port from OAMADD before the next frame's OAM DMA. */

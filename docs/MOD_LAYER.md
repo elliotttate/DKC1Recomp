@@ -26,6 +26,7 @@ mod declarations + conflict checking + the existing evidence gates
 | Differential oracle | engine capture (`SNESRECOMP_ORACLE*` in the trace build) + `tools/oracle_run.py` + `tools/oracle_diff.py` | live — per-call entry/exit registers, flags, WRAM ranges, cycle delta; two deterministic legs must match byte-for-byte |
 | Routine replacement | `tools/gen_replacements.py` + `runner/replacements/` + `build_host_replace.bat` | live — see DKC1_REPLACE below; demo replacement proven equivalent |
 | Gameplay/presentation split | `first_divergence.py` + byte-identical WRAM A/B + `contracts/wide-intended-differences.json` | live discipline; `mod_conflicts.py` enforces it at declaration level |
+| Baby Kong reference mod | `runner/dkc1_baby_kong.*` + `docs/BABY_KONG_MOD.md` | live — opt-in, hash-gated DKC3 ROM decode; Kiddy presentation plus isolated movement tuning; stock path fails closed |
 
 Regeneration order after source changes:
 `tools/ir/summarize.py` → `tools/oracle_spec.py --emit-all` →
@@ -89,8 +90,9 @@ promising API stability beyond that would be dishonest.
 - **Mod manifests / launcher / ordering** — one mod exists today; the
   useful early piece (WRAM ownership conflicts) shipped in
   `mod_conflicts.py` instead.
-- **Asset round-trip** — separate track; the disassembly repo's
-  `AssetPointersAndFiles.asm` / `ExtractAssets` tooling is the start.
+- **General asset round-trip** — separate track. Baby Kong is a deliberately
+  narrow exception that decodes verified user-owned ROM data in memory and
+  never exports it or turns it into a repository asset.
 - **Graphical editors** — after asset round-trip.
 
 ## Non-negotiables

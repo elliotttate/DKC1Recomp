@@ -5,6 +5,7 @@
  * and user-facing save/repro shortcuts.
  */
 #include "dkc1_blank_scan.h"
+#include "dkc1_baby_kong.h"
 #include "dkc1_debug_dump.h"
 #include "dkc1_flight_recorder.h"
 #include "dkc1_game.h"
@@ -712,7 +713,8 @@ static void UpdateTitle(void) {
                          s_fullscreen_scaling,
                          Dkc1VideoGetAspect(), Dkc1VideoGetEdgePolicy(),
                          Dkc1DebugLayerMask(),
-                         Dkc1DebugProvenanceOverlay(), s_msu1 != NULL);
+                         Dkc1DebugProvenanceOverlay(), s_msu1 != NULL,
+                         Dkc1BabyKongEnabled(), Dkc1BabyKongReady());
 }
 
 static char *ConfiguredMusicPackPath(void) {
@@ -727,6 +729,24 @@ static char *ConfiguredMusicPackPath(void) {
     return copy;
   }
   return Dkc1MacSavedMsu1();
+}
+
+static void ChooseBabyKongRom(void) {
+  char *path = Dkc1MacChooseBabyKongRom();
+  if (!path)
+    return;
+  char error[192];
+  if (Dkc1BabyKongLoadRom(path, error, sizeof error)) {
+    Dkc1BabyKongSetEnabled(true);
+    Dkc1MacSetBabyKongRom(path);
+    Dkc1MacSetBabyKongEnabled(1);
+    snprintf(s_status, sizeof s_status, "Baby Kong enabled | %zu frames",
+             Dkc1BabyKongFrameCount());
+  } else {
+    ShowError("Unsupported DKC3 ROM", error);
+    snprintf(s_status, sizeof s_status, "Baby Kong: %.160s", error);
+  }
+  free(path);
 }
 
 static uint16_t ReadWram16(size_t address) {
@@ -1520,6 +1540,19 @@ void Dkc1MacMenuCommand(int command) {
     case kDkc1MacMenuExportRepro:
       ExportRepro();
       return;
+    case kDkc1MacMenuToggleBabyKong:
+      if (!Dkc1BabyKongReady()) {
+        ChooseBabyKongRom();
+      } else {
+        Dkc1BabyKongSetEnabled(!Dkc1BabyKongEnabled());
+        Dkc1MacSetBabyKongEnabled(Dkc1BabyKongEnabled());
+        snprintf(s_status, sizeof s_status, "%s",
+                 Dkc1BabyKongStatus());
+      }
+      break;
+    case kDkc1MacMenuChooseBabyKongRom:
+      ChooseBabyKongRom();
+      break;
     case kDkc1MacMenuChooseMusicPack: {
       char *path = Dkc1MacChooseMsu1();
       if (path) {
@@ -1650,6 +1683,7 @@ static void Cleanup(uint8_t *rom) {
   }
   Dkc1Msu1Close(s_msu1);
   s_msu1 = NULL;
+  Dkc1BabyKongUnload();
   if (s_audio_device)
     SDL_CloseAudioDevice(s_audio_device);
   if (s_texture)
@@ -1735,6 +1769,22 @@ int main(int argc, char **argv) {
     free(rom);
     SDL_Quit();
     return 4;
+  }
+
+  if (!getenv("DKC1_BABY_KONG_ROM")) {
+    char *baby_rom = Dkc1MacSavedBabyKongRom();
+    if (baby_rom) {
+      char baby_error[192];
+      if (!Dkc1BabyKongLoadRom(baby_rom, baby_error, sizeof baby_error))
+        fprintf(stderr, "warning: Baby Kong disabled: %s\n", baby_error);
+      free(baby_rom);
+    }
+  }
+  if (Dkc1BabyKongReady()) {
+    const char *baby_enabled = getenv("DKC1_BABY_KONG");
+    Dkc1BabyKongSetEnabled(
+        baby_enabled ? EnvironmentEnabled("DKC1_BABY_KONG")
+                     : Dkc1MacSavedBabyKongEnabled() != 0);
   }
 
   const char *snapshot = getenv("DKC1_SAVESTATE_INPUT");
