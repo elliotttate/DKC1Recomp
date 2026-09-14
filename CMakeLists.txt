@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 
 project(dkc1_port
     VERSION 0.0.13
@@ -43,7 +43,7 @@ endif()
 if(NOT DEFINED SNESRECOMP_ROOT)
     set(SNESRECOMP_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/snesrecomp)
 endif()
-if((APPLE OR WIN32) AND NOT DEFINED SNESRECOMP_SDL_BACKEND)
+if((APPLE OR WIN32 OR (UNIX AND NOT APPLE)) AND NOT DEFINED SNESRECOMP_SDL_BACKEND)
     # The DKC1 macOS frontend currently uses SDL2's queued-audio API. Keep
     # this project on the engine's explicit compatibility backend until its
     # SDL3 audio-stream equivalent is implemented and validated.
@@ -254,4 +254,141 @@ if(WIN32)
     add_test(NAME windows_platform COMMAND dkc1_windows --platform-test ${CMAKE_CURRENT_BINARY_DIR}/music-test)
     set_source_files_properties(runner/windows_platform.c runner/windows_graphics.c
         runner/windows_music_pack.c PROPERTIES COMPILE_OPTIONS "/W4;/WX")
+endif()
+
+if(UNIX AND NOT APPLE)
+    # CachyOS/Arch (and increasingly other distros) alias the "sdl2" package
+    # to sdl2-compat: an SDL2-ABI shim that forwards every call into a real
+    # SDL3 install underneath via libffi. On at least COSMIC's Wayland
+    # compositor (cosmic-comp) this shim has been observed to segfault
+    # inside its own Wayland event-dispatch translation on the very first
+    # frame (SDL2 -> sdl2-compat -> libffi -> SDL3 -> wl_display_dispatch,
+    # confirmed via gdb backtrace + confirming `pacman -Qo` ownership) --
+    # not a bug in this project's code. Building a real SDL2 from source
+    # sidesteps the shim entirely. Off switch provided for anyone who has
+    # confirmed their system SDL2 is *not* sdl2-compat (or is on a distro
+    # unaffected by this) and would rather link the system copy.
+    option(DKC1_LINUX_VENDOR_SDL2
+        "Build SDL2 2.30.9 from source instead of relying on the system's SDL2 package (works around distros -- e.g. Arch/CachyOS -- that alias 'sdl2' to sdl2-compat, an SDL3-backed shim that has been observed to crash on some Wayland compositors)"
+        ON)
+    if(DKC1_LINUX_VENDOR_SDL2)
+        include(FetchContent)
+        set(SDL_SHARED ON CACHE BOOL "" FORCE)
+        set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+        set(SDL_TEST OFF CACHE BOOL "" FORCE)
+        set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+        # SDL 2.30.9's bundled PipeWire backend calls pw_node_enum_params()
+        # with the pre-break argument type; newer PipeWire (as shipped by
+        # CachyOS and other rolling distros) changed that signature, so this
+        # backend fails to compile there. PulseAudio/ALSA stay enabled and
+        # still reach PipeWire via pipewire-pulse, so nothing is lost.
+        set(SDL_PIPEWIRE OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(SDL2
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+            GIT_TAG release-2.30.9
+            GIT_SHALLOW TRUE
+            OVERRIDE_FIND_PACKAGE)
+        FetchContent_MakeAvailable(SDL2)
+        message(STATUS
+            "dkc1_linux: vendoring real SDL2 2.30.9 from source (bypassing "
+            "the system SDL2 package -- set -DDKC1_LINUX_VENDOR_SDL2=OFF to "
+            "use the system copy instead, e.g. if you've confirmed it isn't "
+            "sdl2-compat)")
+    endif()
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    find_package(Vulkan)
+    find_package(OpenGL REQUIRED)
+    find_program(GLSLANG_VALIDATOR NAMES glslangValidator)
+    # Qt6's own CMake config (FindWrapAtomic et al) does check_cxx_source_compiles
+    # internally, so CXX has to be enabled BEFORE find_package(Qt6) can even run
+    # -- there's no way to probe "is Qt6 available" without it. check_language()
+    # probes for a working C++ compiler without hard-failing configure if there
+    # isn't one, so a genuinely C-only toolchain still falls back to the stub
+    # cleanly instead of configure erroring out.
+    include(CheckLanguage)
+    check_language(CXX)
+    if(CMAKE_CXX_COMPILER)
+        enable_language(CXX)
+        set(CMAKE_CXX_STANDARD 17)
+        set(CMAKE_CXX_STANDARD_REQUIRED ON)
+        find_package(Qt6 QUIET COMPONENTS Widgets)
+    endif()
+
+    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gl_shaders.h
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_gl_shaders.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/runner/macos_graphics.metal
+            ${CMAKE_CURRENT_BINARY_DIR}/gl_shaders.h
+        DEPENDS scripts/generate_gl_shaders.py runner/macos_graphics.metal VERBATIM)
+
+    set(DKC1_LINUX_SOURCES
+        ${DKC1_ENGINE_SOURCES} ${DKC1_SNESRECOMP_GEN_SOURCES} ${DKC1_RUNNER_SOURCES}
+        runner/headless_host.c runner/sdl_host.c runner/dkc1_haptics.c runner/dkc1_msu1.c
+        runner/desktop_audio_rate.c runner/desktop_rewind.c runner/desktop_input.c
+        runner/desktop_refresh.c runner/desktop_crt.c runner/desktop_filter.c
+        runner/desktop_graphics.c runner/linux_platform.c runner/linux_presenter.c
+        runner/linux_gl_graphics.c ${CMAKE_CURRENT_BINARY_DIR}/gl_shaders.h)
+    set(DKC1_LINUX_DEFS
+        SNESRECOMP_TRACE=0 SNESRECOMP_REVERSE_DEBUG=0
+        SNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1 SYSTEM_VOLUME_MIXER_AVAILABLE=0
+        DKC1_BUILD_COMMIT="${DKC1_BUILD_COMMIT}"
+        _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
+    set(DKC1_LINUX_INCLUDES runner recomp ${SNESRECOMP_RUNNER_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_BINARY_DIR})
+    set(DKC1_LINUX_LIBS ${SNESRECOMP_RUNNER_LIBRARIES} m pthread OpenGL::GL)
+
+    if(Vulkan_FOUND AND GLSLANG_VALIDATOR)
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/vk_shader_vert.h
+            COMMAND ${GLSLANG_VALIDATOR} -V
+                ${CMAKE_CURRENT_SOURCE_DIR}/runner/shaders/dkc1_present.vert
+                --vn g_dkc1_present_vert -o ${CMAKE_CURRENT_BINARY_DIR}/vk_shader_vert.h
+            DEPENDS runner/shaders/dkc1_present.vert VERBATIM)
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/vk_shader_frag.h
+            COMMAND ${GLSLANG_VALIDATOR} -V
+                ${CMAKE_CURRENT_SOURCE_DIR}/runner/shaders/dkc1_present.frag
+                --vn g_dkc1_present_frag -o ${CMAKE_CURRENT_BINARY_DIR}/vk_shader_frag.h
+            DEPENDS runner/shaders/dkc1_present.frag VERBATIM)
+        list(APPEND DKC1_LINUX_SOURCES runner/linux_vk_graphics.c
+            ${CMAKE_CURRENT_BINARY_DIR}/vk_shader_vert.h
+            ${CMAKE_CURRENT_BINARY_DIR}/vk_shader_frag.h)
+        list(APPEND DKC1_LINUX_DEFS DKC1_LINUX_VULKAN=1)
+        list(APPEND DKC1_LINUX_LIBS Vulkan::Vulkan)
+        message(STATUS "dkc1_linux: Vulkan backend enabled (primary), OpenGL fallback")
+    else()
+        message(WARNING
+            "dkc1_linux: Vulkan SDK and/or glslangValidator not found -- "
+            "building with the OpenGL backend only. Install libvulkan-dev "
+            "and glslang-tools (or your distro's Vulkan SDK package) and "
+            "reconfigure to get the Vulkan-primary renderer.")
+    endif()
+
+    add_executable(dkc1_linux ${DKC1_LINUX_SOURCES})
+    target_include_directories(dkc1_linux PRIVATE ${DKC1_LINUX_INCLUDES})
+    target_compile_definitions(dkc1_linux PRIVATE ${DKC1_LINUX_DEFS}
+        DKC1_BUILD_CONFIG="linux-${PROJECT_VERSION}")
+    target_link_libraries(dkc1_linux PRIVATE ${DKC1_LINUX_LIBS})
+    snesrecomp_target_sdl(dkc1_linux)
+    set_target_properties(dkc1_linux PROPERTIES OUTPUT_NAME DKC1Recomp)
+
+    if(Qt6_FOUND)
+        # CXX/standard already set up above -- find_package(Qt6) couldn't
+        # have succeeded without them.
+        set_target_properties(dkc1_linux PROPERTIES AUTOMOC ON)
+        target_sources(dkc1_linux PRIVATE runner/linux_qt_dialog.cpp)
+        target_compile_definitions(dkc1_linux PRIVATE DKC1_LINUX_QT=1)
+        target_link_libraries(dkc1_linux PRIVATE Qt6::Widgets)
+        message(STATUS "dkc1_linux: Qt6 settings/pause dialog enabled")
+    else()
+        message(WARNING
+            "dkc1_linux: Qt6 (qt6-base-dev / Widgets component) not found -- "
+            "building with the resume-only pause-menu stub. Install Qt6 and "
+            "reconfigure to get the real settings/controls dialog.")
+    endif()
+
+    enable_testing()
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/linux-platform-test)
+    add_test(NAME linux_platform COMMAND dkc1_linux --platform-test
+        ${CMAKE_CURRENT_BINARY_DIR}/linux-platform-test)
+    add_test(NAME linux_graphics COMMAND dkc1_linux --graphics-test)
+    set_tests_properties(linux_graphics PROPERTIES TIMEOUT 60)
 endif()

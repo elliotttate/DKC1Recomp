@@ -1,9 +1,15 @@
-/* Shared macOS/Windows SDL2 frontend for DKC1Recomp.
+/* Shared macOS/Windows/Linux SDL2 frontend for DKC1Recomp.
  *
  * The recompiled cartridge/runtime stays identical to the Win32 and headless
  * hosts. This file owns only host presentation, input, queued audio, timing,
  * and user-facing save/repro shortcuts.
  */
+#if defined(__linux__) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L /* PATH_MAX, popen/pclose, setenv, realpath */
+#endif
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE
+#endif
 #include "dkc1_blank_scan.h"
 #include "dkc1_baby_kong.h"
 #include "dkc1_dixie_mod.h"
@@ -45,6 +51,12 @@
 #ifdef _WIN32
 #include "windows_compat.h"
 #include "windows_platform.h"
+#elif defined(__linux__)
+#include "linux_platform.h"
+#include "linux_presenter.h"
+#include "linux_gl_graphics.h" /* Dkc1LinuxGlGraphicsTest for --graphics-test */
+#include <pthread.h>
+#include <unistd.h>
 #else
 #include <mach/mach_time.h>
 #include <pthread.h>
@@ -958,12 +970,22 @@ static void ApplyWindowedSize(void) {
 static bool InitVideo(void) {
   const int window_width = PresentationWidth() * s_graphics.window_scale;
   const int window_height = kDkc1VideoHeight * s_graphics.window_scale;
+#ifdef __linux__
+  /* Decided once, before window creation, so the window's flags are
+   * correct from the start: SDL_GL_CreateContext cannot get a context on
+   * a window created with SDL_WINDOW_VULKAN, so the OpenGL fallback needs
+   * the window to NOT have that flag if Vulkan isn't going to be used. */
+  const bool linux_try_vulkan = Dkc1LinuxPresenterVulkanLikelyAvailable();
+#endif
   s_window = SDL_CreateWindow(
       "DKC1Recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       window_width, window_height,
       SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE
 #ifdef _WIN32
       | SDL_WINDOW_OPENGL
+      | (EnvironmentEnabled("DKC1_SMOKE_TEST_HIDDEN") ? SDL_WINDOW_HIDDEN : 0)
+#elif defined(__linux__)
+      | (linux_try_vulkan ? SDL_WINDOW_VULKAN : SDL_WINDOW_OPENGL)
       | (EnvironmentEnabled("DKC1_SMOKE_TEST_HIDDEN") ? SDL_WINDOW_HIDDEN : 0)
 #endif
       );
@@ -1026,6 +1048,28 @@ static bool InitVideo(void) {
 static void InitDisplayLink(void) {
 #ifdef _WIN32
   return; /* QPC owns emulation cadence; Windows uses the OpenGL presenter. */
+#elif defined(__linux__)
+  if (!EnvironmentEnabled("DKC1_DISABLE_METAL_PRESENTER")) {
+    s_metal_presenter_active = Dkc1MacMetalPresenterStart(
+        (void *)s_window, kHostPresentationFramesPerSecond,
+        s_fullscreen_scaling, s_fullscreen);
+  }
+  if (s_metal_presenter_active && s_renderer_vsync &&
+      !EnvironmentEnabled("DKC1_KEEP_RENDERER_VSYNC")) {
+    /* The Vulkan/GL presenter's own FIFO/vsync swap is the single
+     * producer authority once active, same reasoning as the Mac path
+     * below with CADisplayLink. */
+    if (SDL_RenderSetVSync(s_renderer, 0) == 0) {
+      s_renderer_vsync = 0;
+    } else {
+      fprintf(stderr, "warning: unable to disable renderer vsync: %s\n",
+              SDL_GetError());
+    }
+  }
+  if (EnvironmentEnabled("DKC1_FPS_STATS")) {
+    fprintf(stderr, "[linux-presenter] active=%d backend=%d\n",
+            s_metal_presenter_active, Dkc1LinuxPresenterActiveBackend());
+  }
 #else
   SDL_SysWMinfo window_info;
   SDL_VERSION(&window_info.version);
@@ -1825,8 +1869,10 @@ unsigned Dkc1MacPauseMenuController(void) {
 
 static void OpenPauseMenu(int graphics_page) {
   if (Dkc1MacPauseMenuIsOpen()) return;
+#ifndef __linux__
   SDL_SysWMinfo window; SDL_VERSION(&window.version);
   if (!SDL_GetWindowWMInfo(s_window,&window)) return;
+#endif
   int was_paused=s_paused;
   s_paused=1; s_step_once=0; StopControllerRumble();
   if (s_audio_device) SDL_PauseAudioDevice(s_audio_device,1);
@@ -1837,6 +1883,8 @@ static void OpenPauseMenu(int graphics_page) {
   int resume=Dkc1MacShowPauseMenu(
 #ifdef _WIN32
       window.info.win.window,
+#elif defined(__linux__)
+      (void *)s_window,
 #else
       window.info.cocoa.window,
 #endif
@@ -2175,10 +2223,10 @@ int main(int argc, char **argv) {
   dma_set_zero_size_vram_noop(1);
 #endif
   }
-#ifndef _WIN32
-  (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-#else
+#ifdef _WIN32
   SDL_SetHint("SDL_WINDOWS_DPI_AWARENESS","permonitorv2");
+#elif defined(__APPLE__)
+  (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
   /* A native macOS fullscreen Space constrains SDL to the panel's inset safe
    * area (3949x2464 on the target 4112x2658 MacBook display). Set this before
@@ -2201,6 +2249,18 @@ int main(int argc, char **argv) {
   }
   if (argc==3 && strcmp(argv[1],"--platform-test")==0) {
     int result=Dkc1WindowsPlatformTest(argv[2]); SDL_Quit(); return result;
+  }
+#elif defined(__linux__)
+  /* Prepared for the OpenGL fallback backend; harmless if Vulkan ends up
+   * doing the rendering instead. */
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,3);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_CORE);
+  if (argc>1 && strcmp(argv[1],"--graphics-test")==0) {
+    int result=Dkc1LinuxGlGraphicsTest(); SDL_Quit(); return result;
+  }
+  if (argc==3 && strcmp(argv[1],"--platform-test")==0) {
+    int result=Dkc1LinuxPlatformTest(argv[2]); SDL_Quit(); return result;
   }
 #endif
 
