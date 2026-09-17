@@ -15,6 +15,30 @@ static const uint8_t kSupportedSha256[32] = {
   0x0d, 0x5a, 0x36, 0xa4, 0x69, 0xf7, 0x4d, 0x15,
 };
 
+static int HexNibble(char value) {
+  if (value >= '0' && value <= '9') return value - '0';
+  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  return -1;
+}
+
+static int ParseSha256(const char *text, uint8_t output[32]) {
+  if (!text || strlen(text) != 64u) return 0;
+  for (size_t index = 0; index < 32u; index++) {
+    const int high = HexNibble(text[index * 2u]);
+    const int low = HexNibble(text[index * 2u + 1u]);
+    if (high < 0 || low < 0) return 0;
+    output[index] = (uint8_t)((high << 4) | low);
+  }
+  return 1;
+}
+
+static int MatchesExplicitDevelopmentHash(const uint8_t hash[32]) {
+  const char *text = getenv("DKC1_ALLOW_ROM_SHA256");
+  uint8_t allowed[32];
+  return ParseSha256(text, allowed) && memcmp(hash, allowed, sizeof allowed) == 0;
+}
+
 static void SetError(char *error, size_t error_size, const char *message) {
   if (!error || error_size == 0) return;
   (void)snprintf(error, error_size, "%s", message);
@@ -87,11 +111,20 @@ uint8_t *Dkc1ReadVerifiedRom(const char *path, size_t *size_out,
 
   uint8_t hash[32];
   sha256_compute(file, payload_size, hash);
+  const int is_supported = memcmp(hash, kSupportedSha256, sizeof hash) == 0;
+  const int is_explicit_development_rom =
+      payload_size == 0x400000u && MatchesExplicitDevelopmentHash(hash);
   if (payload_size != 0x400000u ||
-      memcmp(hash, kSupportedSha256, sizeof hash) != 0) {
+      (!is_supported && !is_explicit_development_rom)) {
     SetUnsupportedError(error, error_size, payload_size, hash);
     free(file);
     return NULL;
+  }
+
+  if (is_explicit_development_rom && !is_supported) {
+    fprintf(stderr,
+            "warning: loading an explicitly hash-pinned modified DKC1 ROM; "
+            "generated code compatibility is the caller's responsibility\n");
   }
 
   *size_out = payload_size;

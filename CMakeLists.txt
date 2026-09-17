@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(dkc1_port
-    VERSION 0.0.8
+    VERSION 0.0.15
     DESCRIPTION "Native PC recompilation of Donkey Kong Country"
     LANGUAGES C)
 
@@ -48,9 +48,9 @@ endif()
 set(DKC1_RUNNER_SOURCES
     runner/dkc1_game.c
     runner/dkc1_video.c
-    runner/dkc1_baby_kong.c
-    runner/dkc1_baby_kong_animation.c
-    runner/dkc1_baby_kong_movement.c
+    runner/dkc1_hd_scene.c
+    runner/dkc1_hd_sprites.c
+    runner/dkc1_dixie_mod.c
     runner/dkc1_margin_proxy.c
     runner/dkc1_ws_trace.c
     runner/input_playback.c
@@ -98,23 +98,49 @@ target_link_libraries(dkc1_snesrecomp_headless PRIVATE
 
 if(APPLE)
     enable_language(OBJC)
+    target_sources(dkc1_snesrecomp_headless PRIVATE runner/macos_hd_scene.m)
+    target_link_libraries(dkc1_snesrecomp_headless PRIVATE
+        "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
+    add_executable(test_macos_graphics tests/test_macos_graphics.m
+        runner/macos_graphics.m runner/desktop_graphics.c runner/desktop_crt.c)
+    target_include_directories(test_macos_graphics PRIVATE runner)
+    target_link_libraries(test_macos_graphics PRIVATE "-framework Foundation" "-framework Metal")
+
     if(NOT SNESRECOMP_SDL_BACKEND STREQUAL "SDL2")
         message(FATAL_ERROR
             "The DKC1 macOS frontend currently requires "
             "-DSNESRECOMP_SDL_BACKEND=SDL2")
     endif()
 
-    add_executable(dkc1_macos MACOSX_BUNDLE
+    set(DKC1_MACOS_FRONTEND_SOURCES
         ${DKC1_ENGINE_SOURCES}
-        ${DKC1_SNESRECOMP_GEN_SOURCES}
         ${DKC1_RUNNER_SOURCES}
-        assets/macos/DKC1Recomp.icns
         runner/headless_host.c
         runner/dkc1_haptics.c
         runner/dkc1_msu1.c
+        runner/desktop_audio_rate.c
+        runner/desktop_rewind.c
+        runner/desktop_input.c
+        runner/desktop_refresh.c
+        runner/desktop_crt.c
+        runner/desktop_filter.c
+        runner/desktop_graphics.c
+        runner/macos_graphics.m
+        runner/macos_graphics.metal
+        runner/macos_hd_scene.m
+        runner/macos_hd_scene.metal
+        runner/dkc1_hd_gpu_types.h
+        runner/macos_pause_menu.m
+        runner/macos_controls.m
         runner/sdl_host.c
         runner/macos_metal_presenter.m
         runner/macos_file_picker.m)
+    add_executable(dkc1_macos MACOSX_BUNDLE
+        ${DKC1_SNESRECOMP_GEN_SOURCES}
+        ${DKC1_MACOS_FRONTEND_SOURCES}
+        assets/macos/DKC1Recomp.icns)
+    set_source_files_properties(runner/macos_graphics.metal runner/macos_hd_scene.metal runner/dkc1_hd_gpu_types.h PROPERTIES
+        HEADER_FILE_ONLY TRUE MACOSX_PACKAGE_LOCATION "Resources")
     set_source_files_properties(assets/macos/DKC1Recomp.icns PROPERTIES
         MACOSX_PACKAGE_LOCATION "Resources")
     target_include_directories(dkc1_macos PRIVATE
@@ -134,16 +160,76 @@ if(APPLE)
     target_link_libraries(dkc1_macos PRIVATE
         ${SNESRECOMP_RUNNER_LIBRARIES}
         "-framework AppKit"
+        "-framework CoreFoundation"
         "-framework Metal"
         "-framework QuartzCore"
         "-framework UniformTypeIdentifiers")
     snesrecomp_target_sdl(dkc1_macos)
     set_target_properties(dkc1_macos PROPERTIES
-        OUTPUT_NAME "DKC1Recomp"
-        MACOSX_BUNDLE_BUNDLE_NAME "DKC1Recomp"
+        OUTPUT_NAME "DKC1Recomp-HD"
+        MACOSX_BUNDLE_BUNDLE_NAME "DKC1Recomp HD Experiment"
         MACOSX_BUNDLE_ICON_FILE "DKC1Recomp.icns"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.flat2vr.dkc1recomp"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.flat2vr.dkc1recomp.hdexperiment"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
+
+    file(GLOB DKC1_DIXIE_GEN_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/generated/snesrecomp_dixie/*.c")
+    if(NOT DKC1_DIXIE_GEN_SOURCES)
+        message(FATAL_ERROR
+            "No private Dixie sources found; run scripts/generate_macos_dixie.py")
+    endif()
+
+    add_executable(dkc1_dixie_headless
+        ${DKC1_ENGINE_SOURCES}
+        ${DKC1_DIXIE_GEN_SOURCES}
+        ${DKC1_RUNNER_SOURCES}
+        runner/headless_host.c
+        runner/headless_main.c
+        runner/macos_hd_scene.m)
+    target_include_directories(dkc1_dixie_headless PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/runner
+        ${CMAKE_CURRENT_SOURCE_DIR}/recomp/dixie
+        ${CMAKE_CURRENT_SOURCE_DIR}/recomp
+        ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+    target_compile_definitions(dkc1_dixie_headless PRIVATE
+        DKC1_DIXIE_VARIANT=1
+        SNESRECOMP_TRACE=0
+        SNESRECOMP_REVERSE_DEBUG=0
+        SNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1
+        SYSTEM_VOLUME_MIXER_AVAILABLE=0)
+    target_link_libraries(dkc1_dixie_headless PRIVATE
+        ${SNESRECOMP_RUNNER_LIBRARIES}
+        "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
+
+    add_executable(dkc1_macos_dixie
+        ${DKC1_DIXIE_GEN_SOURCES}
+        ${DKC1_MACOS_FRONTEND_SOURCES})
+    target_include_directories(dkc1_macos_dixie PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/runner
+        ${CMAKE_CURRENT_SOURCE_DIR}/recomp/dixie
+        ${CMAKE_CURRENT_SOURCE_DIR}/recomp
+        ${SNESRECOMP_RUNNER_INCLUDE_DIRS}
+        ${SNESRECOMP_ROOT}/runner/src/desktop)
+    target_compile_definitions(dkc1_macos_dixie PRIVATE
+        DKC1_DIXIE_VARIANT=1
+        SNESRECOMP_TRACE=0
+        SNESRECOMP_REVERSE_DEBUG=0
+        SNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1
+        SYSTEM_VOLUME_MIXER_AVAILABLE=0
+        DKC1_BUILD_COMMIT="${DKC1_BUILD_COMMIT}"
+        DKC1_BUILD_CONFIG="macos-dixie")
+    target_compile_options(dkc1_macos_dixie PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-Wno-unused-function>)
+    target_link_libraries(dkc1_macos_dixie PRIVATE
+        ${SNESRECOMP_RUNNER_LIBRARIES}
+        "-framework AppKit"
+        "-framework CoreFoundation"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework UniformTypeIdentifiers")
+    snesrecomp_target_sdl(dkc1_macos_dixie)
+    set_target_properties(dkc1_macos_dixie PROPERTIES
+        OUTPUT_NAME "DKC1Recomp-HD-Dixie")
 endif()

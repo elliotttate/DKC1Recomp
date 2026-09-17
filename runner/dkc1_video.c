@@ -1209,6 +1209,32 @@ bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
   return true;
 }
 
+bool Dkc1VideoReadVerticalMetatile(uint8_t map_bank, uint16_t map_base,
+                                  uint32_t x, uint32_t y, uint16_t *cell) {
+  if (!cell || x >= 64u || y >= 512u)
+    return false;
+  const uint32_t address = (uint32_t)map_base + y * 128u + x * 2u;
+  return address <= 0xfffeu && RomWord(map_bank, (uint16_t)address, cell);
+}
+
+bool Dkc1VideoDecodeMetatileCell(uint8_t definition_bank,
+                                uint16_t metatile_base, uint16_t cell,
+                                unsigned sub_x, unsigned sub_y,
+                                uint16_t *entry) {
+  if (!entry || sub_x >= 4u || sub_y >= 4u)
+    return false;
+  const uint16_t flips = cell & 0xc000u;
+  if (flips & 0x4000u) sub_x = 3u - sub_x;
+  if (flips & 0x8000u) sub_y = 3u - sub_y;
+  const uint16_t address = (uint16_t)((uint16_t)(cell << 5) +
+      metatile_base + sub_x * 2u + sub_y * 8u);
+  uint16_t source;
+  if (!RomWord(definition_bank, address, &source))
+    return false;
+  *entry = source ^ flips;
+  return true;
+}
+
 static bool Dkc1VideoTileHasPixels(const uint16_t *vram,
                                    size_t word_count,
                                    uint16_t character_base,

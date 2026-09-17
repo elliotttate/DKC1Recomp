@@ -12,8 +12,10 @@ import subprocess
 import sys
 
 
-EXPECTED_SHA256 = "fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15"
-EXPECTED_SIZE = 0x400000
+EXPECTED_ROMS = (
+    (0x400000, "fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15"),
+    (0x600000, "2769b72a8a2050000336f5dd6dea1a45385f4f35ee710dafb0c0a3592295643b"),
+)
 
 
 def integer(value: str) -> int:
@@ -22,11 +24,12 @@ def integer(value: str) -> int:
 
 def validate_rom(path: Path) -> None:
     size = path.stat().st_size
-    if size != EXPECTED_SIZE:
-        raise ValueError(f"Unsupported ROM size {size}; expected {EXPECTED_SIZE} bytes.")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    if digest != EXPECTED_SHA256:
-        raise ValueError(f"Unsupported ROM SHA-256 {digest}.")
+    if not any(size == expected_size and digest == expected_digest
+               for expected_size, expected_digest in EXPECTED_ROMS):
+        raise ValueError(
+            f"Unsupported ROM size {size} / SHA-256 {digest}; expected the "
+            "supported stock DKC1 or pinned Dixie mod image.")
 
 
 def run(command: list[str], description: str) -> None:
@@ -40,6 +43,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rom", required=True, type=Path)
     parser.add_argument("--snesrecomp-root", type=Path)
+    parser.add_argument("--config-dir", type=Path)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--no-widescreen-overrides", action="store_true")
     parser.add_argument(
         "--analysis-backend", choices=("native", "python", "auto"),
         default="native")
@@ -62,8 +68,8 @@ def main() -> int:
     native_analyzer = (snesrecomp_root / "recompiler-rs" / "target" /
                        "release" / native_name)
     header_sync = snesrecomp_root / "tools" / "v2_sync_funcs_h.py"
-    config_directory = repository / "recomp"
-    output_directory = repository / "generated" / "snesrecomp"
+    config_directory = (args.config_dir or repository / "recomp").resolve()
+    output_directory = (args.output_dir or repository / "generated" / "snesrecomp").resolve()
 
     if not emitter.is_file():
         raise FileNotFoundError(
@@ -101,11 +107,14 @@ def main() -> int:
         "--bank-shard-threshold-kib", str(args.bank_shard_threshold_kib),
         "--bank-shard-pc-span", str(args.bank_shard_pc_span)],
         "snesrecomp generation")
-    run([
-        sys.executable,
-        str(repository / "scripts" / "apply_dkc1_widescreen_overrides.py"),
-        "--generated-dir", str(output_directory)],
-        "DKC1 widescreen override application")
+    if not args.no_widescreen_overrides:
+        run([
+            sys.executable,
+            str(repository / "scripts" / "apply_dkc1_widescreen_overrides.py"),
+            "--generated-dir", str(output_directory)],
+            "DKC1 widescreen override application")
+    else:
+        print("Skipping stock-DKC1 widescreen overrides for this variant.")
     print(f"Generated private sources in {output_directory}")
     print("The ROM and generated game code remain ignored by Git.")
     return 0

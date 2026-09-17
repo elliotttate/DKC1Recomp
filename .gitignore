@@ -1,5 +1,6 @@
 build/
 generated/
+.DS_Store
 *.sfc
 *.smc
 *.srm

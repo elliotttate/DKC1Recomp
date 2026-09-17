@@ -31,6 +31,9 @@ typedef struct Dkc1WsTraceFrame {
   int layout_grace;
   int margin_tiles;
   int boundary_continuation_tiles;
+  int boundary_adjacency_tiles;
+  int wall_seam_tiles;
+  unsigned presentation_features;
   uint64_t identity_hash;
   uint32_t identity_change_mask;
   int calibration_matches[2];
@@ -45,6 +48,7 @@ typedef struct Dkc1WsTraceFrame {
   uint32_t shadow_local_y[2];
   bool reset;
   bool cold_start;
+  bool cache_rebase;
   bool source_reset;
   bool identity_reset;
   bool bounds_ready;

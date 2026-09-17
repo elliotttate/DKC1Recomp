@@ -205,6 +205,15 @@ bool Dkc1VideoDecodeLevelTile(Dkc1LevelLayout layout,
                               uint32_t world_tile_y,
                               uint16_t *tile_entry);
 
+/* Bounded source access for wall adjacency: unlike the cartridge decoder,
+ * this refuses to wrap at a bank/row edge while gathering neighboring cells. */
+bool Dkc1VideoReadVerticalMetatile(uint8_t map_bank, uint16_t map_base,
+                                  uint32_t x, uint32_t y, uint16_t *cell);
+bool Dkc1VideoDecodeMetatileCell(uint8_t definition_bank,
+                                uint16_t metatile_base, uint16_t cell,
+                                unsigned sub_x, unsigned sub_y,
+                                uint16_t *entry);
+
 /* Classify one 32x32 level-map metatile against the currently loaded 4bpp
  * character data. `empty` means all sixteen 8x8 characters are transparent;
  * `full` means every character contains at least one opaque pixel. This is a

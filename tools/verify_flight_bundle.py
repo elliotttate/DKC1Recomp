@@ -60,8 +60,8 @@ def verify_bundle(bundle: Path) -> dict:
             raise ValueError(f"wrong byte length for {name}")
     inputs = (bundle / "inputs.txt").read_text(encoding="ascii").splitlines()
     if len(inputs) != replay or any(
-            not re.fullmatch(r"[0-9A-F]{3}", line) for line in inputs):
-        raise ValueError("inputs.txt does not contain one 12-bit mask per frame")
+            not re.fullmatch(r"(?:[0-9A-F]{3}|[0-9A-F]{6})", line) for line in inputs):
+        raise ValueError("inputs.txt does not contain one 12-bit or 24-bit mask per frame")
     if (bundle / "anchor.snapshot").stat().st_size == 0 or \
             (bundle / "current.snapshot").stat().st_size == 0:
         raise ValueError("native snapshots must be nonempty")

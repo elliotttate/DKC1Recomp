@@ -203,3 +203,7 @@ item, not a claim of perfect motion.
 These numbers are regression baselines for this machine, not universal GPU or
 scanout guarantees. Acceptance on another system still requires a fresh trace
 and visible play test.
+
+## September 6 host ports
+
+[Host adoption implementation](HOST_ADOPTION_IMPLEMENTATION.md) records stable refresh qualification, bounded audio drift correction, controls, and rewind. The fixed 60 Hz guest clock remains unchanged; physical ProMotion variability is still an open issue.

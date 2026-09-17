@@ -1,0 +1,22 @@
+# Move clear of the cave before holding Down facing left.
+000 * 30
+080 * 40
+000 * 20
+040 * 16
+# Stagger Down/attack presses and releases, then recover.
+000 * 30
+020 * 120
+022 * 90
+020 * 120
+000 * 30
+020 * 1
+022 * 80
+002 * 1
+000 * 30
+020 * 2
+022 * 80
+020 * 2
+000 * 30
+002 * 1
+022 * 80
+000 * 90

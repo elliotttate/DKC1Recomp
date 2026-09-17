@@ -158,7 +158,85 @@
       "repro": "build/repros/macos-metal-pacing-20260830/final-short-visible*/scanout.jsonl with the immutable Slip-Slide Ride state and vertical-left-right/left-right.inputs",
       "expected": "Each complete 60 Hz source frame is scanned exactly twice on a 120 Hz panel, with approximately 8.333 ms drawable intervals and approximately 16.667 ms physical source transitions; no missing, backward, or coalesced source frames.",
       "first_seen": "2026-08-30",
-      "mitigation_note": "The 2026-08-30 fixed-clock change removed the measured 29-46 ms game-loop stalls. The follow-up native Metal path keeps emulation at that fixed 60 Hz and uses an independent CAMetalDisplayLink, a three-frame immutable queue, one-frame presentation lead, and two 120 Hz draws per source frame. Sharp Bilinear became the fullscreen default, with Smooth and Pixel Sharp retained as explicit choices. Three 780-frame runs remain byte-identical and the presenter reports no producer drops, consumer skips, missing source frames, backward transitions, or starvation. A clean visible sample held 8.333 ms physical intervals and 16.667 ms source transitions, but other current-build visible samples reached approximately 12 ms p99 drawable intervals and approximately 20.5 ms p99 source transitions even while the CPU loop stayed near 16.667 ms. The new dkc1.scanout.v1 trace records actual drawable presentedTime beside camera and BG1-BG3 scroll so the remaining compositor-level variability can be diagnosed without changing game state."
+      "mitigation_note": "The 2026-08-30 fixed-clock change removed the measured 29-46 ms game-loop stalls. The follow-up native Metal path keeps emulation at that fixed 60 Hz and uses an independent CAMetalDisplayLink, a three-frame immutable queue, one-frame presentation lead, and two 120 Hz draws per source frame. Sharp Bilinear became the fullscreen default, with Smooth and Pixel Sharp retained as explicit choices. Three 780-frame runs remain byte-identical and the presenter reports no producer drops, consumer skips, missing source frames, backward transitions, or starvation. A clean visible sample held 8.333 ms physical intervals and 16.667 ms source transitions, but other current-build visible samples reached approximately 12 ms p99 drawable intervals and approximately 20.5 ms p99 source transitions even while the CPU loop stayed near 16.667 ms. The new dkc1.scanout.v1 trace records actual drawable presentedTime beside camera and BG1-BG3 scroll so the remaining compositor-level variability can be diagnosed without changing game state. September 6: adopted eight-observation refresh qualification with a timestamp fallback, keeping the independent fixed 60 Hz producer. The new five-minute run has zero repeat-goal changes (baseline 116 in 30 seconds), but physical scanout still varies and occluded drawables occur. This remains open; see docs/HOST_ADOPTION_IMPLEMENTATION.md."
+    },
+    {
+      "id": "aquatic-shadow-native-boundary",
+      "status": "open",
+      "summary": "Aquatic BG1 shadow chunks overwrite native-edge pixels; an opt-in pixel-boundary/live-scroll candidate removes the measured defect. Wall adjacency remains experimental and whole-game promotion is pending.",
+      "repro": "build/reviews/aquatic-widescreen-20260906/inputs/exact-underwater-live.state; controller-only fresh entry from the preserved map root",
+      "evidence": "docs/WIDESCREEN_AQUATIC_BACKPORTS.md; build/repros/aquatic-backports-20260906/validation-summary.json",
+      "expected": "Preserve every native pixel, align shadow X with the live scanline, and extend only source-proven wall patterns after all promotion gates pass.",
+      "first_seen": "2026-09-06"
+    },
+    {
+      "id": "aquatic-upward-cache-flash",
+      "status": "open",
+      "summary": "Croctopus Chase briefly blacks both margins when upward scrolling leaves the host cache window. The opt-in scroll-rebase candidate now rebuilds the calibrated frame, including the HDMA native guard row; whole-game promotion remains pending.",
+      "repro": "recipes/croctopus-cache-crossing.json from the immutable map root documented in docs/WIDESCREEN_WATER_FLASH.md; exact turn frames 314683 and 314804",
+      "expected": "Keep calibrated scenery visible across cache boundaries without changing the native center, guest state, or the existing cartridge activation gate.",
+      "first_seen": "2026-09-06",
+      "evidence": "docs/WIDESCREEN_WATER_FLASH.md; build/repros/host-adoption-20260906/validation/report.json",
+      "mitigation_note": "DKC1_WS_SCROLL_REBASE=1 enables the candidate. Both upward-boundary flashes disappear in the 420-frame turn route; 342/308-pixel runs repeat three times and all five guest-memory hashes plus accepted-center hashes match the disabled build on turn, supplied-state, and clean-entry routes. Live before/after windows and a 1980-frame fresh-entry traversal are preserved. The complete 40-entrance floor remains unavailable."
+    },
+    {
+      "id": "coral-capers-populated-wall-seam",
+      "status": "open",
+      "summary": "Two supplied Coral Capers states expose opposite faces of a mismatched authored wall junction. Source-verified, default-off margin corrections are available for local playtesting.",
+      "repro": "build/repros/water-seam-20260906/inputs/quicksave.state; frame 34978, mode 3, level $0061, entrance $00BF, camera 943/10113; right-face follow-up: build/repros/water-right-seam-20260906/inputs/quicksave.state, frame 78551, camera 671/10048",
+      "expected": "Continue only the verified offscreen wall pattern, preserving every native-center pixel and guest state; retain source defaults until the fresh-entry promotion gate passes.",
+      "first_seen": "2026-09-06",
+      "mitigation_note": "DKC1_WS_WALL_SEAMS=1 checks the complete original junction and reads correctly phased donor cells from the same wall. Exact A/B changes 2105 left-margin composite pixels; native center, right margin and all guest hashes remain exact. Both aspects pass three-repeat nearby scrolling and native/layer comparisons. The real window is clean with the user graphics settings. Fresh Coral Capers entry is still unverified. See docs/WIDESCREEN_WALL_SEAM.md. The right-facing extension changes 4982 right-margin pixels at 16:10 and 8375 at 16:9; matching donor triples also close the blue gap. Three-repeat routes and native/isolated-layer checks pass, and the original left-seam routes remain exact. The rebuilt normal app is visually verified at the new save."
+    },
+    {
+      "id": "hd-opposite-facing-stale-materials",
+      "status": "fixed",
+      "summary": "The private HD Nano motion preview updated canonical DK rasters only; left-facing walking/turning retained old restoration art, and left-facing running could fall back to original pixels.",
+      "repro": "recipes/hd-actions.dks from build/hd-slice/entry.state; compare private motion and reviewed packs at relative frame 326.",
+      "evidence": "docs/HD_ANIMATION_REVIEW.md; build/hd-slice/animation-review-20260906/live-left-before/window.png; build/hd-slice/animation-review-20260906/live-left-after/window.png",
+      "expected": "Every explicitly selected DK candidate supplies byte-verified original-facing and mirrored keys using the same chosen HD art.",
+      "first_seen": "2026-09-06",
+      "fixed_note": "Local experiment only. tools/hd_sprite_pack.py registered writes both directions after exact source-raster hash validation. The 110-pose candidate writes 220 materials, replacing 52 stale entries and adding 85 missing entries; 83 canonical entries remain unchanged. 108 deterministic HD on/off, native/wide replays preserve guest output and audio. Actual left-running windows differ only in the intended selected art, and their saved machine states are byte-identical. No renderer or scene guard was changed."
+    },
+    {
+      "id": "hd-animation-draft-quality-and-coverage",
+      "status": "open",
+      "summary": "The 700 DK candidates have broad pose and continuity defects. The complete 53-group contact-sheet review does not establish full-game runtime coverage or landmark acceptance.",
+      "repro": "Private build/hd-slice/reimagined/all-animations/review boards; see the per-group register in docs/HD_ANIMATION_REVIEW.md.",
+      "expected": "Preserve source pose, direction, contacts, partial-body cropping, appearance and cartridge-timed transitions before accepting each group.",
+      "first_seen": "2026-09-06",
+      "evidence": "docs/HD_ANIMATION_REVIEW.md; docs/HD_BARREL_ROLL_REVIEW.md; docs/HD_BOUNCE_IDLE_REVIEW.md; build/hd-slice/bounce-idle-20260907/coverage.json",
+      "mitigation_note": "The private selection now contains 208 DK poses / 416 facing materials. The previous roll/carry/throw pass remains byte-identical. All 16 enemy-bounce spin and 24 chest-beating poses are now covered in both directions; stale right-facing chest art and missing left-facing chest keys were repaired. 60 additional native/wide HD on/off replay legs pass with explicit required-pose coverage. Two 6,000-frame idle probes have no reconstruction mismatches or missing DK materials. Both directions were checked in the visible app. Strict geometry, Turn2, several provisional poses, ropes, swimming, minecart, scripted sequences and full-game coverage remain open. The unchanged $0016 scene guard still limits HD rendering. See docs/HD_BOUNCE_IDLE_REVIEW.md."
+    },
+    {
+      "id": "hd-bounce-and-left-idle-materials",
+      "status": "fixed",
+      "summary": "Within the supported Jungle slice, enemy-bounce spin had no HD keys in either direction; chest-beating used stale right-facing drafts and missing left-facing keys, causing original-sprite fallback during idle.",
+      "repro": "recipes/hd-bounce-right.dks, hd-bounce-left.dks, hd-idle-cycle-right.dks and hd-idle-cycle-left.dks from the private immutable HD root.",
+      "expected": "All spin and chest-beating poses render with the selected HD art in both directions through recovery.",
+      "first_seen": "2026-09-06",
+      "evidence": "docs/HD_BOUNCE_IDLE_REVIEW.md; build/hd-slice/bounce-idle-20260907/verification/results.json; build/hd-slice/bounce-idle-20260907/long-idle-results.json",
+      "mitigation_note": "Installed 16 Bounce and 24 BeatChest source poses with exact mirrored keys. 60 replay legs require every targeted original raster key; 6,000-frame idle checks pass both ways. Visual and guest logic are unchanged outside material selection. Full-game art quality remains tracked separately."
+    },
+    {
+      "id": "hd-material-cache-exhaustion",
+      "status": "fixed",
+      "summary": "The private HD scene cache stopped loading materials after 4096 identities, causing installed walking poses and background chunks to fall back to original pixels.",
+      "repro": "recipes/hd-cache-pressure.dks and the preserved tester-state warm replay; old/new divergence starts at eligible HD frame 637 in the wide route.",
+      "expected": "Keep loading installed HD poses during long play while retaining every material referenced by the current frame.",
+      "first_seen": "2026-09-07",
+      "evidence": "docs/HD_MATERIAL_CACHE_REVIEW.md; build/hd-slice/left-fallback-20260907/live-cache.json; build/hd-slice/left-fallback-20260907/warm-exact-results.json",
+      "mitigation_note": "Bounded least-recently-used eviction protects retained background and current object pointers. 120 native/wide on/off replay legs pass; three exact tester-state warm repeats have zero reconstruction mismatches, unchanged guest hashes and deterministic HD. Native-window walking poses pass after actual cache saturation. Existing artwork and the $0016 guard are unchanged; full-game coverage remains open."
+    },
+    {
+      "id": "hd-environment-nano-coverage",
+      "status": "open",
+      "summary": "Connected Nano scenery covers Jungle and the tested Jungle Bonus 1 cave; broader sprite/composite and other-room coverage remain incomplete.",
+      "repro": "recipes/hd-barrel-right.dks and recipes/hd-barrel-left.dks with scene-pack-nano-environment-v7",
+      "evidence": "docs/HD_ENVIRONMENT_REVIEW.md; build/hd-slice/environment-nano-20260907/motion-v7; build/hd-slice/environment-nano-20260907/live-v7; docs/HD_NANO_POLISH_REVIEW.md; build/hd-slice/nano-level-20260916/polish/verification-final/results.json",
+      "expected": "Complete connected, source-aligned environment coverage without hard changes between replacement and older materials; preserve exact source context matching and guest behavior.",
+      "first_seen": "2026-09-07",
+      "mitigation_note": "Private connected-world pack verifies every source subtile and preserves guest hashes; visible BG misses are zero on the native exit route and bounded wide route. Offline source-constrained matte cleanup removes tested DK/Diddy gray fringes. A focused Nano revision restores the floating life-balloon face in 27 source frames and 54 facing keys; native red-balloon QA and bounded replays are documented in docs/HD_BALLOON_FACE_REVIEW.md. A later saved-state scrolling fix keeps verified connected subtiles stable while exact fallback fills only unresolved neighbors; see docs/HD_NANO_POPIN_REVIEW.md. The same-pack motion diagnostic drops stable-source changes from 29714 to 4914, with zero visible background misses on the final exact-state route. Unseen object composites and unsupported rooms still fall back; no full-game visual acceptance or release-default promotion. The later left-doorway patch was a partial-left ring-period binding error, corrected in the opt-in connected renderer; exact/fresh evidence and remaining coverage misses are recorded in docs/HD_NANO_LEFT_EDGE_REVIEW.md. Jungle Bonus 1 now has a separately registered Nano terrain/backdrop/foreground pack, correct uniform cave color math and OBJ palette exemption, plus verified Jungle return selection. See docs/HD_NANO_BONUS_REVIEW.md; remaining original composites and other rooms keep this issue open."
     }
   ]
 }

@@ -1,3 +1,5 @@
+> **Local HD experiment fork:** the 4× sprite-replacement renderer is implemented; enhanced Donkey Kong artwork is pending. See [experiment status, launcher and evidence](docs/HD_SPRITE_EXPERIMENT.md). The private current pack is an exact-pixel test fixture.
+
 # DKC1Recomp
 
 Static recompilation of *Donkey Kong Country* (SNES, USA v1.0) into a native
@@ -42,6 +44,21 @@ Headerless *Donkey Kong Country* USA v1.0:
 
 The ROM must remain outside Git. No ROM bytes, extracted assets, or generated
 game code are committed.
+
+For controlled testing of a data-only ROM produced by a level editor, the
+runtime can opt into one exact modified 4 MB payload. Set
+`DKC1_ALLOW_ROM_SHA256` to that file's complete SHA-256 digest and pass the same
+file on the command line. This does not disable verification: a missing,
+malformed, or non-matching value is rejected, and the clean retail digest
+remains the only accepted default. Because the native game code was generated
+from the supported retail ROM, use this development override only for a patch
+whose changed ranges have been audited as data.
+
+The macOS host also accepts `DKC1_STARTUP_SCRIPT=/path/to/route.dks` for editor
+playtests. It runs an input/wait-only deterministic route from clean power-on
+before showing the first interactive frame; save-state and checkpoint commands
+are rejected. RainbowZ combines this with an exact modified-ROM hash pin to
+open its generated Jungle Hijinxs level directly without a reusable save state.
 
 ## Debugging and validation
 
@@ -148,15 +165,20 @@ renderer wait independently. `DKC1_DISABLE_DISPLAY_LINK=1` and
 `SNESRECOMP_INPUT_PLAY=path` supplies the same deterministic
 per-frame input playback supported by the Windows debugger for visible Mac QA.
 
-The optional **Mods > Baby Kong** switch replaces active Donkey with Kiddy
-Kong's DKC3 gameplay frames and a heavier, Kiddy-inspired movement profile.
-Choose **Mods > Choose DKC3 ROM...** once to select the exact supported,
-headerless North American DKC3 ROM; it is verified and decoded only in memory,
-never copied into the app or repository. The mod is off by default and can be
-toggled during play. DKC1's own semantic animation state drives Kiddy idle,
-walk, run, jump, roll, carry, throw, hurt, rope, swim, and other matching pose
-groups. See [docs/BABY_KONG_MOD.md](docs/BABY_KONG_MOD.md) for the ROM identity,
-controlled-launch variables, behavior, and scope.
+The optional **Mods > Dixie Kong Country** switch now replaces the former
+Kiddy/Baby Kong overlay. Dixie runs as a separate recompilation synthesized
+in memory from the same verified clean DKC1 ROM and the pinned mod patch; no
+second ROM is needed. The stock and Dixie runtimes are bundled together and
+use separate save directories. Dixie currently uses its validated native 4:3
+presentation, while the stock HD runtime retains its widescreen settings. See
+[the Mac HD integration record](docs/DIXIE_HD_MAC.md) for behavior and scope.
+
+The macOS HD preview also includes **Mods > Upscaled HD Textures (Jungle
+Hijinxs only)**. It is off by default and can be changed at runtime (or compared
+with F10). The bundled material set covers Jungle Hijinxs and the connected
+bonus, Banana Hoard, and treehouse rooms developed as part of that first-level
+slice. Every other scene fails closed to the original game textures. The app
+never bundles a ROM or save state; it asks for the user's verified clean ROM.
 
 The native Mac host also supports controller feedback and external MSU-1
 replacement music. A successful enemy stomp produces a short controller

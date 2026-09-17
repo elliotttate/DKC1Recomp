@@ -1,0 +1,193 @@
+{
+  "schema": "dkc1.route.v1",
+  "name": "croctopus-cache-crossing",
+  "steps": [
+    {
+      "type": "input",
+      "input": "000001",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000000",
+      "frames": 714
+    },
+    {
+      "type": "checkpoint",
+      "name": "clean-aquatic-entry"
+    },
+    {
+      "type": "input",
+      "input": "000081",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000080",
+      "frames": 114
+    },
+    {
+      "type": "input",
+      "input": "000081",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000080",
+      "frames": 114
+    },
+    {
+      "type": "input",
+      "input": "000081",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000080",
+      "frames": 114
+    },
+    {
+      "type": "input",
+      "input": "000081",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000080",
+      "frames": 54
+    },
+    {
+      "type": "checkpoint",
+      "name": "first-vertical-turn"
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 6
+    },
+    {
+      "type": "input",
+      "input": "000090",
+      "frames": 12
+    },
+    {
+      "type": "input",
+      "input": "000091",
+      "frames": 4
+    },
+    {
+      "type": "checkpoint",
+      "name": "past-cache-boundaries"
+    }
+  ]
+}

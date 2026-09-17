@@ -924,3 +924,247 @@ lengths, malformed hex, overlaps, range overflow, and out-of-WRAM endpoints
 disable the watch instead of partially arming it. A 256-row per-frame safety
 limit emits `watch_truncated`; `tools/reverse_watch.py` treats that marker as a
 failed evidence run and asks for narrower ranges.
+
+## Aquatic presentation candidate (2026-09-06)
+
+The independently default-off `DKC1_WS_PIXEL_BOUNDARIES=1`,
+`DKC1_WS_LIVE_SCROLL=1`, and `DKC1_WS_WALL_ADJACENCY=1` backports are documented
+in [the aquatic validation record](WIDESCREEN_AQUATIC_BACKPORTS.md). The trace
+records root `presentation_features` bits 1/2/4 and
+`boundary_adjacency_tiles` (also part of `boundary_continuation_tiles`).
+Headless/layer capture accept `DKC1_ASPECT=16:10` with widescreen enabled.
+Native-edge and scanline-scroll evidence passes for the preserved aquatic
+branches; wall continuation is model-tested only. The complete 40-entrance
+floor remains unpassed because 36 required clean anchors are unavailable.
+
+## September 6 Mac host and cache-boundary additions
+
+- `DKC1_WS_SCROLL_REBASE=1`: default-off, currently calibrated cache rebuild on the exhausted-window frame. WS trace feature bit 8 and `decision.cache_rebase` identify it. `verify_shadow_localization.py` requires a calibrated cold commit for any marked origin change. See `docs/WIDESCREEN_WATER_FLASH.md` and `recipes/croctopus-cache-crossing.json`.
+- Native **Game → Controls and Assist…** exposes source routing, remapping, analog deadzones, and opt-in rewind/3× fast-forward. Default Assist holds: Backspace/Tab or left/right triggers. Game time remains canonical. Rewind memory is capped at 128 MiB; actual history duration depends on serialized-state capacity. See `docs/HOST_ADOPTION_IMPLEMENTATION.md`.
+- `DKC1_ASSIST_TEST_INPUT=<input file>`: default-off Mac-only host-action schedule using the existing hex/repetition format; masks 1=rewind, 2=fast-forward, 4=quick-save, 8=quick-load. It enables Assist only for that run. Save/load actions operate the normal quicksave path; do not use those bits against a tester's only state. `DKC1_ASSIST_TEST_LOG=<path>` optionally records host tick, host/guest frame, pops, and history depth. Gameplay playback stays independent and is abandoned after a rewind/load.
+- `DKC1_PAUSE_AFTER_FRAME=<positive host frame>`: default-off Mac exact-frame pause. Clears gameplay and host-action schedules and stops sound/rumble; preserves the actual submitted pixels for window capture. `DKC1_SAVESTATE_OUTPUT` also works at graceful Mac shutdown. Use private paths, not the user's normal slots.
+- `DKC1_PACING_LOG` adds `audio_ratio`, `audio_fill_average`, and `audio_target_frames`. Canonical production is unchanged; only mixed host PCM is resampled. `DKC1_SCANOUT_LOG` repeat goal 0 means unqualified/non-integer cadence using target timestamps; goals 1–4 are qualified divisors.
+- Flight bundles and post-failure input tails preserve both controllers as six-digit masks. The verifier accepts both historical three-digit and new six-digit masks. Existing bundle schema and hashes remain valid.
+
+## Mac graphics and pause-menu diagnostics (September 6, 2026)
+
+The Metal presenter now supports DKC2 Reconstruct/CRT and four phosphor profiles. Raw WS/plane/state evidence is collected before the color-copy and shader stages. Use Flat + Raw + Nearest for visible native-pixel comparison; other selected effects intentionally change visible RGB. All guest timing and tile-streaming diagnostics remain independent.
+
+`test_macos_graphics` provides standalone GPU checks for native transfer, all modes/presets, cached repeats, and invalidation by changed pixels/settings/viewport. Build with `cmake --build build/macos --target test_macos_graphics` and run `build/macos/test_macos_graphics runner/macos_graphics.metal [existing-output-dir] [binary-P6-input]`. Optional test-only geometry: `DKC1_TEST_SCALE=1..16` and `DKC1_TEST_PIXEL_ASPECT=1`. It returns 77 when no Metal device is available.
+
+For actual-window QA, combine a separate application bundle identifier with `DKC1_USER_DIR=<absolute existing directory>` to isolate preferences and saves respectively. Startup options are `DKC1_DISPLAY`, `DKC1_UPSCALER`, `DKC1_SCREEN`, `DKC1_CRT_PRESET`, and `DKC1_RECONSTRUCT_MODE/STRENGTH/SOFTNESS/SHADING`; the canonical values are cataloged in `.claude/skills/dkc1-tools/TOOLS.md`. Omitted variables use saved `GraphicsV1` settings. Do not set diagnostic input, snapshot, or output paths in a normal app build. See [graphics port evidence and limits](GRAPHICS_OPTIONS_PORT.md).
+
+## Coral Capers populated wall junction (September 6, 2026)
+
+The default-off `DKC1_WS_WALL_SEAMS=1` capability repairs both verified faces of one offscreen junction, with independent source and native-edge containment for each direction. It exposes trace feature bit 16 and optional count `wall_seam_tiles` (trace schema maximum feature mask is now 31). Diagnostics remain inert when disabled. Use raw BG1 plus composite and separate native-center hashes; the defect exists before graphics postprocessing. Exact-state and scrolling acceptance, donor-map proof, and the unfulfilled same-level fresh-entry gate are recorded in [WIDESCREEN_WALL_SEAM.md](WIDESCREEN_WALL_SEAM.md). Replay with the switch explicitly enabled; do not infer its value from the state file.
+
+## Isolated HD scene presentation experiment
+
+The HD fork adds default-off 4× BG and OBJ material replacement after an exact
+native-composition check. The master switch is `DKC1_HD_SPRITES`; the full-scene
+path uses `DKC1_HD_SCENE`, `DKC1_HD_SCENE_PACK`, and `DKC1_HD_SCENE_EXPORT`.
+`DKC1_HD_SCENE_AUDIT` verifies the reconstructed native result each eligible
+frame. `DKC1_HD_SCENE_TRACE` reports per-presentation mismatch pixels and HD
+material coverage. Missing art or unsupported composition stays original.
+
+The trace also includes `cache_entries` (occupied slots, maximum 4096),
+`cache_evictions` (cumulative replacements), and `cache_failures` (cumulative
+refused native-raster lookups/allocations). A missing HD file is a material
+miss, not a cache failure. These counters never write guest memory.
+
+`tools/build_hd_preload_manifest.py PACK` validates all DKHD file headers,
+dimensions and lengths and atomically writes the sorted `preload.txt` index.
+The default-off `DKC1_HD_SCENE_PRELOAD=1` option reads every indexed raster into
+owned CPU/shared memory before the first supported scene frame and retains it
+through scene transitions and material-cache eviction. An invalid/incomplete
+index fails closed to original pixels with a diagnostic. Missing art never
+causes a texture read after preload. Trace fields `resident_materials`,
+`resident_bytes`, and `material_file_reads` prove residency and the invariant
+that cumulative DKHD open attempts remain constant during gameplay. This does
+not change guest memory, the original-pixel oracle, supported scenes, or the
+composition algorithm; a Metal compositor remains separate work.
+
+`DKC1_HD_FRAME_PPM` exports the final HD image. `DKC1_HD_SEQUENCE=1` selects HD
+for the existing frame-sequence exporter; `DKC1_HD_RENDER_EVERY_FRAME=1` composes
+every frame for coverage/performance checks. The original native frame and
+raw guest taps remain unchanged. Workers only read immutable completed data.
+
+The private source atlas/upscale/pack pipeline, full command contracts, exact
+state/fresh-entry results, screenshots, and bounded 16:9 art scope are in
+[HD_SPRITE_EXPERIMENT.md](HD_SPRITE_EXPERIMENT.md) and the tools catalog.
+
+The separate Magnific Precision V2 experiment uses
+`tools/extract_jungle_sprite_inventory.py` (checksum-locked family extraction)
+and `tools/magnific_precision_experiment.py` (verified native atlas preparation,
+fixed 4× crop/alpha assembly, exact facing registration, and pose viewer).
+Cloud submission remains an explicit MCP operation with cost simulation and
+recorded creation IDs. The registered packer permits fully opaque art only for
+verified opaque originals, such as a one-pixel effect. The normal renderer and
+widescreen policy are unchanged. See the canonical tools catalog for command
+contracts and [MAGNIFIC_PRECISION_V2_EXPERIMENT.md](MAGNIFIC_PRECISION_V2_EXPERIMENT.md)
+for the private scope, coverage, provenance, limitations, and replay evidence.
+The companion `magnific_scene_materials.py` verifies captured background contexts
+and assembles exact crops with optional source-colored boundary feathering.
+`magnific_banana_hud.py` decodes checksum-locked primitives and composes all 800
+normal count/animation combinations. Both are offline asset tools; missing
+runtime context/overlap keys still fail closed to original pixels.
+
+`tools/check_hd_sprite_alignment.py` separately checks generated replacement art
+against its source canvas, silhouette, bounds, and manually identified landmarks.
+It does not modify or automatically center either image, and a matching outline
+cannot substitute for eye/muzzle/hand/foot registration or visual art review.
+
+`tools/verify_hd_scene.py ROM OUTPUT --pack CANDIDATE_DIRECTORY` selects a private
+candidate for the existing 36-replay matrix without replacing the baseline
+pack. Enabled runs compose every frame, including walking frames before an idle
+endpoint. The report records pack path/content hash and guest/HD determinism;
+artwork alignment and visible animation require their own review.
+
+The September 6 animation follow-up adds explicit `--cases` selection for
+`directions`, `actions`, `run`, `hurt`, `hurt-left`, and `idle-extended`, alongside
+the existing cases. `--export-materials` preserves exact encountered object
+rasters on the first enabled repeat. The default remains 36 replays; each
+selected case runs twelve comparison legs. See the tool catalog for scope.
+
+The barrel continuation adds `barrel-right` (500 frames) and `barrel-left`
+(940 frames): controller-only pickup, carrying, turning and throwing from
+both directions, followed by recovery. Both use the same immutable private
+Jungle root. They preserve the same twelve-leg guest/HD determinism contract.
+`barrel-jump` adds an 870-frame route with carrying jumps in both directions.
+
+The bounce/idle continuation adds `idle-cycle-right` (600 frames),
+`idle-cycle-left` (660), and `bounce-right`/`bounce-left` (340 each). These
+cases automatically export exact raster keys and require all registered
+21 Idle + 24 BeatChest poses, or 16 Bounce poses, in the route's direction.
+The `ground-slap-right` (330 frames) and `ground-slap-left` (436) cases
+require all 30 GroundSlap and 22 Duck poses in the appropriate direction,
+including displayed-raster coverage. They hold Down+Y for 180 frames and
+release for 120; the left case moves clear of the cave before turning.
+`slap-transitions-right` (787) and `slap-transitions-left` (893) additionally
+exercise button order and release transitions. All four require every route
+frame eligible for HD audit, zero reconstruction mismatch, and installed HD
+materials for every encountered DK raster, including other animation groups.
+`--dk-originals` selects the complete private original corpus; Pillow is
+required for its raster index. `--state` supplies an immutable tester root
+for non-fresh cases. The routes retain HD off/on, native/wide, three-repeat
+comparison. See [HD_GROUND_SLAP_REVIEW.md](HD_GROUND_SLAP_REVIEW.md).
+Missing pack entries and skipped required poses fail even if guest hashes are
+deterministic. The original twelve-leg comparison contract still applies.
+
+`cache-pressure` runs 3,347 frames: controller traversal fills the real
+4096-entry material cache, a normal scripted load restores the private
+immutable entry, and 966 subsequent frames exercise idle and both directions.
+The case requires actual eviction, zero cache failures, and exact native
+reconstruction throughout those 966 frames. It retains the twelve-leg HD
+on/off, native/wide, three-repeat comparison. Earlier traversal mismatches
+are reported separately and are not silently treated as fixed.
+See [HD_MATERIAL_CACHE_REVIEW.md](HD_MATERIAL_CACHE_REVIEW.md).
+
+`tools/hd_sprite_pack.py registered` verifies original content hashes and builds
+both facing keys from the same reviewed candidate. This fixes stale or missing
+left-facing materials without changing the compositor or any guest code. The
+manifest records both keys per frame. Private packs, current validation and the
+700-frame contact-sheet review are documented in `HD_ANIMATION_REVIEW.md`.
+
+### HD Metal composition oracle (September 16, 2026)
+
+The default-off `DKC1_HD_METAL=1` Mac preview path uploads the preloaded pack once,
+captures immutable frame packets, computes the native-oracle mask and HD image
+on the GPU, and sends the resulting texture directly to the Metal presenter.
+It preserves the existing scene capability and guest behavior. Raw screen color
+mode is supported; other screen color models retain CPU composition.
+
+`verify_hd_scene.py ROM OUTPUT --pack PACK --preload --metal --cases fresh run
+cache-pressure` adds an every-eligible-frame CPU/GPU image comparison to the
+existing native/wide, HD off/on, three-repeat contract. Metal validation failures
+exit 22. `DKC1_HD_METAL_VALIDATE=1` is a headless-only diagnostic; never time it
+as the production GPU path. `DKC1_HD_METAL_SHADER` points to the shader with its
+sibling ABI header. `DKC1_HD_METAL_TRACE` records GPU errors/timing and validation
+pixel counts. Scanout traces include `hd_gpu`; CPU scene trace counters are only
+emitted by the CPU compositor. All new diagnostics remain default-off.
+
+Synthetic tests in `test_hd_metal.py` exercise actual Metal output and packet
+ownership with ASan/UBSan, without ROM data. The Metal graphics harness checks
+resident-texture/CPU-upload parity across all display filters and inset
+viewports. See [HD_METAL_COMPOSITOR_REVIEW.md](HD_METAL_COMPOSITOR_REVIEW.md).
+
+### Connected Nano coverage, contours and matte removal
+
+The private opt-in `DKC1_HD_EXACT_CENTERS` / `DKC1_HD_CONNECTED_WORLD` path binds
+connected art only to verified native source tiles and the documented Jungle
+scene tuple. It follows PPU ring position, validates each 8x8 tile, and handles
+palette animation independently of source identity. Unsupported scenes still
+fall back. No WRAM/VRAM/OAM writes are introduced. Preload also loads
+`object-silhouettes.txt` when present: exact native object mask/size aliases
+reuse registered OBJ art after live CGRAM color changes. Optional
+`object-bases.bin` supplies the authored native colors so night palettes still
+tint that art. Background center aliases stay isolated. Malformed object
+indices or base blobs fail closed. The resident pack loads on the first
+prepare, and INIDISP 1-14 keeps HD instead of popping back to original pixels.
+A prevent-math CGWSEL value does not reject the scene when CGADSUB is 0.
+
+`DKC1_HD_COVERAGE_TRACE` reports per-layer source and visible missing counts,
+scene eligibility, camera and native reconstruction mismatches. The visible
+metric uses the top native opaque layer, not HD alpha coverage. The diagnostic
+is costly and default-off. `DKC1_HD_MISSING_EXPORT` writes exact source and
+canonical-context PAM/JSON; the first `DKC1_HD_SCENE_EXPORT` atlas also includes
+raw source WRAM, VRAM and CGRAM. A canonical object candidate alone is not proof
+of correct palette interpretation.
+
+`DKC1_HD_POLISH=0..100` controls the optional spatial Metal cleanup. Raw CPU/GPU
+agreement remains a separate oracle, even while intentional postprocessing is
+active. OBJ/HUD bounds and all original/mismatch fallback are protected. The
+native graphics menu exposes Edge cleanup; zero means raw HD, and F10 remains
+original/HD comparison. Normal defaults stay off.
+
+`audit_hd_jungle_map.py`, `build_hd_connected_pack.py`, and
+`build_hd_stream_boundaries.py` cover the source audit and private connected
+asset build. `hd_sprite_matte.py` creates a new pack from verified registrations,
+unmixes sheet matte near source edges, protects real gray paint, and preserves
+canvas/anchor and bounded silhouette geometry. Never overwrite a running pack.
+Their command/format contracts are in `.claude/skills/dkc1-tools/TOOLS.md`.
+See [HD_NANO_POLISH_REVIEW.md](HD_NANO_POLISH_REVIEW.md) for acceptance scope,
+remaining missing sprite poses, and the difference between raw determinism,
+replacement coverage, and visual quality.
+
+### Connected HD scrolling stability (September 16, 2026)
+
+A mixed 32x32 streaming chunk now retains its verified connected-world art.
+Only invalid 8x8 subtiles use the independently byte-exact fallback material.
+Both references stay pinned across cache eviction; the immutable Metal packet
+includes `bg_fallback_material[3][256]`. Deploy the matching shader and ABI
+header with the executable. Palette correction and the original reconstruction
+oracle retain their existing rules. This does not widen cartridge streaming.
+
+`verify_hd_scene.py --cases replay --state STATE --input-play INPUTS --frames N`
+repeats arbitrary recorded input from an immutable root in native/wide and HD
+off/on modes. Input existence and a positive frame count are required. Input
+SHA-256 and count are included in `results.json`. Add `--coverage` to retain
+visible missing BG/OBJ samples, supported-frame count and missing-BG frame
+count. Coverage is reported separately from correctness and is not an automatic
+zero-miss gate. `--preload --metal` retains the every-frame raw CPU/GPU oracle
+and zero-gameplay-read checks. See [HD_NANO_POPIN_REVIEW.md](HD_NANO_POPIN_REVIEW.md)
+for exact-state and fresh-entry evidence and the remaining art-coverage limits.
+
+The partial-left connected BG0 cell is bound using the visible-left ring period,
+not the native-camera period. Unit coverage includes a wide left edge straddling
+512px, right wrap, and negative-world rejection. Exact-state A/B, source planes
+and native Metal QA: [HD_NANO_LEFT_EDGE_REVIEW.md](HD_NANO_LEFT_EDGE_REVIEW.md).
+
+### Jungle Bonus 1 HD capability (September 16, 2026)
+
+The opt-in HD renderer supports the verified Jungle Bonus 1 cave tuple with an
+independent resident `connected-cave.bin` and source palette. It never changes
+cartridge streaming or global widescreen capabilities. Color-window mode 1 is
+accepted only for uniform empty spans, respecting inversion; scanline changes
+that require spatial masks reject HD for the frame. OBJ palette math exemption
+is carried in the immutable GPU packet. Source, state, scene transitions and
+visible native QA are documented in [HD_NANO_BONUS_REVIEW.md](HD_NANO_BONUS_REVIEW.md).
+
+`build_hd_object_composites.py --pack PACK --captures DIR... --libraries DIR...`
+assembles only exact, fully covered object combinations from installed Nano
+primitives and writes `object-composite-provenance.json`. It skips existing
+materials and rejects uncovered pixels. Rebuild the preload manifest afterward.
+Coverage records use the actual entrance; guard rejection adds `eligible_scene`,
+`bgmode`, `inidisp`, `mosaic`, `window_main`, `cgwsel`, and `cgadsub`. Verifier
+`pack_indices` hashes the optional world/center/preload indices separately.

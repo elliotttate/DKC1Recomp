@@ -220,7 +220,7 @@ int Dkc1FlightRecorderExport(long completed_frame,
   }
 
   const long replay_frames = completed_frame - anchor->frame;
-  const size_t input_size = replay_frames > 0 ? (size_t)replay_frames * 5 : 0;
+  const size_t input_size = replay_frames > 0 ? (size_t)replay_frames * 8 : 0;
   char *input_text = (char *)malloc(input_size + 1);
   if (!input_text) {
     SetError(error, error_size, "out of memory exporting input history");
@@ -236,7 +236,7 @@ int Dkc1FlightRecorderExport(long completed_frame,
     }
     input_offset += (size_t)snprintf(input_text + input_offset,
                                      input_size - input_offset + 1,
-                                     "%03X\n", entry->mask & 0xfffu);
+                                     "%06X\n", entry->mask & 0xffffffu);
   }
 
   size_t current_size = RtlSaveSnapshotToMemory(NULL, 0);
@@ -381,7 +381,7 @@ int Dkc1FlightRecorderExportTail(const char *bundle_dir, long from_frame,
       SetError(error, error_size, "tail input history has a gap");
       return 0;
     }
-    fprintf(inputs, "%03X\n", entry->mask & 0xfffu);
+    fprintf(inputs, "%06X\n", entry->mask & 0xffffffu);
   }
   if (fclose(inputs) != 0) {
     SetError(error, error_size, "unable to finish post.inputs.txt");

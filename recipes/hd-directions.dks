@@ -1,0 +1,14 @@
+# Immutable private Jungle root: neutral, walk/turn, roll, jump/land both ways.
+000 * 30
+080 * 36
+000 * 24
+040 * 36
+000 * 24
+082 * 28
+000 * 24
+042 * 28
+000 * 24
+081 * 32
+000 * 24
+041 * 32
+000 * 24

@@ -63,9 +63,14 @@ def verify(path: Path) -> dict[str, Any]:
             if wx // 8 >= 4096 or wy // 8 >= 512:
                 high_world += 1
             current.append((ox, oy))
-        if identities[identity] and identities[identity][-1] != tuple(current):
+        rebased = row.get("decision", {}).get("cache_rebase", False)
+        if rebased and not (row["decision"].get("cold_start") and
+                            row["decision"].get("calibration_accepted") and
+                            row["decision"].get("shadow_commit")):
+            raise ValueError(f"frame {row['frame']}: unverified cache rebase")
+        if identities[identity] and identities[identity][-1] != tuple(current) and not rebased:
             raise ValueError(f"frame {row['frame']}: origin drift within identity {identity}")
-        if not identities[identity]:
+        if not identities[identity] or rebased:
             identities[identity].append(tuple(current))
         terrain = int(row["ppu"]["terrain_layer"])
         if terrain in (0, 1):

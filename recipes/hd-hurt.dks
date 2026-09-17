@@ -1,0 +1,4 @@
+# Controller-only contact with the first enemy, followed through recovery/death.
+000 * 30
+080 * 180
+000 * 390

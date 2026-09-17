@@ -48,6 +48,26 @@ class ShadowLocalizationVerifierTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "terrain margin miss"):
                 verify(self.write(Path(temporary), frame(miss=1)))
 
+    def test_rebase_requires_calibrated_cold_commit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first, second = frame(), frame()
+            second["frame"] = 2
+            second["shadow_origin"][0]["y"] = 0
+            second["world"][0]["shadow_y"] += 256
+            path = Path(temporary) / "trace.jsonl"
+            def write_pair():
+                path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n")
+            write_pair()
+            with self.assertRaisesRegex(ValueError, "origin drift"):
+                verify(path)
+            second["decision"]["cache_rebase"] = 1
+            write_pair()
+            with self.assertRaisesRegex(ValueError, "unverified cache rebase"):
+                verify(path)
+            second["decision"].update(cold_start=1, calibration_accepted=1, shadow_commit=1)
+            write_pair()
+            self.assertEqual(verify(path)["status"], "pass")
+
     def test_misaligned_origin_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
             row = frame(origin_x=0x9401)

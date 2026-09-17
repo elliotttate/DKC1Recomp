@@ -8,11 +8,11 @@ from tools.verify_flight_bundle import verify_bundle
 
 
 class FlightBundleTests(unittest.TestCase):
-    def make_bundle(self, root: Path):
+    def make_bundle(self, root: Path, inputs=b"001\n080\n"):
         payloads = {
             "anchor.snapshot": b"anchor",
             "current.snapshot": b"current",
-            "inputs.txt": b"001\n080\n",
+            "inputs.txt": inputs,
             "final.wram.bin": bytes(0x20000),
             "final.vram.bin": bytes(0x10000),
             "final.cgram.bin": bytes(0x200),
@@ -38,6 +38,12 @@ class FlightBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.make_bundle(root)
+            self.assertEqual(verify_bundle(root)["replay_frames"], 2)
+
+    def test_two_controller_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_bundle(root, b"081081\nFFF100\n")
             self.assertEqual(verify_bundle(root)["replay_frames"], 2)
 
     def test_hash_mismatch_fails(self):

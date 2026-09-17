@@ -1,0 +1,10 @@
+# Clean private Jungle Hijinxs entry.state. Pick up facing right, carry
+# both ways, throw left, and wait for the complete return to idle.
+000 * 30
+082 * 75
+083 * 25
+082 * 130
+002 * 40
+042 * 50
+002 * 30
+000 * 120

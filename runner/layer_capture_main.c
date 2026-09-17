@@ -93,6 +93,9 @@ int main(int argc, char **argv) {
   {
     const char *widescreen_text = getenv("DKC1_WIDESCREEN");
     Dkc1VideoSetWidescreen(!(widescreen_text && *widescreen_text == '0'));
+    const char *aspect = getenv("DKC1_ASPECT");
+    if (Dkc1VideoIsWidescreen() && aspect && strcmp(aspect, "16:10") == 0)
+      Dkc1VideoSetAspect(kDkc1VideoAspect16x10);
     {
       /* Level-wall presentation: glide (default), reflect, bars, or shift. */
       const char *edge_text = getenv("DKC1_WIDESCREEN_EDGE");

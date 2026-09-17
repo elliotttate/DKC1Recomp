@@ -1,0 +1,6 @@
+# Approach the first enemy, face away, and wait for contact from behind.
+# The immutable Jungle root reaches left-facing hurt at relative frame 213.
+000 * 30
+080 * 145
+040 * 12
+000 * 413

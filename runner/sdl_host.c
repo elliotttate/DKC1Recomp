@@ -1,3 +1,4 @@
+#include "dkc1_hd_sprites.h"
 /* Native macOS SDL2 frontend for DKC1Recomp.
  *
  * The recompiled cartridge/runtime stays identical to the Win32 and headless
@@ -5,23 +6,32 @@
  * and user-facing save/repro shortcuts.
  */
 #include "dkc1_blank_scan.h"
-#include "dkc1_baby_kong.h"
+#include "dkc1_dixie_mod.h"
 #include "dkc1_debug_dump.h"
 #include "dkc1_flight_recorder.h"
 #include "dkc1_game.h"
 #include "dkc1_invariant_monitor.h"
 #include "dkc1_haptics.h"
 #include "dkc1_msu1.h"
+#include "dkc1_script.h"
 #include "dkc1_video.h"
 #include "input_playback.h"
+#include "desktop_audio_rate.h"
+#include "desktop_rewind.h"
+#include "desktop_input.h"
+#include "macos_controls.h"
+#include "macos_pause_menu.h"
+#include "desktop_filter.h"
 #include "macos_file_picker.h"
 #include "macos_metal_presenter.h"
+#include "macos_hd_scene.h"
 #include "verified_rom.h"
 #include "wram_dump.h"
 
 #include "common_cpu_infra.h"
 #include "common_rtl.h"
 #include "audio_trace.h"
+#include "snes/dma.h"
 #include "snes/snes.h"
 
 #include <SDL.h>
@@ -47,7 +57,6 @@
 #endif
 
 enum {
-  kWindowScale = 3,
   kSnesPixelAspectNumerator = 7,
   kSnesPixelAspectDenominator = 6,
   kAudioRate = 32040,
@@ -149,7 +158,24 @@ static SDL_Window *s_window;
 static SDL_Renderer *s_renderer;
 static SDL_Texture *s_texture;
 static SDL_AudioDeviceID s_audio_device;
-static SDL_GameController *s_controller;
+static SDL_GameController *s_controllers[2];
+#define s_controller s_controllers[0]
+static Dkc1Controls s_controls;
+static uint32_t s_host_actions, s_previous_host_actions;
+static int s_fast_forward, s_rewinding;
+static Dkc1RewindHistory s_rewind;
+static uint8_t *s_rewind_scratch;
+static size_t s_rewind_state_capacity;
+static Dkc1AudioStretch s_audio_stretch;
+static int16_t s_audio_output[(kAudioScratchFrames + 16) * kAudioChannels];
+static double s_audio_fill_average = -1.0;
+static double s_audio_target_frames, s_audio_ratio = 1.0;
+static unsigned long s_rewind_pops;
+static long s_assist_test_tick;
+static FILE *s_assist_test_log;
+static Dkc1InputPlayback s_assist_test_input;
+static void ClearRewind(void);
+
 static Dkc1Msu1 *s_msu1;
 static Dkc1StompProbe s_stomp_probe;
 static int16_t s_audio_scratch[kAudioScratchFrames * kAudioChannels];
@@ -171,6 +197,12 @@ static int s_paused;
 static int s_step_once;
 static int s_fullscreen;
 static Dkc1MacFullscreenScaling s_fullscreen_scaling;
+static Dkc1GraphicsSettings s_graphics;
+static Dkc1DesktopColorFilter s_color_filter;
+static uint8_t s_display_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4 * kDkc1HdScale * kDkc1HdScale];
+static int s_input_release_gate;
+static void OpenPauseMenu(int graphics_page);
+
 static int s_width;
 static int s_presentation_output_width;
 static int s_presentation_output_height;
@@ -190,6 +222,57 @@ static Dkc1HapticWorker s_haptic_worker;
 static int EnvironmentEnabled(const char *name) {
   const char *value = getenv(name);
   return value && *value && *value != '0';
+}
+
+/* Run a deterministic input-only route before the first interactive frame.
+ * RainbowZ uses this to enter the edited level from a clean power-on state,
+ * so Play never depends on a user's quicksave or serialized cartridge state.
+ * Normal desktop launches are unchanged when this variable is absent. */
+static int RunStartupScript(char *error, size_t error_size) {
+  const char *path = getenv("DKC1_STARTUP_SCRIPT");
+  if (!path || !*path)
+    return 1;
+  if (!Dkc1ScriptLoad(path, error, error_size))
+    return 0;
+
+  const long frame_limit = 30000;
+  long frames = 0;
+  while (!Dkc1ScriptFinished()) {
+    Dkc1ScriptOps ops = {0};
+    bool failed = false;
+    const uint32_t input = Dkc1ScriptNextInput(g_ram, &ops, &failed);
+    if (failed) {
+      snprintf(error, error_size, "%s", Dkc1ScriptError());
+      Dkc1ScriptFree();
+      return 0;
+    }
+    if (ops.checkpoint || ops.state_save || ops.state_load) {
+      snprintf(error, error_size,
+               "startup routes may contain only input and wait operations");
+      Dkc1ScriptFree();
+      return 0;
+    }
+    if (!ops.run_frame)
+      continue;
+    if (frames++ >= frame_limit) {
+      snprintf(error, error_size,
+               "startup route exceeded its %ld-frame safety limit",
+               frame_limit);
+      Dkc1ScriptFree();
+      return 0;
+    }
+    RtlRunFrame(input);
+    if (g_fail || !Dkc1LastLleResult()) {
+      snprintf(error, error_size,
+               "startup route stopped at frame %ld (resume=$%06x)",
+               frames, (unsigned)Dkc1ResumePc());
+      Dkc1ScriptFree();
+      return 0;
+    }
+  }
+  Dkc1ScriptFree();
+  fprintf(stderr, "startup: completed %s in %ld frames\n", path, frames);
+  return 1;
 }
 
 static double FramePacerNow(void) {
@@ -533,14 +616,16 @@ static void PacingLogPresented(Dkc1PacingLog *log,
           "\"diagnostics_ms\":%.4f,\"audio_ms\":%.4f,"
           "\"audio_queued_frames\":%u,\"audio_starvations\":%lu,"
           "\"audio_drops\":%lu,\"audio_ring_frames\":%u,"
-          "\"audio_internal_underflows\":%llu,\"overruns\":%llu}\n",
+          "\"audio_internal_underflows\":%llu,\"overruns\":%llu,"
+          "\"audio_ratio\":%.8f,\"audio_fill_average\":%.3f,\"audio_target_frames\":%.1f}\n",
           s_host_frame, (work_end - work_start) * scale, log->wait_ms,
           late, present_interval, submit_interval, submit_error,
           (presented - submit) * scale, log->setup_ms,
           log->emulation_ms, log->render_ms, log->diagnostics_ms,
           log->audio_ms, s_audio_last_queued_frames,
           s_audio_starvations, s_audio_drops, s_audio_ring_frames,
-          s_audio_internal_underflows, overruns);
+          s_audio_internal_underflows, overruns, s_audio_ratio,
+          s_audio_fill_average, s_audio_target_frames);
   log->last_submit = submit;
   log->last_present = presented;
   if ((s_host_frame % 60) == 0)
@@ -685,20 +770,26 @@ static void UpdateWindowTitle(void) {
   char title[512];
   if (!EnvironmentEnabled("DKC1_LIVE_TITLE")) {
     snprintf(title, sizeof title,
-             "DKC1Recomp %s | %s | %s | %s | %s",
+             "%s %s | %s | %s | %s | %s",
+             Dkc1DixieIsVariant() ? "Dixie Kong Country HD Experiment" :
+                                    "DKC1 HD Experiment",
              DKC1_BUILD_COMMIT, s_paused ? "PAUSED" : "running",
              AspectName(Dkc1VideoGetAspect()),
              LayerName(Dkc1DebugLayerMask()), s_status);
   } else if (s_present_fps > 0.0) {
     snprintf(title, sizeof title,
-             "DKC1Recomp %s | frame %ld | %.1f FPS | %s | %s | %s | %s",
+             "%s %s | frame %ld | %.1f FPS | %s | %s | %s | %s",
+             Dkc1DixieIsVariant() ? "Dixie Kong Country HD Experiment" :
+                                    "DKC1 HD Experiment",
              DKC1_BUILD_COMMIT, s_host_frame, s_present_fps,
              s_paused ? "PAUSED" : "running",
              AspectName(Dkc1VideoGetAspect()),
              LayerName(Dkc1DebugLayerMask()), s_status);
   } else {
     snprintf(title, sizeof title,
-             "DKC1Recomp %s | frame %ld | %s | %s | %s | %s",
+             "%s %s | frame %ld | %s | %s | %s | %s",
+             Dkc1DixieIsVariant() ? "Dixie Kong Country HD Experiment" :
+                                    "DKC1 HD Experiment",
              DKC1_BUILD_COMMIT, s_host_frame,
              s_paused ? "PAUSED" : "running",
              AspectName(Dkc1VideoGetAspect()),
@@ -714,7 +805,9 @@ static void UpdateTitle(void) {
                          Dkc1VideoGetAspect(), Dkc1VideoGetEdgePolicy(),
                          Dkc1DebugLayerMask(),
                          Dkc1DebugProvenanceOverlay(), s_msu1 != NULL,
-                         Dkc1BabyKongEnabled(), Dkc1BabyKongReady());
+                         Dkc1DixieIsVariant() || Dkc1DixieSavedEnabled(),
+                         Dkc1HdEnabled());
+  Dkc1MacUpdateGraphicsMenuState(s_graphics.display,s_graphics.upscaler,s_graphics.screen);
 }
 
 static char *ConfiguredMusicPackPath(void) {
@@ -729,24 +822,6 @@ static char *ConfiguredMusicPackPath(void) {
     return copy;
   }
   return Dkc1MacSavedMsu1();
-}
-
-static void ChooseBabyKongRom(void) {
-  char *path = Dkc1MacChooseBabyKongRom();
-  if (!path)
-    return;
-  char error[192];
-  if (Dkc1BabyKongLoadRom(path, error, sizeof error)) {
-    Dkc1BabyKongSetEnabled(true);
-    Dkc1MacSetBabyKongRom(path);
-    Dkc1MacSetBabyKongEnabled(1);
-    snprintf(s_status, sizeof s_status, "Baby Kong enabled | %zu frames",
-             Dkc1BabyKongFrameCount());
-  } else {
-    ShowError("Unsupported DKC3 ROM", error);
-    snprintf(s_status, sizeof s_status, "Baby Kong: %.160s", error);
-  }
-  free(path);
 }
 
 static uint16_t ReadWram16(size_t address) {
@@ -794,9 +869,11 @@ static int ResolveRomPath(int argc, char **argv, char output[PATH_MAX]) {
 }
 
 static void PrepareUserDirectory(void) {
-  char *path = SDL_GetPrefPath("Flat2VR", "DKC1Recomp");
+  const char *override=getenv("DKC1_USER_DIR");
+  char *path=override && *override ? SDL_strdup(override) : SDL_GetPrefPath("Flat2VR", "DKC1Recomp");
   if (!path)
     return;
+  mkdir(path,0755);
   if (chdir(path) != 0)
     fprintf(stderr, "warning: could not use app data directory: %s\n", path);
   SDL_free(path);
@@ -819,6 +896,7 @@ static void ApplyPresentationGeometry(void) {
   if (s_metal_presenter_active) {
     Dkc1MacMetalPresenterSetGeometry(PresentationWidth(), s_fullscreen);
     Dkc1MacMetalPresenterSetScaling(s_fullscreen_scaling);
+    Dkc1MacMetalPresenterSetGraphics(&s_graphics);
   }
   if (s_texture) {
     /* Retain exact source pixels. Smooth avoids differently sized output
@@ -851,13 +929,13 @@ static void ApplyPresentationGeometry(void) {
 }
 
 static void ApplyWindowedSize(void) {
-  SDL_SetWindowSize(s_window, PresentationWidth() * kWindowScale,
-                    kDkc1VideoHeight * kWindowScale);
+  SDL_SetWindowSize(s_window, PresentationWidth() * s_graphics.window_scale,
+                    kDkc1VideoHeight * s_graphics.window_scale);
 }
 
 static bool InitVideo(void) {
-  const int window_width = PresentationWidth() * kWindowScale;
-  const int window_height = kDkc1VideoHeight * kWindowScale;
+  const int window_width = PresentationWidth() * s_graphics.window_scale;
+  const int window_height = kDkc1VideoHeight * s_graphics.window_scale;
   s_window = SDL_CreateWindow(
       "DKC1Recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       window_width, window_height,
@@ -971,19 +1049,30 @@ static void InitDisplayLink(void) {
 }
 
 static void PreparePresentation(void) {
-  if (s_metal_presenter_active) {
-    Dkc1MacPresentationFrameInfo info = {
-      .host_frame = s_host_frame,
-      .camera_x = ReadWram16(0x088b),
-      .camera_y = ReadWram16(0x0895),
-    };
-    for (int layer = 0; layer < 4; layer++) {
-      info.bg_hscroll[layer] = g_ppu->hScroll[layer];
-      info.bg_vscroll[layer] = g_ppu->vScroll[layer];
+  Dkc1MacPresentationFrameInfo info = {
+    .host_frame = s_host_frame,
+    .camera_x = ReadWram16(0x088b),
+    .camera_y = ReadWram16(0x0895),
+  };
+  if(s_metal_presenter_active) {
+    for(int layer=0;layer<4;layer++) {
+      info.bg_hscroll[layer]=g_ppu->hScroll[layer];
+      info.bg_vscroll[layer]=g_ppu->vScroll[layer];
     }
-    Dkc1MacMetalPresenterQueueFrame(
-        (const uint32_t *)s_pixels, s_width, kDkc1VideoHeight,
-        PresentationWidth(), &info);
+    if(s_color_filter.screen_kind==kDkc1ScreenRaw &&
+       Dkc1MacMetalPresenterQueueHdFrame((const uint32_t *)s_pixels,s_width,
+           kDkc1VideoHeight,PresentationWidth(),&info))return;
+  }
+  int hd_scale = 1;
+  const uint32_t *hd = Dkc1HdPresent((const uint32_t *)s_pixels, s_width, kDkc1VideoHeight, &hd_scale);
+  const int texture_width = s_width * hd_scale;
+  const int texture_height = kDkc1VideoHeight * hd_scale;
+  const uint8_t *display=Dkc1DesktopColorFilterApply(&s_color_filter,(const uint8_t *)hd,
+      s_display_pixels,(size_t)texture_width * texture_height);
+  if (!display) display=(const uint8_t *)hd;
+  if (s_metal_presenter_active) {
+    Dkc1MacMetalPresenterQueueFrame((const uint32_t *)display,texture_width,
+        texture_height,PresentationWidth()*hd_scale,&info);
     return;
   }
   SDL_Rect destination;
@@ -1013,7 +1102,15 @@ static void PreparePresentation(void) {
       destination_ptr = &destination;
     }
   }
-  SDL_UpdateTexture(s_texture, NULL, s_pixels, s_width * 4);
+  int old_w = 0, old_h = 0;
+  SDL_QueryTexture(s_texture, NULL, NULL, &old_w, &old_h);
+  if (old_w != texture_width || old_h != texture_height) {
+    SDL_Texture *next = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, texture_width, texture_height);
+    if (!next) return;
+    SDL_DestroyTexture(s_texture); s_texture = next;
+    SDL_SetTextureBlendMode(s_texture, SDL_BLENDMODE_NONE);
+  }
+  SDL_UpdateTexture(s_texture, NULL, display, texture_width * 4);
   SDL_RenderClear(s_renderer);
   SDL_RenderCopy(s_renderer, s_texture, NULL, destination_ptr);
 }
@@ -1029,17 +1126,17 @@ static void Present(void) {
 }
 
 static void OpenFirstController(void) {
-  if (s_controller)
-    return;
   for (int i = 0; i < SDL_NumJoysticks(); i++) {
-    if (SDL_IsGameController(i)) {
-      s_controller = SDL_GameControllerOpen(i);
-      if (s_controller) {
-        snprintf(s_status, sizeof s_status, "controller: %.160s",
-                 SDL_GameControllerName(s_controller));
-        UpdateTitle();
-        return;
-      }
+    if (!SDL_IsGameController(i)) continue;
+    SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(i);
+    int known = 0;
+    for (int p = 0; p < 2; p++)
+      if (s_controllers[p] && SDL_JoystickInstanceID(
+          SDL_GameControllerGetJoystick(s_controllers[p])) == id) known = 1;
+    if (known) continue;
+    for (int p = 0; p < 2; p++) if (!s_controllers[p]) {
+      s_controllers[p] = SDL_GameControllerOpen(i);
+      break;
     }
   }
 }
@@ -1150,68 +1247,95 @@ static void PulseStompHaptic(void) {
 }
 
 static void ControllerRemoved(SDL_JoystickID instance) {
-  if (!s_controller)
-    return;
-  SDL_Joystick *joystick = SDL_GameControllerGetJoystick(s_controller);
-  if (SDL_JoystickInstanceID(joystick) == instance) {
-    HapticWorkerDetachController();
-    (void)SDL_GameControllerRumble(s_controller, 0, 0, 0);
-    SDL_GameControllerClose(s_controller);
-    s_controller = NULL;
-    snprintf(s_status, sizeof s_status, "controller disconnected");
-    UpdateTitle();
+  for (int p = 0; p < 2; p++) {
+    SDL_GameController *pad = s_controllers[p];
+    if (!pad || SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad)) != instance)
+      continue;
+    if (p == 0) HapticWorkerDetachController();
+    (void)SDL_GameControllerRumble(pad, 0, 0, 0);
+    SDL_GameControllerClose(pad);
+    s_controllers[p] = NULL;
   }
+}
+
+static bool KeyPressed(int scancode, void *context) {
+  const uint8_t *keys = context;
+  return scancode > 0 && scancode < SDL_NUM_SCANCODES && keys[scancode];
+}
+
+static bool GameKeyPressed(int scancode, void *context) {
+  if (s_controls.assist_enabled)
+    for (int i = 0; i < 4; i++)
+      if (scancode == s_controls.assist_keys[i]) return false;
+  return KeyPressed(scancode, context);
+}
+
+static int16_t UpPositiveAxis(SDL_GameController *pad, SDL_GameControllerAxis axis) {
+  int value = -(int)SDL_GameControllerGetAxis(pad, axis);
+  return (int16_t)(value > 32767 ? 32767 : value);
 }
 
 static uint32_t PollInput(void) {
-  if (!(SDL_GetWindowFlags(s_window) & SDL_WINDOW_INPUT_FOCUS))
-    return 0;
-  const uint8_t *key = SDL_GetKeyboardState(NULL);
-  uint32_t input = 0;
-  if (key[SDL_SCANCODE_Z]) input |= 0x001;       /* B */
-  if (key[SDL_SCANCODE_X]) input |= 0x002;       /* Y */
-  if (key[SDL_SCANCODE_RSHIFT]) input |= 0x004;  /* Select */
-  if (key[SDL_SCANCODE_RETURN]) input |= 0x008;  /* Start */
-  if (key[SDL_SCANCODE_UP]) input |= 0x010;
-  if (key[SDL_SCANCODE_DOWN]) input |= 0x020;
-  if (key[SDL_SCANCODE_LEFT]) input |= 0x040;
-  if (key[SDL_SCANCODE_RIGHT]) input |= 0x080;
-  if (key[SDL_SCANCODE_S]) input |= 0x100;       /* A */
-  if (key[SDL_SCANCODE_A]) input |= 0x200;       /* X */
-  if (key[SDL_SCANCODE_Q]) input |= 0x400;       /* L */
-  if (key[SDL_SCANCODE_W]) input |= 0x800;       /* R */
-
-  if (s_controller) {
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_A)) input |= 0x001;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_X)) input |= 0x002;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_BACK)) input |= 0x004;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_START)) input |= 0x008;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_DPAD_UP)) input |= 0x010;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_DPAD_DOWN)) input |= 0x020;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_DPAD_LEFT)) input |= 0x040;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) input |= 0x080;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_B)) input |= 0x100;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_Y)) input |= 0x200;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) input |= 0x400;
-    if (SDL_GameControllerGetButton(s_controller,
-                                    SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) input |= 0x800;
+  s_host_actions = 0;
+  if (!(SDL_GetWindowFlags(s_window) & SDL_WINDOW_INPUT_FOCUS) ||
+      (SDL_GetModState() & KMOD_GUI)) return 0;
+  const uint8_t *keys = SDL_GetKeyboardState(NULL);
+  Dkc1GamepadState pads[2] = {0};
+  const uint32_t button_masks[] = {
+    kDkc1GamepadA, kDkc1GamepadB, kDkc1GamepadX, kDkc1GamepadY,
+    kDkc1GamepadBack, kDkc1GamepadGuide, kDkc1GamepadStart,
+    kDkc1GamepadLeftStick, kDkc1GamepadRightStick,
+    kDkc1GamepadLeftShoulder, kDkc1GamepadRightShoulder,
+    kDkc1GamepadDpadUp, kDkc1GamepadDpadDown,
+    kDkc1GamepadDpadLeft, kDkc1GamepadDpadRight
+  };
+  size_t count = 0;
+  for (int i = 0; i < 2; i++) if (s_controllers[i]) {
+    SDL_GameController *pad = s_controllers[i];
+    Dkc1GamepadState *state = &pads[count++];
+    for (int b = 0; b < 15; b++)
+      if (SDL_GameControllerGetButton(pad, (SDL_GameControllerButton)b))
+        state->buttons |= button_masks[b];
+    state->left_x = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
+    state->left_y = UpPositiveAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
+    state->right_x = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_RIGHTX);
+    state->right_y = UpPositiveAxis(pad, SDL_CONTROLLER_AXIS_RIGHTY);
+    state->left_trigger = (uint8_t)(SDL_GameControllerGetAxis(pad,
+                                  SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 129);
+    state->right_trigger = (uint8_t)(SDL_GameControllerGetAxis(pad,
+                                   SDL_CONTROLLER_AXIS_TRIGGERRIGHT) / 129);
   }
-  return input;
+  unsigned menu_buttons=0;
+  for (size_t i=0;i<count;i++) menu_buttons|=pads[i].buttons;
+  if ((menu_buttons&kDkc1GamepadGuide) ||
+      (menu_buttons&(kDkc1GamepadStart|kDkc1GamepadBack))==(kDkc1GamepadStart|kDkc1GamepadBack)) {
+    if (!s_input_release_gate) OpenPauseMenu(0);
+    return 0;
+  }
+  s_host_actions = Dkc1ApplyAssistGate(Dkc1MapAssistBindings(
+      s_controls.assist_keys, s_controls.assist_pads, KeyPressed, (void *)keys,
+      pads, count, 30), 0, s_controls.assist_enabled != 0);
+  uint32_t keyboard[2];
+  int bindings[2][12];
+  memcpy(bindings, s_controls.pads, sizeof bindings);
+  for (int p = 0; p < 2; p++) {
+    keyboard[p] = Dkc1MapKeyboardBindings(s_controls.keys[p],
+                                          GameKeyPressed, (void *)keys);
+    if (s_controls.assist_enabled)
+      for (int i = 0; i < 12; i++) for (int a = 0; a < 4; a++)
+        if (bindings[p][i] == s_controls.assist_pads[a]) bindings[p][i] = 0;
+  }
+  uint32_t result=Dkc1RoutePlayerInputsWithBindings(keyboard,pads,count,
+      s_controls.source,s_controls.deadzone,bindings);
+  if (s_input_release_gate) {
+    if (!result && !s_host_actions) s_input_release_gate=0;
+    s_host_actions=0; return 0;
+  }
+  return result;
 }
 
 static bool InitAudio(void) {
-  SDL_AudioSpec desired;
+  SDL_AudioSpec desired, obtained;
   const char *preroll = getenv("DKC1_AUDIO_PREROLL");
   if (preroll && *preroll) {
     const int parsed = atoi(preroll);
@@ -1224,11 +1348,13 @@ static bool InitAudio(void) {
   desired.channels = kAudioChannels;
   desired.samples = kAudioScratchFrames;
   desired.callback = NULL;
-  s_audio_device = SDL_OpenAudioDevice(NULL, 0, &desired, NULL, 0);
+  s_audio_device = SDL_OpenAudioDevice(NULL, 0, &desired, &obtained, 0);
   if (!s_audio_device) {
     fprintf(stderr, "warning: audio unavailable: %s\n", SDL_GetError());
     return false;
   }
+  s_audio_target_frames = obtained.samples / 2.0 +
+      s_audio_preroll_blocks * kAudioFramesPerBlock;
   RtlSetAudioOutputRate(kAudioRate);
   /* Do not start CoreAudio on an empty engine ring. The native producer needs
    * a few cartridge frames to reach its normal occupancy, after which the SDL
@@ -1247,6 +1373,9 @@ static bool InitAudio(void) {
 }
 
 static void ResetAudioTimeline(void) {
+  Dkc1AudioStretchReset(&s_audio_stretch);
+  s_audio_fill_average = -1.0;
+  s_audio_ratio = 1.0;
   if (!s_audio_device)
     return;
   /* SDL's queue belongs to the abandoned host timeline after a rewind or
@@ -1305,14 +1434,26 @@ static void PumpAudio(void) {
     return;
   if (frames > kAudioScratchFrames)
     frames = kAudioScratchFrames;
-  if (queued_frames >= kAudioMaximumQueuedFrames) {
-    s_audio_drops++;
-    return;
-  }
   RtlRenderAudio(s_audio_scratch, frames, kAudioChannels);
   Dkc1Msu1Mix(s_msu1, s_audio_scratch, frames, kAudioChannels, kAudioRate);
+  /* Always consume the canonical audio, including muted assist frames. */
+  if (s_fast_forward || s_paused) return;
+  if (queued_frames >= kAudioMaximumQueuedFrames) {
+    s_audio_drops++;
+    ResetAudioTimeline();
+    return;
+  }
+  s_audio_fill_average = Dkc1AudioFillAverage(
+      s_audio_fill_average, queued_frames, 0.02);
+  s_audio_ratio = s_audio_started ? Dkc1AudioRateRatio(
+      s_audio_fill_average, s_audio_target_frames, 0.005, 4.0) : 1.0;
+  frames = Dkc1AudioStretchProcess(&s_audio_stretch, s_audio_ratio,
+      s_audio_scratch, frames, s_audio_output, kAudioScratchFrames + 16);
   const Uint32 bytes = (Uint32)frames * kAudioChannels * sizeof(int16_t);
-  if (SDL_QueueAudio(s_audio_device, s_audio_scratch, bytes) != 0) {
+  int volume=s_graphics.audio_enabled ? s_graphics.volume : 0;
+  if (volume!=100) for (int i=0;i<frames*kAudioChannels;i++)
+    s_audio_output[i]=(int16_t)((int)s_audio_output[i]*volume/100);
+  if (SDL_QueueAudio(s_audio_device, s_audio_output, bytes) != 0) {
     s_audio_drops++;
     return;
   }
@@ -1330,9 +1471,89 @@ static void PumpAudio(void) {
   }
 }
 
+static void ClearRewind(void) {
+  Dkc1RewindHistoryDestroy(&s_rewind);
+  free(s_rewind_scratch);
+  s_rewind_scratch = NULL;
+  s_rewind_state_capacity = 0;
+}
+
+static void CaptureRewind(void) {
+  if (!s_controls.assist_enabled || s_host_frame % 3) return;
+  size_t size = RtlSaveSnapshotToMemory(NULL, 0);
+  if (!size) return;
+  if (size > s_rewind_state_capacity) {
+    ClearRewind();
+    /* Sparse shadow snapshots vary as the camera moves. Store their actual
+     * length inside a fixed-capacity slot, growing only at capacity bands;
+     * equality of successive serialized sizes is not a rewind invariant. */
+    size_t state_capacity = 512u * 1024u;
+    while (state_capacity < size && state_capacity < 128u * 1024u * 1024u)
+      state_capacity *= 2;
+    if (state_capacity < size) return;
+    size_t record = sizeof(size_t) + state_capacity + sizeof s_pixels;
+    size_t capacity = (128u * 1024u * 1024u) / record;
+    if (capacity > 300) capacity = 300;
+    if (!capacity || !Dkc1RewindHistoryInit(&s_rewind, record, capacity)) return;
+    s_rewind_scratch = calloc(1, record);
+    if (!s_rewind_scratch) { ClearRewind(); return; }
+    s_rewind_state_capacity = state_capacity;
+    fprintf(stderr, "[rewind] state=%zu record=%zu capacity=%zu seconds=%.2f\n",
+            size, record, capacity, capacity / 20.0);
+  }
+  memcpy(s_rewind_scratch, &size, sizeof size);
+  if (RtlSaveSnapshotToMemory(s_rewind_scratch + sizeof size,
+                               s_rewind_state_capacity) != size) {
+    ClearRewind();
+    return;
+  }
+  memcpy(s_rewind_scratch + sizeof size + s_rewind_state_capacity,
+         s_pixels, sizeof s_pixels);
+  Dkc1RewindHistoryPush(&s_rewind, s_rewind_scratch);
+}
+
+static void ReconcileHostTimeline(void) {
+  ResetAudioTimeline();
+  Dkc1MacMetalPresenterFlush();
+  Dkc1Msu1Reset(s_msu1);
+  ObserveMsu1MusicState();
+  s_stomp_probe = (Dkc1StompProbe){0};
+  StopControllerRumble();
+  Dkc1InputPlaybackFree(&s_input_playback);
+  s_reanchor_pacer = 1;
+}
+
+static void ReanchorRecorder(void) {
+  char error[256];
+  if (!Dkc1FlightRecorderReanchorAfterStateLoad(s_host_frame, error, sizeof error))
+    fprintf(stderr, "recorder reanchor failed: %s\n", error);
+}
+
+static void RewindOneStep(void) {
+  if (Dkc1RewindHistoryPop(&s_rewind, s_rewind_scratch)) {
+    size_t size;
+    memcpy(&size, s_rewind_scratch, sizeof size);
+    if (size > s_rewind_state_capacity ||
+        !RtlLoadSnapshotFromMemory(s_rewind_scratch + sizeof size, size)) {
+      ClearRewind();
+      s_paused = 1;
+      snprintf(s_status, sizeof s_status, "rewind load failed; paused");
+      return;
+    }
+    memcpy(s_pixels, s_rewind_scratch + sizeof size + s_rewind_state_capacity,
+           sizeof s_pixels);
+    ReconcileHostTimeline();
+    s_rewind_pops++;
+  }
+}
+
+static const char *StateSlotPath(void) {
+  static const char *paths[]={"quicksave.state","slot2.state","slot3.state","slot4.state","slot5.state"};
+  return paths[s_graphics.state_slot];
+}
 static void QuickSave(void) {
-  if (RtlSaveSnapshot("quicksave.state"))
-    snprintf(s_status, sizeof s_status, "saved quicksave.state");
+  if (RtlSaveSnapshot(StateSlotPath()))
+    snprintf(s_status, sizeof s_status, "saved %s",StateSlotPath());
   else
     snprintf(s_status, sizeof s_status, "quick save FAILED");
   s_reanchor_pacer = 1;
@@ -1340,28 +1561,27 @@ static void QuickSave(void) {
 }
 
 static void QuickLoad(void) {
-  if (!RtlLoadSnapshot("quicksave.state")) {
+  if (!RtlLoadSnapshot(StateSlotPath())) {
     snprintf(s_status, sizeof s_status, "quick load FAILED");
   } else {
-    ResetAudioTimeline();
-    Dkc1Msu1Reset(s_msu1);
-    ObserveMsu1MusicState();
-    s_stomp_probe = (Dkc1StompProbe){0};
-    StopControllerRumble();
+    ClearRewind();
+    ReconcileHostTimeline();
     char error[256];
     if (!Dkc1FlightRecorderReanchorAfterStateLoad(
             s_host_frame, error, sizeof error))
       snprintf(s_status, sizeof s_status,
                "loaded; recorder reanchor failed: %.160s", error);
     else
-      snprintf(s_status, sizeof s_status, "loaded quicksave.state");
+      snprintf(s_status, sizeof s_status, "loaded %s",StateSlotPath());
     Dkc1DrawPpuFrame();
+    Present();
   }
   s_reanchor_pacer = 1;
   UpdateTitle();
 }
 
 static void ExportRepro(void) {
+  if (s_rewinding) ReanchorRecorder();
   char bundle[PATH_MAX];
   char error[256];
   if (Dkc1FlightRecorderExport(s_host_frame, bundle, sizeof bundle,
@@ -1377,10 +1597,17 @@ static void ExportRepro(void) {
  * untouched, while the existing visible frame is center-cropped or centered
  * over black so a paused aspect change is immediately intelligible. */
 static void SetAspectMode(Dkc1VideoAspect requested) {
+  if (Dkc1DixieIsVariant() && requested != kDkc1VideoAspectNative) {
+    snprintf(s_status, sizeof s_status,
+             "Dixie currently uses its validated native 4:3 presentation");
+    UpdateTitle();
+    return;
+  }
   const Dkc1VideoAspect old_aspect = Dkc1VideoGetAspect();
   if (old_aspect == requested)
     return;
 
+  ClearRewind();
   const int old_width = s_width;
   Dkc1VideoSetAspect(requested);
   const int new_width = Dkc1VideoWidth();
@@ -1413,6 +1640,7 @@ static void SetAspectMode(Dkc1VideoAspect requested) {
   SDL_DestroyTexture(s_texture);
   s_texture = new_texture;
   s_width = new_width;
+  s_graphics.aspect=requested; Dkc1MacSaveGraphics(&s_graphics);
   Dkc1BeginDrawing(s_pixels, (size_t)s_width * 4);
   ApplyPresentationGeometry();
   if (!s_fullscreen)
@@ -1433,6 +1661,7 @@ static void SetFullscreen(int fullscreen) {
     snprintf(s_status, sizeof s_status, "fullscreen change failed: %.170s",
              SDL_GetError());
   }
+  s_graphics.fullscreen=s_fullscreen; Dkc1MacSaveGraphics(&s_graphics);
   ApplyPresentationGeometry();
   if (!s_fullscreen)
     ApplyWindowedSize();
@@ -1445,6 +1674,8 @@ static void SetFullscreenScaling(Dkc1MacFullscreenScaling scaling) {
       scaling >= kDkc1MacFullscreenScalingCount)
     scaling = kDkc1MacFullscreenSharpBilinear;
   s_fullscreen_scaling = scaling;
+  s_graphics.upscaler=scaling==kDkc1MacFullscreenSmooth ? kDkc1UpscalerBilinear : scaling==kDkc1MacFullscreenPixelSharp ? kDkc1UpscalerNearest : kDkc1UpscalerSharpBilinear;
+  Dkc1MacSaveGraphics(&s_graphics);
   Dkc1MacSetFullscreenScaling(s_fullscreen_scaling);
   ApplyPresentationGeometry();
   static const char *const names[] = {
@@ -1464,9 +1695,76 @@ static void SetEdgePolicy(Dkc1EdgePolicy policy) {
     policy = kDkc1EdgeGlide;
   Dkc1VideoSetEdgePolicy(policy);
   Dkc1MacSetWidescreenEdge(policy);
+  s_graphics.edge=policy; Dkc1MacSaveGraphics(&s_graphics);
   snprintf(s_status, sizeof s_status, "level edge: %s",
            Dkc1EdgePolicyName(policy));
   UpdateTitle();
+}
+
+const char *Dkc1MacHostStatus(void) { return s_status; }
+
+void Dkc1MacAssistEnabled(int enabled) {
+  s_controls.assist_enabled=enabled!=0;
+  Dkc1MacSaveControls(&s_controls);
+  if (!enabled) ClearRewind();
+  s_host_actions=s_previous_host_actions=0;
+}
+
+void Dkc1MacApplyGraphics(Dkc1GraphicsSettings *settings) {
+  Dkc1GraphicsSettings next=*settings; Dkc1GraphicsClamp(&next);
+  if (!s_metal_presenter_active && (next.display || next.upscaler==kDkc1UpscalerReconstruct)) {
+    next.display=0; next.upscaler=kDkc1UpscalerNearest;
+    snprintf(s_status,sizeof s_status,"Reconstruct and CRT require the Metal presenter.");
+  }
+  if (next.screen!=s_graphics.screen && !Dkc1DesktopColorFilterInit(&s_color_filter,next.screen))
+    next.screen=s_graphics.screen;
+  int resize=next.window_scale!=s_graphics.window_scale;
+  int audio_change=next.audio_enabled!=s_graphics.audio_enabled;
+  s_graphics=next;
+  Dkc1HdMetalSetPolish(s_graphics.hd_polish);
+  Dkc1HdMetalSetFinish(s_graphics.hd_finish);
+  if (Dkc1VideoGetAspect()!=next.aspect) SetAspectMode(next.aspect);
+  if (Dkc1VideoGetEdgePolicy()!=next.edge) SetEdgePolicy(next.edge);
+  if (s_fullscreen!=next.fullscreen) SetFullscreen(next.fullscreen);
+  if (resize && !s_fullscreen) ApplyWindowedSize();
+  s_graphics.aspect=Dkc1VideoGetAspect();
+  s_graphics.fullscreen=s_fullscreen;
+  if (audio_change) ResetAudioTimeline();
+  Dkc1MacSaveGraphics(&s_graphics);
+  Dkc1MacMetalPresenterSetGraphics(&s_graphics);
+  if (s_texture) SDL_SetTextureScaleMode(s_texture,next.upscaler==kDkc1UpscalerNearest ? SDL_ScaleModeNearest : SDL_ScaleModeLinear);
+  *settings=s_graphics;
+  Present(); UpdateTitle();
+}
+
+unsigned Dkc1MacPauseMenuController(void) {
+  SDL_GameControllerUpdate(); unsigned result=0;
+  const unsigned masks[]={kDkc1GamepadA,kDkc1GamepadB,kDkc1GamepadX,kDkc1GamepadY,
+    kDkc1GamepadBack,kDkc1GamepadGuide,kDkc1GamepadStart,kDkc1GamepadLeftStick,
+    kDkc1GamepadRightStick,kDkc1GamepadLeftShoulder,kDkc1GamepadRightShoulder,
+    kDkc1GamepadDpadUp,kDkc1GamepadDpadDown,kDkc1GamepadDpadLeft,kDkc1GamepadDpadRight};
+  for (int p=0;p<2;p++) if (s_controllers[p])
+    for (int b=0;b<15;b++) if (SDL_GameControllerGetButton(s_controllers[p],b)) result|=masks[b];
+  return result;
+}
+
+static void OpenPauseMenu(int graphics_page) {
+  if (Dkc1MacPauseMenuIsOpen()) return;
+  SDL_SysWMinfo window; SDL_VERSION(&window.version);
+  if (!SDL_GetWindowWMInfo(s_window,&window)) return;
+  int was_paused=s_paused;
+  s_paused=1; s_step_once=0; StopControllerRumble();
+  if (s_audio_device) SDL_PauseAudioDevice(s_audio_device,1);
+  s_graphics.aspect=Dkc1VideoGetAspect(); s_graphics.edge=Dkc1VideoGetEdgePolicy();
+  s_graphics.fullscreen=s_fullscreen;
+  // Discard older packets so the menu rests on the latest completed image.
+  Dkc1MacMetalPresenterFlush(); Present(); UpdateTitle();
+  int resume=Dkc1MacShowPauseMenu(window.info.cocoa.window,&s_graphics,&s_controls,graphics_page);
+  s_paused=resume ? 0 : was_paused; ResetAudioTimeline();
+  s_host_actions=s_previous_host_actions=0; s_input_release_gate=1;
+  s_reanchor_pacer=1;
+  SDL_FlushEvent(SDL_KEYDOWN); SDL_FlushEvent(SDL_KEYUP);
+  Dkc1MacMetalPresenterSetActive(1); Present(); UpdateTitle();
 }
 
 static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
@@ -1478,7 +1776,7 @@ static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
     if (s_fullscreen) {
       SetFullscreen(0);
     } else {
-      s_running = 0;
+      OpenPauseMenu(0);
     }
   } else if (key == SDLK_F1) {
     Dkc1DebugSetProvenanceOverlay(!Dkc1DebugProvenanceOverlay());
@@ -1500,6 +1798,13 @@ static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
     s_reanchor_pacer = 1;
   } else if (key == SDLK_F8 && s_paused) {
     s_step_once = 1;
+  } else if (key == SDLK_F10) {
+    Dkc1HdToggle();
+    Dkc1MacSetHdTexturesEnabled(Dkc1HdEnabled());
+    snprintf(s_status, sizeof s_status,
+             "Upscaled HD textures %s — Jungle Hijinxs only | F10 compare",
+             Dkc1HdEnabled() ? "ON" : "OFF");
+    if (s_paused) { Dkc1DrawPpuFrame(); Present(); }
   } else if (key == SDLK_F9) {
     ExportRepro();
   } else if (key == SDLK_F11 || ((mod & KMOD_GUI) && key == SDLK_s)) {
@@ -1512,6 +1817,35 @@ static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
 
 void Dkc1MacMenuCommand(int command) {
   switch (command) {
+    case kDkc1MacMenuUpscalerReconstruct:
+    case kDkc1MacMenuDisplayFlat:
+    case kDkc1MacMenuDisplayCrt:
+    case kDkc1MacMenuScreenRaw:
+    case kDkc1MacMenuScreenCrt:
+    case kDkc1MacMenuScreenComposite:
+    case kDkc1MacMenuScreenTrinitron: {
+      Dkc1GraphicsSettings next=s_graphics;
+      if (command==kDkc1MacMenuUpscalerReconstruct) next.upscaler=kDkc1UpscalerReconstruct;
+      else if (command==kDkc1MacMenuDisplayFlat || command==kDkc1MacMenuDisplayCrt)
+        next.display=command==kDkc1MacMenuDisplayCrt;
+      else next.screen=command-kDkc1MacMenuScreenRaw;
+      Dkc1MacApplyGraphics(&next); return;
+    }
+    case kDkc1MacMenuGraphics:
+      OpenPauseMenu(1);
+      return;
+    case kDkc1MacMenuPauseMenu:
+      OpenPauseMenu(0);
+      return;
+    case kDkc1MacMenuControls:
+      StopControllerRumble();
+      if (s_audio_device) SDL_PauseAudioDevice(s_audio_device, 1);
+      Dkc1MacEditControls(&s_controls);
+      if (!s_controls.assist_enabled) ClearRewind();
+      ResetAudioTimeline();
+      s_host_actions = s_previous_host_actions = 0;
+      s_reanchor_pacer = 1;
+      break;
     case kDkc1MacMenuQuit:
       s_running = 0;
       break;
@@ -1540,18 +1874,23 @@ void Dkc1MacMenuCommand(int command) {
     case kDkc1MacMenuExportRepro:
       ExportRepro();
       return;
-    case kDkc1MacMenuToggleBabyKong:
-      if (!Dkc1BabyKongReady()) {
-        ChooseBabyKongRom();
-      } else {
-        Dkc1BabyKongSetEnabled(!Dkc1BabyKongEnabled());
-        Dkc1MacSetBabyKongEnabled(Dkc1BabyKongEnabled());
-        snprintf(s_status, sizeof s_status, "%s",
-                 Dkc1BabyKongStatus());
-      }
+    case kDkc1MacMenuToggleDixie:
+      if (Dkc1DixieIsVariant())
+        Dkc1DixieSwitchAndRelaunch(0, "DKC1Recomp-HD-Dixie",
+                                   "DKC1Recomp-HD", s_status,
+                                   sizeof s_status);
+      else
+        Dkc1DixieSwitchAndRelaunch(1, "DKC1Recomp-HD-Dixie",
+                                   "DKC1Recomp-HD", s_status,
+                                   sizeof s_status);
       break;
-    case kDkc1MacMenuChooseBabyKongRom:
-      ChooseBabyKongRom();
+    case kDkc1MacMenuToggleHdTextures:
+      Dkc1HdToggle();
+      Dkc1MacSetHdTexturesEnabled(Dkc1HdEnabled());
+      snprintf(s_status, sizeof s_status,
+               "Upscaled HD textures %s — Jungle Hijinxs only",
+               Dkc1HdEnabled() ? "ON" : "OFF");
+      if (s_paused) { Dkc1DrawPpuFrame(); Present(); }
       break;
     case kDkc1MacMenuChooseMusicPack: {
       char *path = Dkc1MacChooseMsu1();
@@ -1672,18 +2011,20 @@ static void Cleanup(uint8_t *rom) {
   Dkc1DebugDumpClose();
   Dkc1FlightRecorderClose();
   Dkc1InputPlaybackFree(&s_input_playback);
+  Dkc1InputPlaybackFree(&s_assist_test_input);
+  if (s_assist_test_log) fclose(s_assist_test_log);
+  ClearRewind();
   Dkc1MacDisplayLinkStop();
   s_display_link_active = 0;
   Dkc1MacMetalPresenterStop();
   s_metal_presenter_active = 0;
   HapticWorkerStop();
-  if (s_controller) {
-    (void)SDL_GameControllerRumble(s_controller, 0, 0, 0);
-    SDL_GameControllerClose(s_controller);
+  for (int i = 0; i < 2; i++) if (s_controllers[i]) {
+    (void)SDL_GameControllerRumble(s_controllers[i], 0, 0, 0);
+    SDL_GameControllerClose(s_controllers[i]);
   }
   Dkc1Msu1Close(s_msu1);
   s_msu1 = NULL;
-  Dkc1BabyKongUnload();
   if (s_audio_device)
     SDL_CloseAudioDevice(s_audio_device);
   if (s_texture)
@@ -1697,6 +2038,10 @@ static void Cleanup(uint8_t *rom) {
 }
 
 int main(int argc, char **argv) {
+  Dkc1MacConfigureHdExperiment();
+#ifdef DKC1_DIXIE_VARIANT
+  dma_set_zero_size_vram_noop(1);
+#endif
   SDL_SetMainReady();
   (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   /* A native macOS fullscreen Space constrains SDL to the panel's inset safe
@@ -1715,10 +2060,26 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  Dkc1DixieSetRomPath(rom_path);
+  {
+    char note[256];
+    if (Dkc1DixieHandoffCheck(0, NULL, "DKC1Recomp-HD-Dixie", note,
+                              sizeof note)) {
+      SDL_Quit();
+      return 0;
+    }
+    if (note[0]) fprintf(stderr, "dixie mod: %s\n", note);
+  }
+
   size_t rom_size = 0;
   char rom_error[192];
+#ifdef DKC1_DIXIE_VARIANT
+  uint8_t *rom = Dkc1DixieLoadRom(rom_path, &rom_size, rom_error,
+                                  sizeof rom_error);
+#else
   uint8_t *rom =
       Dkc1ReadVerifiedRom(rom_path, &rom_size, rom_error, sizeof rom_error);
+#endif
   if (!rom) {
     char message[PATH_MAX + 256];
     snprintf(message, sizeof message, "%s\n\n%s", rom_error, rom_path);
@@ -1744,14 +2105,24 @@ int main(int argc, char **argv) {
   }
 
   PrepareUserDirectory();
+  Dkc1MacLoadGraphics(&s_graphics);
+  Dkc1HdMetalSetPolish(s_graphics.hd_polish);
+  Dkc1HdMetalSetFinish(s_graphics.hd_finish);
+  Dkc1DesktopColorFilterInit(&s_color_filter,s_graphics.screen);
   const char *aspect = getenv("DKC1_ASPECT");
   const char *widescreen = getenv("DKC1_WIDESCREEN");
   if (aspect && strcmp(aspect, "16:10") == 0)
     Dkc1VideoSetAspect(kDkc1VideoAspect16x10);
   else if (aspect && strcmp(aspect, "4:3") == 0)
     Dkc1VideoSetAspect(kDkc1VideoAspectNative);
+  else if (aspect && strcmp(aspect,"16:9")==0)
+    Dkc1VideoSetAspect(kDkc1VideoAspect16x9);
+  else if (widescreen)
+    Dkc1VideoSetWidescreen(*widescreen!='0');
   else
-    Dkc1VideoSetWidescreen(!(widescreen && *widescreen == '0'));
+    Dkc1VideoSetAspect(s_graphics.aspect);
+  if (Dkc1DixieIsVariant()) Dkc1VideoSetAspect(kDkc1VideoAspectNative);
+  s_graphics.aspect=Dkc1VideoGetAspect();
   {
     /* Level-wall presentation: the View menu's saved choice (glide when
      * never set), overridden by DKC1_WIDESCREEN_EDGE for this run only. */
@@ -1771,22 +2142,6 @@ int main(int argc, char **argv) {
     return 4;
   }
 
-  if (!getenv("DKC1_BABY_KONG_ROM")) {
-    char *baby_rom = Dkc1MacSavedBabyKongRom();
-    if (baby_rom) {
-      char baby_error[192];
-      if (!Dkc1BabyKongLoadRom(baby_rom, baby_error, sizeof baby_error))
-        fprintf(stderr, "warning: Baby Kong disabled: %s\n", baby_error);
-      free(baby_rom);
-    }
-  }
-  if (Dkc1BabyKongReady()) {
-    const char *baby_enabled = getenv("DKC1_BABY_KONG");
-    Dkc1BabyKongSetEnabled(
-        baby_enabled ? EnvironmentEnabled("DKC1_BABY_KONG")
-                     : Dkc1MacSavedBabyKongEnabled() != 0);
-  }
-
   const char *snapshot = getenv("DKC1_SAVESTATE_INPUT");
   if (snapshot && *snapshot && !RtlLoadSnapshot(snapshot)) {
     ShowError("DKC1Recomp", "Unable to load DKC1_SAVESTATE_INPUT.");
@@ -1803,6 +2158,16 @@ int main(int argc, char **argv) {
       free(rom);
       SDL_Quit();
       return 20;
+    }
+  }
+
+  {
+    char startup_error[256];
+    if (!RunStartupScript(startup_error, sizeof startup_error)) {
+      ShowError("DKC1Recomp Playtest", startup_error);
+      free(rom);
+      SDL_Quit();
+      return 21;
     }
   }
 
@@ -1835,6 +2200,7 @@ int main(int argc, char **argv) {
     Cleanup(rom);
     return 3;
   }
+  Dkc1MacLoadControls(&s_controls);
   Dkc1MacInstallMenu();
   InitAudio();
   OpenFirstController();
@@ -1864,6 +2230,15 @@ int main(int argc, char **argv) {
     return 20;
   }
 
+  const char *assist_test = getenv("DKC1_ASSIST_TEST_INPUT");
+  if (assist_test && *assist_test) {
+    if (!Dkc1InputPlaybackLoad(assist_test, &s_assist_test_input, error, sizeof error)) {
+      ShowError("Assist test input failed", error); Cleanup(rom); return 20;
+    }
+    s_controls.assist_enabled = 1;
+    const char *log = getenv("DKC1_ASSIST_TEST_LOG");
+    if (log && *log) s_assist_test_log = fopen(log, "w");
+  }
   const char *haptics_status =
       s_haptics_enabled ? "controller stomp haptics on" : "haptics off";
   if (s_msu1 && Dkc1Msu1CurrentTrack(s_msu1))
@@ -1875,7 +2250,7 @@ int main(int argc, char **argv) {
   else
     snprintf(s_status, sizeof s_status, "Z/X/S/A controls | %s",
              haptics_status);
-  if (EnvironmentEnabled("DKC1_START_FULLSCREEN"))
+  if (EnvironmentEnabled("DKC1_START_FULLSCREEN") || s_graphics.fullscreen)
     SetFullscreen(1);
   UpdateTitle();
   InitDisplayLink();
@@ -1956,9 +2331,44 @@ int main(int argc, char **argv) {
       s_reanchor_pacer = 0;
     }
     phase_start = phase_end;
+    uint32_t live_input = PollInput();
+    if (s_assist_test_input.count)
+      s_host_actions = Dkc1InputPlaybackFrame(&s_assist_test_input,
+                                              (size_t)s_assist_test_tick);
+    s_assist_test_tick++;
+    uint32_t pressed_actions = s_host_actions & ~s_previous_host_actions;
+    s_previous_host_actions = s_host_actions;
+    if (pressed_actions & kDkc1HostSaveState) QuickSave();
+    if (pressed_actions & kDkc1HostLoadState) QuickLoad();
+    int fast = !single_step && (s_host_actions & kDkc1HostFastForward) &&
+               !(s_host_actions & kDkc1HostRewind);
+    if (fast != s_fast_forward) {
+      s_fast_forward = fast;
+      ResetAudioTimeline();
+    }
+    if (!single_step && (s_host_actions & kDkc1HostRewind)) {
+      if (!s_rewinding) ReconcileHostTimeline();
+      s_rewinding = 1;
+      RewindOneStep();
+      Present();
+      FramePacerWaitUntil(pacer.next_deadline, pacer.frequency);
+      FramePacerAdvance(&pacer, FramePacerNow(), 0);
+      if (s_assist_test_log) fprintf(s_assist_test_log,
+          "%ld rewind host=%ld guest=%u pops=%lu history=%zu\n",
+          s_assist_test_tick, s_host_frame, snes_frame_counter,
+          s_rewind_pops, s_rewind.count);
+      continue;
+    }
+    if (s_rewinding) {
+      s_rewinding = 0;
+      ReconcileHostTimeline();
+      ReanchorRecorder();
+    }
+    for (int subframe = 0; subframe < (s_fast_forward ? 3 : 1); subframe++) {
+    CaptureRewind();
     uint32_t input = s_input_playback.count
         ? Dkc1InputPlaybackFrame(&s_input_playback, (size_t)s_host_frame)
-        : PollInput();
+        : live_input;
     Dkc1DebugRecordInput(input);
     phase_end = FramePacerNow();
     work_profile.input = phase_end - phase_start;
@@ -1969,7 +2379,7 @@ int main(int argc, char **argv) {
       PulseStompHaptic();
     ObserveMsu1MusicState();
     phase_end = FramePacerNow();
-    work_profile.emulation = phase_end - phase_start;
+    work_profile.emulation += phase_end - phase_start;
     if (g_fail || !Dkc1LastLleResult()) {
       char message[160];
       if (g_fail) {
@@ -1980,12 +2390,13 @@ int main(int argc, char **argv) {
                  (unsigned)Dkc1ResumePc());
       }
       ShowError("DKC1Recomp stopped", message);
+      s_running = 0;
       break;
     }
     phase_start = phase_end;
     Dkc1DrawPpuFrame();
     phase_end = FramePacerNow();
-    work_profile.ppu = phase_end - phase_start;
+    work_profile.ppu += phase_end - phase_start;
     phase_start = phase_end;
     s_host_frame++;
     Dkc1BlankScanFrame(s_host_frame, s_pixels, s_width,
@@ -2000,12 +2411,18 @@ int main(int argc, char **argv) {
     Dkc1DebugDumpFrame((int)s_host_frame);
     Dkc1FlightRecorderRecord(s_host_frame, input);
     phase_end = FramePacerNow();
-    work_profile.diagnostics = phase_end - phase_start;
+    work_profile.diagnostics += phase_end - phase_start;
     phase_start = phase_end;
     PumpAudio();
     phase_end = FramePacerNow();
-    work_profile.audio = phase_end - phase_start;
-    phase_start = phase_end;
+    work_profile.audio += phase_end - phase_start;
+    } /* canonical subframes; only the completed endpoint is submitted */
+    if (!s_running) break;
+    if (s_assist_test_log) fprintf(s_assist_test_log,
+        "%ld forward host=%ld guest=%u fast=%d history=%zu\n",
+        s_assist_test_tick, s_host_frame, snes_frame_counter,
+        s_fast_forward, s_rewind.count);
+    phase_start = FramePacerNow();
     if (EnvironmentEnabled("DKC1_LIVE_TITLE") &&
         (s_host_frame % 60) == 0)
       UpdateWindowTitle();
@@ -2070,6 +2487,17 @@ int main(int argc, char **argv) {
                         s_reanchor_pacer || s_paused);
       s_reanchor_pacer = s_paused ? 1 : 0;
     }
+    const char *pause_after = getenv("DKC1_PAUSE_AFTER_FRAME");
+    if (pause_after && s_host_frame == strtol(pause_after, NULL, 10)) {
+      s_paused = 1;
+      s_step_once = 0;
+      Dkc1InputPlaybackFree(&s_input_playback);
+      Dkc1InputPlaybackFree(&s_assist_test_input);
+      s_host_actions = s_previous_host_actions = 0;
+      StopControllerRumble();
+      ResetAudioTimeline();
+      UpdateTitle();
+    }
     if (s_smoke_test_frames > 0 && s_host_frame >= s_smoke_test_frames) {
       snprintf(s_status, sizeof s_status,
                "smoke test complete at frame %ld", s_host_frame);
@@ -2079,6 +2507,9 @@ int main(int argc, char **argv) {
     s_step_once = 0;
   }
 
+  const char *final_state = getenv("DKC1_SAVESTATE_OUTPUT");
+  if (final_state && *final_state && !RtlSaveSnapshot(final_state))
+    fprintf(stderr, "final snapshot failed: %s\n", final_state);
   FramePacerPrintStats(&pacer);
   DisplayPacerPrintStats(&display_pacer);
   PacingLogClose(&pacing_log);

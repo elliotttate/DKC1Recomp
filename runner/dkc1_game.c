@@ -1,11 +1,16 @@
+#include "dkc1_hd_sprites.h"
+#include "dkc1_hd_scene.h"
 #include "dkc1_game.h"
-#include "dkc1_baby_kong.h"
 #include "dkc1_video.h"
+#include "dkc1_terrain.h"
+#include "dkc1_wall_seams.h"
+#include "dkc1_shadow_window.h"
 #include "dkc1_ws_trace.h"
 
 #include "common_cpu_infra.h"
 #include "common_rtl.h"
 #include "cpu_state.h"
+#include "snes/cart.h"
 #include "snes/dma.h"
 #include "snes/interp_bridge.h"
 #include "snes/ppu.h"
@@ -60,7 +65,11 @@ static void Dkc1InterpreterInitialColumnCount(CpuState *cpu,
 }
 
 static void Dkc1Initialize(void) {
-  Dkc1BabyKongInitializeFromEnvironment();
+#ifdef DKC1_DIXIE_VARIANT
+  /* Dixie stores expanded pose and graphics data in linear banks $40-$41.
+   * This variant-only mapper keeps stock HiROM aliases unchanged. */
+  cart_set_hirom_linear_data_banks(g_snes->cart, true);
+#endif
   /* The main engine can reach both initializers while executing through the
    * bank-$00 HiROM interpreter mirror. Generated-C adapters alone therefore
    * miss those entries. Mirror the same two constant substitutions at the
@@ -131,8 +140,6 @@ static void Dkc1RunOneFrame(void) {
     s_last_lle_result =
         interp_bridge_run_until_quiescent(&g_cpu, s_resume_pc);
   }
-
-  Dkc1BabyKongApplyMoves(g_ram);
 
   interp_bridge_set_master_deadline(0);
   s_resume_pc = interp_bridge_lle_resume_pc();
@@ -746,6 +753,13 @@ static uint16_t Dkc1ReadWram16(uint16_t address) {
          ((uint16_t)g_ram[(uint16_t)(address + 1u)] << 8);
 }
 
+/* Independently gated until the complete cross-layout promotion corpus has
+ * passed. These switches affect presentation only, never cartridge writes. */
+static bool Dkc1WidescreenFeatureEnabled(const char *name) {
+  const char *value = getenv(name);
+  return value && value[0] == '1' && value[1] == '\0';
+}
+
 static bool s_ws_shadow_active;
 static bool s_ws_origin_valid[2];
 static uint32_t s_ws_world_x[2];
@@ -1229,6 +1243,41 @@ static int64_t Dkc1NearestTileDelta(uint32_t source_pixels,
  * outside the cartridge viewport. East margins may use the nearest complete
  * authored block on the path back to the stock edge; this covers a complete
  * offscreen wall block followed by unused transparent map cells. */
+typedef struct Dkc1TerrainContext {
+  uint8_t map_bank, definition_bank;
+  uint16_t map_base, metatile_base, character_base;
+  uint8_t fill[2048];
+} Dkc1TerrainContext;
+
+static bool Dkc1TerrainReadCell(void *opaque, uint32_t x, uint32_t y,
+                               uint16_t *cell) {
+  const Dkc1TerrainContext *ctx = opaque;
+  return Dkc1VideoReadVerticalMetatile(ctx->map_bank, ctx->map_base,
+                                      x, y, cell);
+}
+
+static Dkc1TerrainFill Dkc1TerrainClassifyCell(void *opaque, uint32_t x,
+                                              uint32_t y) {
+  Dkc1TerrainContext *ctx = opaque;
+  uint16_t cell;
+  if (!Dkc1TerrainReadCell(ctx, x, y, &cell))
+    return kDkc1TerrainUnknown;
+  const unsigned id = cell & 0x07ffu;
+  if (ctx->fill[id])
+    return (Dkc1TerrainFill)ctx->fill[id];
+  bool empty, full;
+  if (!Dkc1VideoClassifyLevelMetatile(
+          kDkc1LayoutVertical, ctx->map_bank, ctx->definition_bank,
+          ctx->map_base, ctx->metatile_base, x, y, g_ppu->vram, 0x8000u,
+          ctx->character_base, &empty, &full))
+    return kDkc1TerrainUnknown;
+  const Dkc1TerrainFill fill = empty ? kDkc1TerrainEmpty
+                                  : full ? kDkc1TerrainFull
+                                         : kDkc1TerrainPartial;
+  ctx->fill[id] = (uint8_t)fill;
+  return fill;
+}
+
 static bool Dkc1FindVerticalBoundarySource(
     Dkc1LevelLayout layout, uint8_t map_bank, uint8_t definition_bank,
     uint16_t map_base, uint16_t metatile_base, int side,
@@ -1308,6 +1357,7 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
                                         int presentation_bias,
                                         bool cartridge_stream_ready,
                                         bool *stream_bootstrap_rejected,
+                                        bool *cache_rebased,
                                         Dkc1WsTraceFrame *trace) {
   if (stream_bootstrap_rejected)
     *stream_bootstrap_rejected = false;
@@ -1546,6 +1596,27 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
 
   uint32_t shadow_world_x[2] = {0, 0};
   uint32_t shadow_world_y[2] = {0, 0};
+  /* An upward viewport can leave the finite cache even when every sampled
+   * cartridge tile still calibrates. Rebuild that accepted frame immediately
+   * under a new aligned origin; never carry keys from the old projection.
+   * Keep this separate from soft calibration grace and unproven stream-only
+   * scenes. The ordinary fail-closed path still owns those cases. */
+  bool rebase = false;
+  const bool allow_rebase = calibrated &&
+      Dkc1WidescreenFeatureEnabled("DKC1_WS_SCROLL_REBASE");
+  if (allow_rebase) {
+    for (int layer = 0; layer < 2; layer++) {
+      if (!candidate_valid[layer] || !s_ws_shadow_origin_valid[layer]) continue;
+      if (!Dkc1ShadowWindowContains(
+              s_ws_shadow_origin_x[layer], s_ws_shadow_origin_y[layer],
+              candidate_world_x[layer], candidate_world_y[layer],
+              capture_world_x[layer], capture_world_y[layer],
+              Dkc1VideoExtra(), kWsShadowXTiles * 8u, kWsShadowYTiles * 8u)) {
+        s_ws_shadow_origin_valid[layer] = false;
+        rebase = true;
+      }
+    }
+  }
   /* Select a stable cache window per layer only after calibration accepts
    * this frame. Terrain must cover the complete camera range; an independent
    * parallax plane is centered around its own coordinates so a low-Y sky can
@@ -1626,6 +1697,11 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
 
   /* Phase 2 commits only an accepted frame. A rejected candidate cannot
    * capture tiles, move origins, or seed data that a later scene observes. */
+  if (rebase) {
+    s_ws_shadow_active = false;
+    *cache_rebased = true;
+    if (trace) trace->cache_rebase = true;
+  }
   if (!s_ws_shadow_active) {
     if (trace) trace->cold_start = true;
     WsShadowReset();
@@ -1689,6 +1765,23 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
   }
 
   WsShadowFrame(g_ppu);
+  if (rebase) {
+    /* The water HDMA can move VOFS by one pixel during the visible frame.
+     * At fine Y=7 its final line reaches the row after the generic 29-row
+     * capture. Preserve the cartridge's native columns on that guard row,
+     * including their partially visible edge tiles. These are live VRAM
+     * entries, not extrapolated ROM art; normal margin prefill follows. */
+    const uint32_t guard_ty = (cartridge_ppu_y >> 3) + 29u;
+    const uint32_t first_tx = cartridge_ppu_x >> 3;
+    const uint32_t last_tx = (cartridge_ppu_x + 255u) >> 3;
+    for (uint32_t tx = first_tx; tx <= last_tx; tx++) {
+      const uint16_t tile = g_ppu->vram[
+          Dkc1RollingMapWord(ppu_map_base, tx, guard_ty) & 0x7fffu];
+      WsShadowCaptureTile(terrain_layer,
+          tx - (s_ws_shadow_origin_x[terrain_layer] >> 3),
+          guard_ty - (s_ws_shadow_origin_y[terrain_layer] >> 3), tile);
+    }
+  }
   if (trace) {
     trace->shadow_commit = true;
     trace->shadow_frame = true;
@@ -1784,6 +1877,36 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
   };
   const uint16_t character_base =
       (uint16_t)PPU_bgTileAdr(g_ppu, terrain_layer);
+  const bool wall_adjacency = accepted_layout == kDkc1LayoutVertical &&
+      Dkc1WidescreenFeatureEnabled("DKC1_WS_WALL_ADJACENCY");
+  Dkc1TerrainContext terrain_context = {
+      .map_bank = map_bank, .definition_bank = accepted_definition_bank,
+      .map_base = map_base, .metatile_base = metatile_base,
+      .character_base = character_base};
+  /* This narrow opt-in capability is bound to the verified map/definition
+   * sources and complete two-column junction bytes. Other populated art is
+   * never inferred to be disposable merely because it is in a margin. */
+  const bool wall_seam_source = accepted_layout == kDkc1LayoutVertical &&
+      map_bank == 0xe9 && accepted_definition_bank == 0xd0 &&
+      map_base == 0 && metatile_base == 0 &&
+      Dkc1WidescreenFeatureEnabled("DKC1_WS_WALL_SEAMS");
+  const bool wall_seam = wall_seam_source &&
+      Dkc1WallSeamSourceMatches(Dkc1TerrainReadCell, &terrain_context);
+  const bool east_wall_seam = wall_seam_source &&
+      Dkc1EastWallSeamSourceMatches(Dkc1TerrainReadCell, &terrain_context);
+  Dkc1TerrainAdjacency adjacency;
+  memset(&adjacency, 0, sizeof adjacency);
+  bool adjacency_attempted = false;
+  /* Rebuild from this frame's source each time: state load and animated
+   * character changes cannot inherit a stale neighbor/fill cache. Only full
+   * visible source rows and the published horizontal camera span contribute;
+   * no whole-bank scan can borrow pairs from another embedded map. */
+  const int64_t source_top = (int64_t)cartridge_ppu_y +
+                             accepted_decode_tile_offset_y * 8;
+  const int64_t source_left = (int64_t)Dkc1ReadWram16(0x1b23) +
+                              accepted_decode_tile_offset_x * 8;
+  const int64_t source_right = (int64_t)Dkc1ReadWram16(0x1b25) + 255 +
+                               accepted_decode_tile_offset_x * 8;
   for (int side = 0; side < 2; side++) {
     const int side_margin_tiles =
         side == 0 ? left_margin_tiles : right_margin_tiles;
@@ -1828,19 +1951,83 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
           const uint32_t decode_edge_metatile_x =
               (uint32_t)signed_decode_edge_wtx >> 2;
           uint32_t source_decode_metatile_x = 0;
-          if (Dkc1FindVerticalBoundarySource(
+          const bool boundary = wall_adjacency
+              ? source_top >= 0 &&
+                Dkc1TerrainSealedVoid(
+                    Dkc1TerrainClassifyCell, &terrain_context, side == 1,
+                    decode_metatile_x, decode_edge_metatile_x,
+                    decode_metatile_y, (uint32_t)source_top >> 5) &&
+                Dkc1TerrainWallSource(
+                    Dkc1TerrainClassifyCell, &terrain_context, side == 1,
+                    decode_metatile_x, decode_edge_metatile_x,
+                    decode_metatile_y, &source_decode_metatile_x)
+              : Dkc1FindVerticalBoundarySource(
                   s_ws_layout, map_bank, accepted_definition_bank, map_base,
                   metatile_base, side, decode_metatile_x,
                   decode_edge_metatile_x, decode_metatile_y, character_base,
-                  &source_decode_metatile_x)) {
+                  &source_decode_metatile_x);
+          if (boundary) {
+            bool chained = false;
+            if (wall_adjacency) {
+              if (!adjacency_attempted) {
+                adjacency_attempted = true;
+                if (source_top >= 0 && source_left >= 0 &&
+                    source_right < 2048) {
+                  Dkc1TerrainBuildAdjacency(
+                      &adjacency, Dkc1TerrainReadCell,
+                      Dkc1TerrainClassifyCell, &terrain_context,
+                      (uint32_t)source_left >> 5,
+                      (uint32_t)source_right >> 5,
+                      ((uint32_t)source_top + 31u) >> 5,
+                      ((uint32_t)source_top + kDkc1VideoHeight) / 32u - 1u);
+                }
+              }
+              uint16_t cell, next;
+              const unsigned steps = side == 1
+                  ? decode_metatile_x - source_decode_metatile_x
+                  : source_decode_metatile_x - decode_metatile_x;
+              chained = Dkc1TerrainReadCell(
+                  &terrain_context, source_decode_metatile_x,
+                  decode_metatile_y, &cell) &&
+                  Dkc1TerrainContinue(&adjacency, cell, side == 1,
+                                      steps, &next) &&
+                  Dkc1VideoDecodeMetatileCell(
+                      accepted_definition_bank, metatile_base, next,
+                      (uint32_t)signed_decode_wtx & 3u,
+                      (uint32_t)signed_decode_wty & 3u, &entry);
+              if (chained && trace)
+                trace->boundary_adjacency_tiles++;
+            }
             const uint32_t source_decode_wtx =
                 source_decode_metatile_x * 4u +
                 ((uint32_t)signed_decode_wtx & 3u);
-            if (Dkc1VideoDecodeLevelTile(
+            if ((chained || (!wall_adjacency && Dkc1VideoDecodeLevelTile(
                     s_ws_layout, map_bank, accepted_definition_bank, map_base,
                     metatile_base, source_decode_wtx,
-                    (uint32_t)signed_decode_wty, &entry) && trace)
+                    (uint32_t)signed_decode_wty, &entry))) && trace)
               trace->boundary_continuation_tiles++;
+          }
+        }
+        if ((side == 0 ? wall_seam : east_wall_seam) && beyond_native_edge &&
+            signed_decode_wtx >= 0 && signed_decode_wty >= 0 &&
+            signed_decode_edge_wtx >= 0) {
+          uint32_t donor_x = 28u, donor_y;
+          const bool found = side == 0 ? Dkc1WallSeamDonorRow(
+                  (uint32_t)signed_decode_wtx >> 2,
+                  (uint32_t)signed_decode_wty >> 2,
+                  (uint32_t)signed_decode_edge_wtx >> 2, &donor_y)
+              : Dkc1EastWallSeamDonor(
+                  (uint32_t)signed_decode_wtx >> 2,
+                  (uint32_t)signed_decode_wty >> 2,
+                  (uint32_t)signed_decode_edge_wtx >> 2, &donor_x, &donor_y);
+          if (found) {
+            uint16_t donor;
+            if (Dkc1TerrainReadCell(&terrain_context, donor_x, donor_y, &donor) &&
+                Dkc1VideoDecodeMetatileCell(
+                    accepted_definition_bank, metatile_base, donor,
+                    (uint32_t)signed_decode_wtx & 3u,
+                    (uint32_t)signed_decode_wty & 3u, &entry) && trace)
+              trace->wall_seam_tiles++;
           }
         }
         const uint32_t origin_tx =
@@ -1901,6 +2088,15 @@ void Dkc1DrawPpuFrame(void) {
   }
 
   /* Widescreen is host-only presentation policy, reapplied every frame. */
+  trace.presentation_features =
+      (Dkc1WidescreenFeatureEnabled("DKC1_WS_PIXEL_BOUNDARIES")
+           ? kWsShadowPixelBoundaries : 0u) |
+      (Dkc1WidescreenFeatureEnabled("DKC1_WS_LIVE_SCROLL")
+           ? kWsShadowLiveScroll : 0u) |
+      (Dkc1WidescreenFeatureEnabled("DKC1_WS_WALL_ADJACENCY") ? 4u : 0u) |
+      (Dkc1WidescreenFeatureEnabled("DKC1_WS_SCROLL_REBASE") ? 8u : 0u) |
+      (Dkc1WidescreenFeatureEnabled("DKC1_WS_WALL_SEAMS") ? 16u : 0u);
+  WsShadowSetPresentationPolicy(trace.presentation_features);
   uint8_t wide_layer_mask =
       Dkc1VideoIsWidescreen()
           ? Dkc1VideoPpuWideLayerMask(g_ppu->bgmode, g_ppu->bgXsc,
@@ -1928,14 +2124,21 @@ void Dkc1DrawPpuFrame(void) {
       wide_layer_mask != 0 && !debug_forced_fallback &&
       Dkc1VideoCartridgeTerrainReady(g_ram);
   bool stream_bootstrap_rejected = false;
+  bool cache_rebased = false;
   const bool shadow_world_ready =
       wide_layer_mask != 0 && !debug_forced_fallback &&
       Dkc1PrepareWidescreenShadow(wide_layer_mask, presentation_bias,
                                   cartridge_stream_ready,
-                                  &stream_bootstrap_rejected,
+                                  &stream_bootstrap_rejected, &cache_rebased,
                                   trace_enabled ? &trace : NULL);
   Dkc1VideoGetStreamCoverageStats(&trace.stream_coverage);
-  const bool extend_world = shadow_world_ready;
+  /* Banana Hoard camera bounds are a single point, so the rolling-map
+   * shadow correctly refuses calibration. Its BG1/BG3 tilemaps are already
+   * 64 columns of authored cave. Show those host pixels only; do not mark
+   * terrain-ready or rewrite cartridge streaming. */
+  const bool hoard_fixed_wide =
+      Dkc1VideoIsWidescreen() && Dkc1HdHoardSceneEligible(g_ram);
+  const bool extend_world = shadow_world_ready || hoard_fixed_wide;
   trace.cartridge_stream_ready = cartridge_stream_ready;
   if (trace_enabled) {
     trace.selected_layout = s_ws_layout;
@@ -1967,6 +2170,8 @@ void Dkc1DrawPpuFrame(void) {
                                  g_ppu->screenEnabled[1]) & 0x07u);
     uint8_t repeat_mask = 0;
     uint8_t physical_wide_mask = 0;
+    const bool hoard_mirror =
+        hoard_fixed_wide && !shadow_world_ready;
     for (int layer = 0; layer < 3; layer++) {
       const uint8_t bit = (uint8_t)(1u << layer);
       if (!(enabled & bit))
@@ -1977,7 +2182,12 @@ void Dkc1DrawPpuFrame(void) {
        * repeat there, as a bounded plane would. */
       const bool raw_past_wall =
           layer == 2 && edge.beyond_extent && edge_policy != kDkc1EdgeShift;
-      if (PPU_bgTilemapWider(g_ppu, layer) != 0 && !raw_past_wall)
+      /* Banana Hoard: the 64-column ring is a different cave stretch, not
+       * the neighbor of this locked 256. Draw the wide line so the mirror
+       * has a buffer, then replace both margins from the 4:3 tiles. */
+      if (hoard_mirror)
+        physical_wide_mask = (uint8_t)(physical_wide_mask | bit);
+      else if (PPU_bgTilemapWider(g_ppu, layer) != 0 && !raw_past_wall)
         physical_wide_mask = (uint8_t)(physical_wide_mask | bit);
       else
         repeat_mask = (uint8_t)(repeat_mask | bit);
@@ -1996,7 +2206,21 @@ void Dkc1DrawPpuFrame(void) {
      * columns mirrored about the wall's screen position. Only the terrain
      * layer scrolls with the camera; a parallax plane keeps its periodic
      * continuation, and a bounded plane its hardware wrap. */
-    if (edge_policy == kDkc1EdgeReflect && edge.beyond_extent) {
+    if (hoard_mirror) {
+      PpuSetWidescreenLayerRepeat(g_ppu, 0);
+      repeat_mask = 0;
+      const int left_axis = Dkc1LockedInteriorLeftAxis();
+      for (int layer = 0; layer < 3; layer++) {
+        if (!(enabled & (uint8_t)(1u << layer)))
+          continue;
+        /* Left wall: Jungle inset reflection of the authored 256. Right
+         * opening: continue the last 4:3 column; flipping it draws a seam
+         * through the cave mouth. */
+        PpuSetWidescreenLayerMirrorAxis(g_ppu, (uint8_t)layer, left_axis,
+                                        kDkc1EdgeAxisOffRight);
+        PpuSetWidescreenLayerRightEdgeClamp(g_ppu, (uint8_t)layer, true);
+      }
+    } else if (edge_policy == kDkc1EdgeReflect && edge.beyond_extent) {
       const int terrain_layer = Dkc1VideoTerrainLayer(
           wide_layer_mask, g_ppu->bgXsc, Dkc1ReadWram16(0x1b13));
       if (terrain_layer >= 0)
@@ -2006,7 +2230,11 @@ void Dkc1DrawPpuFrame(void) {
     trace.render_layer_mask = render_mask;
     trace.repeat_layer_mask = repeat_mask;
     trace.edge_extension = true;
-    Dkc1VideoSetTerrainReady(true);
+    /* Preserve the cartridge adapter's previous one-frame fallback gate.
+     * Rescuing host pixels must not silently widen activation on this frame. */
+    Dkc1VideoSetTerrainReady(hoard_fixed_wide && !shadow_world_ready
+                                 ? false
+                                 : !cache_rebased);
   } else if (Dkc1VideoIsWidescreen()) {
     trace.centered_fallback = true;
     Dkc1RejectWidescreenShadow();
@@ -2032,7 +2260,7 @@ void Dkc1DrawPpuFrame(void) {
     PpuSetWidescreenPresentationXBias(g_ppu, 0);
   }
 
-  Dkc1BabyKongPrepareFrame(g_ppu, g_ram, presentation_bias);
+  Dkc1HdPrepare(g_ppu, g_ram, presentation_bias);
 
   dma_startDma(g_dma, g_snesrecomp_last_hdmaen, true);
   WsShadowDebugBeginFrame();
@@ -2049,6 +2277,7 @@ void Dkc1DrawPpuFrame(void) {
             (uint16_t)(g_ppu->hScroll[layer] + presentation_bias);
     }
     ppu_runLine(g_ppu, line);
+    Dkc1HdCaptureLine(g_ppu, line);
     if (extend_world && presentation_bias != 0) {
       for (int layer = 0; layer < 4; layer++)
         g_ppu->hScroll[layer] =
@@ -2078,7 +2307,7 @@ void Dkc1DrawPpuFrame(void) {
     }
   }
 
-  Dkc1BabyKongDrawFrame(g_ppu);
+  Dkc1HdFinish(g_ppu);
 
   /* Model the VBlank boundary after the visible lines so the PPU reloads its
    * internal OAM port from OAMADD before the next frame's OAM DMA. */

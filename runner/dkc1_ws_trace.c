@@ -183,7 +183,7 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"definition_bank\":%d,\"decode_tile_offset\":[%d,%d],"
       "\"grace\":%d},"
       "\"decision\":{\"reset\":%u,\"cold_start\":%u,"
-      "\"source_reset\":%u,\"identity_reset\":%u,"
+      "\"cache_rebase\":%u,\"source_reset\":%u,\"identity_reset\":%u,"
       "\"bounds_ready\":%u,"
       "\"calibration_accepted\":%u,\"grace_accepted\":%u,"
       "\"stream_revalidated\":%u,"
@@ -204,6 +204,7 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       "\"shadow_origin\":[{\"valid\":%u,\"x\":%u,\"y\":%u},"
       "{\"valid\":%u,\"x\":%u,\"y\":%u}],"
       "\"margin_tiles\":%d,\"boundary_continuation_tiles\":%d,"
+      "\"boundary_adjacency_tiles\":%d,\"wall_seam_tiles\":%d,\"presentation_features\":%u,"
       "\"shadow_delta\":[",
       frame->frame, (unsigned)ReadWram16(0x0032),
       (unsigned)ReadWram16(0x0030), (unsigned)ReadWram16(0x003e),
@@ -253,6 +254,7 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       frame->decode_tile_offset_x, frame->decode_tile_offset_y,
       frame->layout_grace,
       frame->reset ? 1u : 0u, frame->cold_start ? 1u : 0u,
+      frame->cache_rebase ? 1u : 0u,
       frame->source_reset ? 1u : 0u, frame->identity_reset ? 1u : 0u,
       frame->bounds_ready ? 1u : 0u,
       frame->calibration_accepted ? 1u : 0u,
@@ -286,7 +288,8 @@ void Dkc1WsTraceEmit(const Dkc1WsTraceFrame *frame) {
       frame->shadow_origin_x[0], frame->shadow_origin_y[0],
       frame->shadow_origin_valid[1] ? 1u : 0u,
       frame->shadow_origin_x[1], frame->shadow_origin_y[1],
-      frame->margin_tiles, frame->boundary_continuation_tiles);
+      frame->margin_tiles, frame->boundary_continuation_tiles,
+      frame->boundary_adjacency_tiles, frame->wall_seam_tiles, frame->presentation_features);
   PrintShadow(s_trace_file, &frame->shadow_before[0],
               &frame->shadow_after[0]);
   fputc(',', s_trace_file);

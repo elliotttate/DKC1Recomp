@@ -16,9 +16,7 @@ cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:interp_bridge.obj ..\..\snesrecomp\runne
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_video.obj ..\..\runner\dkc1_video.c
 if errorlevel 1 exit /b 1
-cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_baby_kong.obj ..\..\runner\dkc1_baby_kong.c
-if errorlevel 1 exit /b 1
-cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_baby_kong_movement.obj ..\..\runner\dkc1_baby_kong_movement.c
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_dixie_mod.obj ..\..\runner\dkc1_dixie_mod.c
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_margin_proxy.obj ..\..\runner\dkc1_margin_proxy.c
 if errorlevel 1 exit /b 1

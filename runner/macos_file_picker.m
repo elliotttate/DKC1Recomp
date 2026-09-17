@@ -1,4 +1,5 @@
 #import "macos_file_picker.h"
+#include "dkc1_dixie_mod.h"
 
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -6,6 +7,54 @@
 
 #include <stdlib.h>
 #include <string.h>
+
+int Dkc1MacSavedHdTexturesEnabled(void) {
+  const char *override=getenv("DKC1_HD_SPRITES");
+  if(override && *override)return !strcmp(override,"1");
+  NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
+  if(![defaults objectForKey:@"DKC1HdTexturesEnabled"])return 0;
+  return [defaults boolForKey:@"DKC1HdTexturesEnabled"] ? 1 : 0;
+}
+
+void Dkc1MacSetHdTexturesEnabled(int enabled) {
+  [[NSUserDefaults standardUserDefaults]
+      setBool:enabled != 0 forKey:@"DKC1HdTexturesEnabled"];
+}
+
+void Dkc1MacConfigureHdExperiment(void) {
+  @autoreleasepool {
+    NSBundle *bundle=[NSBundle mainBundle];
+    BOOL nanoPreview=[bundle.bundleIdentifier isEqualToString:@"com.flat2vr.dkc1recomp.hd.nano-preview"];
+    BOOL hdExperiment=[bundle.bundleIdentifier isEqualToString:@"com.flat2vr.dkc1recomp.hdexperiment"] ||
+      [[[NSProcessInfo processInfo] processName] isEqualToString:@"DKC1Recomp-HD-Dixie"];
+    if(!nanoPreview && !hdExperiment)return;
+    NSString *root=[bundle.resourcePath stringByAppendingPathComponent:@"HDScene"];
+    NSString *pack=[root stringByAppendingPathComponent:@"Materials"];
+    NSFileManager *fm=[NSFileManager defaultManager];
+    BOOL currentPack=[fm fileExistsAtPath:[pack stringByAppendingPathComponent:@"preload.txt"]];
+    BOOL legacyPack=[fm fileExistsAtPath:[pack stringByAppendingPathComponent:@"pack-manifest.json"]];
+    if(!currentPack && !legacyPack)return;
+    NSString *support=[NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,NSUserDomainMask,YES) firstObject];
+    const char *userOverride=getenv("DKC1_USER_DIR");
+    NSString *user=userOverride && *userOverride ? [NSString stringWithUTF8String:userOverride] :
+      [support stringByAppendingPathComponent:nanoPreview ? @"DKC1 HD Nano Preview" : @"DKC1Recomp HD Experiment"];
+    if(Dkc1DixieIsVariant() && ![user.lastPathComponent isEqualToString:@"Dixie"])
+      user=[user stringByAppendingPathComponent:@"Dixie"];
+    [fm createDirectoryAtPath:user withIntermediateDirectories:YES attributes:nil error:nil];
+    setenv("DKC1_USER_DIR",user.fileSystemRepresentation,1);
+    setenv("DKC1_HD_SCENE_PACK",pack.fileSystemRepresentation,0);
+    setenv("DKC1_HD_PACK",pack.fileSystemRepresentation,0);
+    if(!getenv("DKC1_HD_SPRITES"))
+      setenv("DKC1_HD_SPRITES",Dkc1MacSavedHdTexturesEnabled()?"1":"0",1);
+    setenv("DKC1_HD_SCENE","1",0);
+    if(currentPack) {
+      setenv("DKC1_HD_SCENE_PRELOAD","1",0);
+      setenv("DKC1_HD_EXACT_CENTERS","1",0);
+      setenv("DKC1_HD_CONNECTED_WORLD","1",0);
+    }
+    setenv("DKC1_UPSCALER","nearest",0);setenv("DKC1_DISPLAY","flat",0);setenv("DKC1_SCREEN","raw",0);
+  }
+}
 
 @interface Dkc1MenuController : NSObject
 - (void)runCommand:(id)sender;
@@ -241,6 +290,7 @@ void Dkc1MacInstallMenu(void) {
     AddSubmenu(bar, @"DKC1Recomp", app);
 
     NSMenu *game = [[NSMenu alloc] initWithTitle:@"Game"];
+    AddCommand(game, @"Controls and Assist…", kDkc1MacMenuControls, @",", NSEventModifierFlagCommand);
     AddCommand(game, @"Pause", kDkc1MacMenuPause, @"p",
                NSEventModifierFlagCommand);
     AddCommand(game, @"Step One Frame", kDkc1MacMenuStep, @".",
@@ -253,14 +303,15 @@ void Dkc1MacInstallMenu(void) {
     [game addItem:[NSMenuItem separatorItem]];
     AddCommand(game, @"Export Repro Bundle", kDkc1MacMenuExportRepro, @"",
                0);
+    AddCommand(game,@"Pause Menu…",kDkc1MacMenuPauseMenu,@"",0);
     AddSubmenu(bar, @"Game", game);
 
     NSMenu *mods = [[NSMenu alloc] initWithTitle:@"Mods"];
-    AddCommand(mods, @"Baby Kong", kDkc1MacMenuToggleBabyKong, @"b",
+    AddCommand(mods, @"Dixie Kong Country", kDkc1MacMenuToggleDixie, @"d",
                NSEventModifierFlagCommand | NSEventModifierFlagShift);
-    [mods addItem:[NSMenuItem separatorItem]];
-    AddCommand(mods, @"Choose DKC3 ROM…",
-               kDkc1MacMenuChooseBabyKongRom, @"", 0);
+    AddCommand(mods, @"Upscaled HD Textures (Jungle Hijinxs only)",
+               kDkc1MacMenuToggleHdTextures, @"h",
+               NSEventModifierFlagCommand | NSEventModifierFlagShift);
     AddSubmenu(bar, @"Mods", mods);
 
     NSMenu *music = [[NSMenu alloc] initWithTitle:@"Music"];
@@ -293,17 +344,29 @@ void Dkc1MacInstallMenu(void) {
     AddCommand(layers, @"Sprites Only", kDkc1MacMenuLayerObj, @"", 0);
 
     NSMenu *view = [[NSMenu alloc] initWithTitle:@"View"];
+    AddCommand(view,@"Graphics Settings…",kDkc1MacMenuGraphics,@"",0);
     AddCommand(view, @"Enter Full Screen", kDkc1MacMenuFullscreen, @"f",
                NSEventModifierFlagControl | NSEventModifierFlagCommand);
     NSMenu *fullscreenScaling =
-        [[NSMenu alloc] initWithTitle:@"Full Screen Scaling"];
+        [[NSMenu alloc] initWithTitle:@"Upscaler"];
     AddCommand(fullscreenScaling, @"Smooth (Linear)",
                kDkc1MacMenuFullscreenSmooth, @"", 0);
     AddCommand(fullscreenScaling, @"Sharp Bilinear",
                kDkc1MacMenuFullscreenSharpBilinear, @"", 0);
     AddCommand(fullscreenScaling, @"Pixel Sharp (Nearest)",
                kDkc1MacMenuFullscreenPixelSharp, @"", 0);
-    AddSubmenu(view, @"Full Screen Scaling", fullscreenScaling);
+    AddCommand(fullscreenScaling,@"Reconstruct",kDkc1MacMenuUpscalerReconstruct,@"",0);
+    AddSubmenu(view, @"Upscaler", fullscreenScaling);
+    NSMenu *display=[[NSMenu alloc] initWithTitle:@"Display"];
+    AddCommand(display,@"Flat Panel",kDkc1MacMenuDisplayFlat,@"",0);
+    AddCommand(display,@"CRT Television",kDkc1MacMenuDisplayCrt,@"",0);
+    AddSubmenu(view,@"Display",display);
+    NSMenu *colors=[[NSMenu alloc] initWithTitle:@"Phosphor Colors"];
+    AddCommand(colors,@"Raw",kDkc1MacMenuScreenRaw,@"",0);
+    AddCommand(colors,@"CRT",kDkc1MacMenuScreenCrt,@"",0);
+    AddCommand(colors,@"Composite",kDkc1MacMenuScreenComposite,@"",0);
+    AddCommand(colors,@"Trinitron",kDkc1MacMenuScreenTrinitron,@"",0);
+    AddSubmenu(view,@"Phosphor Colors",colors);
     [view addItem:[NSMenuItem separatorItem]];
     AddSubmenu(view, @"Aspect Ratio", aspect);
     AddSubmenu(view, @"Level Edge", edge);
@@ -320,8 +383,8 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
                             Dkc1MacFullscreenScaling fullscreen_scaling,
                             Dkc1VideoAspect aspect, Dkc1EdgePolicy edge,
                             unsigned char layer_mask, int provenance,
-                            int replacement_music, int baby_kong_enabled,
-                            int baby_kong_ready) {
+                            int replacement_music, int dixie_enabled,
+                            int hd_textures_enabled) {
   if (!s_menu_controller)
     return;
   s_menu_items[kDkc1MacMenuPause].title = paused ? @"Resume" : @"Pause";
@@ -383,10 +446,10 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
       stringForKey:@"DKC1Msu1Directory"];
   s_menu_items[kDkc1MacMenuDisableMusicPack].enabled =
       replacement_music != 0 || configuredMusic.length != 0;
-  s_menu_items[kDkc1MacMenuToggleBabyKong].state =
-      baby_kong_enabled ? NSControlStateValueOn : NSControlStateValueOff;
-  s_menu_items[kDkc1MacMenuToggleBabyKong].title =
-      baby_kong_ready ? @"Baby Kong" : @"Baby Kong (choose DKC3 ROM…)";
+  s_menu_items[kDkc1MacMenuToggleDixie].state =
+      dixie_enabled ? NSControlStateValueOn : NSControlStateValueOff;
+  s_menu_items[kDkc1MacMenuToggleHdTextures].state =
+      hd_textures_enabled ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
 int Dkc1MacDisplayLinkStart(void *native_window, double preferred_fps) {
@@ -514,70 +577,6 @@ char *Dkc1MacChooseRom(void) {
   }
 }
 
-char *Dkc1MacChooseBabyKongRom(void) {
-  @autoreleasepool {
-    [NSApplication sharedApplication];
-    [NSApp activateIgnoringOtherApps:YES];
-
-    NSOpenPanel *panel = [NSOpenPanel openPanel];
-    panel.title = @"Choose your Donkey Kong Country 3 ROM";
-    panel.message =
-        @"Baby Kong requires the headerless North American (En,Fr) .sfc ROM. "
-         "The ROM is read in memory and is never copied into DKC1Recomp.";
-    panel.prompt = @"Use for Baby Kong";
-    panel.canChooseDirectories = NO;
-    panel.canChooseFiles = YES;
-    panel.allowsMultipleSelection = NO;
-    panel.allowedContentTypes = @[
-      [UTType typeWithFilenameExtension:@"sfc"],
-      [UTType typeWithFilenameExtension:@"smc"]
-    ];
-    if ([panel runModal] != NSModalResponseOK)
-      return NULL;
-    return CopyFileSystemPath(panel.URL.path);
-  }
-}
-
-char *Dkc1MacSavedBabyKongRom(void) {
-  @autoreleasepool {
-    NSString *path = [[NSUserDefaults standardUserDefaults]
-        stringForKey:@"DKC1BabyKongRom"];
-    if (!path.length || ![[NSFileManager defaultManager]
-                            isReadableFileAtPath:path])
-      return NULL;
-    return CopyFileSystemPath(path);
-  }
-}
-
-void Dkc1MacSetBabyKongRom(const char *path) {
-  @autoreleasepool {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    if (path && *path) {
-      NSString *value = [NSString stringWithUTF8String:path];
-      if (value)
-        [defaults setObject:value forKey:@"DKC1BabyKongRom"];
-    } else {
-      [defaults removeObjectForKey:@"DKC1BabyKongRom"];
-    }
-    [defaults synchronize];
-  }
-}
-
-int Dkc1MacSavedBabyKongEnabled(void) {
-  @autoreleasepool {
-    return [[NSUserDefaults standardUserDefaults]
-        boolForKey:@"DKC1BabyKongEnabled"] ? 1 : 0;
-  }
-}
-
-void Dkc1MacSetBabyKongEnabled(int enabled) {
-  @autoreleasepool {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [defaults setBool:enabled != 0 forKey:@"DKC1BabyKongEnabled"];
-    [defaults synchronize];
-  }
-}
-
 char *Dkc1MacSavedMsu1(void) {
   @autoreleasepool {
     NSString *path = [[NSUserDefaults standardUserDefaults]
@@ -681,4 +680,13 @@ void Dkc1MacSetFullscreenScaling(Dkc1MacFullscreenScaling scaling) {
     [defaults setInteger:scaling forKey:@"DKC1FullscreenScaling"];
     [defaults synchronize];
   }
+}
+
+void Dkc1MacUpdateGraphicsMenuState(int display,int upscaler,int screen) {
+  const int scalers[]={kDkc1MacMenuFullscreenPixelSharp,kDkc1MacMenuFullscreenSmooth,
+    kDkc1MacMenuUpscalerReconstruct,kDkc1MacMenuFullscreenSharpBilinear};
+  for (int i=0;i<4;i++) { s_menu_items[scalers[i]].state=i==upscaler; s_menu_items[scalers[i]].enabled=display==0; }
+  s_menu_items[kDkc1MacMenuDisplayFlat].state=display==0;
+  s_menu_items[kDkc1MacMenuDisplayCrt].state=display==1;
+  for (int i=0;i<4;i++) s_menu_items[kDkc1MacMenuScreenRaw+i].state=i==screen;
 }

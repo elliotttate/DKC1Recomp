@@ -9,6 +9,9 @@
     "hash"
   ],
   "properties": {
+    "presentation_features": {"type": "integer", "minimum": 0, "maximum": 31},
+    "wall_seam_tiles": {"type": "integer", "minimum": 0},
+    "boundary_adjacency_tiles": {"type": "integer", "minimum": 0},
     "schema": {"const": "dkc1.ws.frame.v1"},
     "frame": {"type": "integer", "minimum": 0},
     "scene": {
@@ -38,6 +41,7 @@
     },
     "decision": {
       "type": "object",
+      "properties": {"cache_rebase": {"type": "integer", "enum": [0, 1]}},
       "required": [
         "reset", "cold_start", "source_reset", "shadow_frame", "prefill",
         "edge_extension", "centered_fallback"

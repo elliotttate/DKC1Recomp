@@ -1,0 +1,7 @@
+# Approach first enemy, jump, face left before contact, spin, land and idle.
+000 * 30
+082 * 75
+083 * 25
+082 * 10
+040 * 100
+000 * 100

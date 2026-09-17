@@ -1,0 +1,12 @@
+# Input-only Jungle entry for SDL DKC1_STARTUP_SCRIPT (also works in stock).
+# Derived from route_jungle.dks; includes settling after the hut drop.
+wait 0032 == 0001 timeout 600
+0 * 5100
+pulse 8 6 120 003e == 00eb timeout 6000
+pulse 8 6 120 003e == 00ec timeout 2000
+pulse 8 6 120 003e == 0016 timeout 2000
+0 * 1500
+pulse 8 8 150 0028 <= 0008 timeout 4000
+wait 1b25 >= 0100 timeout 600
+wait 088b <= 0100 timeout 600
+0 * 270

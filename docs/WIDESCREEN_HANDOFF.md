@@ -1378,3 +1378,25 @@ Widescreen is not release-ready until all of the following are true:
   complete VBlank later.
 - Do not hide wide/native WRAM divergence under an ignore list before
   classifying the first actor/state difference.
+
+## Aquatic presentation candidate (2026-09-06)
+
+The independently default-off `DKC1_WS_PIXEL_BOUNDARIES=1`,
+`DKC1_WS_LIVE_SCROLL=1`, and `DKC1_WS_WALL_ADJACENCY=1` backports are documented
+in [the aquatic validation record](WIDESCREEN_AQUATIC_BACKPORTS.md). The trace
+records root `presentation_features` bits 1/2/4 and
+`boundary_adjacency_tiles` (also part of `boundary_continuation_tiles`).
+Headless/layer capture accept `DKC1_ASPECT=16:10` with widescreen enabled.
+Native-edge and scanline-scroll evidence passes for the preserved aquatic
+branches; wall continuation is model-tested only. The complete 40-entrance
+floor remains unpassed because 36 required clean anchors are unavailable.
+
+## September 6 host and aquatic follow-up
+
+See [host ports](HOST_ADOPTION_IMPLEMENTATION.md) and [the reproduced water flash](WIDESCREEN_WATER_FLASH.md). The updated separate candidate starts paused with all four presentation switches enabled. Two upward cache crossings are repaired, guest-state hashes remain exact against the disabled policy, and source changes remain uncommitted.
+
+## Coral Capers save follow-up (September 6, 2026)
+
+The user's newer state is **Coral Capers**, `$0061/$00BF`, frame 34978, camera 943/10113. Its left-edge join comes from adjacent authored map regions, not cache history. The narrowly guarded `DKC1_WS_WALL_SEAMS=1` playtest capability uses the same wall's lower three-row pattern and preserves all native pixels/guest hashes. The exact save and two-aspect scrolling pass; same-level fresh entry remains unverified. See [WIDESCREEN_WALL_SEAM.md](WIDESCREEN_WALL_SEAM.md). No source defaults or commits were promoted.
+
+The subsequent right-edge save (frame 78551, camera 671/10048) views the opposite face of that junction. The same opt-in now supplies the matching right-wall interior from verified donor triples, fixing the seam and blue gap. Native/left/guest hashes stay exact; the prior left-seam routes remain unchanged. The normal app is rebuilt and visibly verified at the new save. Same-level fresh entry remains unverified; see the right-facing follow-up in the wall-seam record.

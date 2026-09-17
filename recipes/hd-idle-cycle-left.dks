@@ -1,0 +1,4 @@
+# Turn left, then full idle/chest-beating cycle and return.
+000 * 30
+040 * 16
+000 * 614

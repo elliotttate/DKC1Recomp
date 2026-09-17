@@ -12,13 +12,14 @@ typedef enum Dkc1MacFullscreenScaling {
 
 enum Dkc1MacMenuCommand {
   kDkc1MacMenuQuit = 1,
+  kDkc1MacMenuControls,
   kDkc1MacMenuPause,
   kDkc1MacMenuStep,
   kDkc1MacMenuQuickSave,
   kDkc1MacMenuQuickLoad,
   kDkc1MacMenuExportRepro,
-  kDkc1MacMenuToggleBabyKong,
-  kDkc1MacMenuChooseBabyKongRom,
+  kDkc1MacMenuToggleDixie,
+  kDkc1MacMenuToggleHdTextures,
   kDkc1MacMenuChooseMusicPack,
   kDkc1MacMenuDisableMusicPack,
   kDkc1MacMenuFullscreen,
@@ -38,18 +39,26 @@ enum Dkc1MacMenuCommand {
   kDkc1MacMenuEdgeBars,
   kDkc1MacMenuEdgeShift,
   kDkc1MacMenuEdgeGlide,
+  kDkc1MacMenuGraphics,
+  kDkc1MacMenuPauseMenu,
+  kDkc1MacMenuUpscalerReconstruct,
+  kDkc1MacMenuDisplayFlat,
+  kDkc1MacMenuDisplayCrt,
+  kDkc1MacMenuScreenRaw,
+  kDkc1MacMenuScreenCrt,
+  kDkc1MacMenuScreenComposite,
+  kDkc1MacMenuScreenTrinitron,
   kDkc1MacMenuCommandCount
 };
 
 /* Returns a malloc-owned UTF-8 path, or NULL when the panel is cancelled. */
 char *Dkc1MacChooseRom(void);
-
-/* Baby Kong uses a user-owned DKC3 ROM as its in-memory sprite source. */
-char *Dkc1MacChooseBabyKongRom(void);
-char *Dkc1MacSavedBabyKongRom(void);
-void Dkc1MacSetBabyKongRom(const char *path);
-int Dkc1MacSavedBabyKongEnabled(void);
-void Dkc1MacSetBabyKongEnabled(int enabled);
+/* Dedicated local HD bundle only; absent private resources leave it inert. */
+void Dkc1MacConfigureHdExperiment(void);
+/* The incomplete HD texture preview is opt-in and persists as a host-only
+ * preference. DKC1_HD_SPRITES remains an explicit automation override. */
+int Dkc1MacSavedHdTexturesEnabled(void);
+void Dkc1MacSetHdTexturesEnabled(int enabled);
 
 /* Selects an extracted MSU-1 directory or extracts a .msu1 archive into the
  * app's Application Support directory, saves the selection, and returns a
@@ -71,12 +80,13 @@ void Dkc1MacSetWidescreenEdge(Dkc1EdgePolicy policy);
 /* Installs the native menu bar. Dkc1MacMenuCommand is implemented by the
  * SDL host and receives menu actions on the application's main thread. */
 void Dkc1MacInstallMenu(void);
+void Dkc1MacUpdateGraphicsMenuState(int display,int upscaler,int screen);
 void Dkc1MacUpdateMenuState(int paused, int fullscreen,
                             Dkc1MacFullscreenScaling fullscreen_scaling,
                             Dkc1VideoAspect aspect, Dkc1EdgePolicy edge,
                             unsigned char layer_mask, int provenance,
-                            int replacement_music, int baby_kong_enabled,
-                            int baby_kong_ready);
+                            int replacement_music, int dixie_enabled,
+                            int hd_textures_enabled);
 void Dkc1MacMenuCommand(int command);
 
 /* Runs a display-linked cadence source on a private run loop. The SDL host

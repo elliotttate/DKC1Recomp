@@ -397,3 +397,23 @@ collision/interaction alignment, level progression, exits, and deterministic
 replay. Save-state reports from the SuperZSNES project remain valuable as
 route definitions and correctness oracles even though their binary states are
 not directly loadable by this host.
+
+## Aquatic presentation candidate (2026-09-06)
+
+The independently default-off `DKC1_WS_PIXEL_BOUNDARIES=1`,
+`DKC1_WS_LIVE_SCROLL=1`, and `DKC1_WS_WALL_ADJACENCY=1` backports are documented
+in [the aquatic validation record](WIDESCREEN_AQUATIC_BACKPORTS.md). The trace
+records root `presentation_features` bits 1/2/4 and
+`boundary_adjacency_tiles` (also part of `boundary_continuation_tiles`).
+Headless/layer capture accept `DKC1_ASPECT=16:10` with widescreen enabled.
+Native-edge and scanline-scroll evidence passes for the preserved aquatic
+branches; wall continuation is model-tested only. The complete 40-entrance
+floor remains unpassed because 36 required clean anchors are unavailable.
+
+## September 6 upward-scroll candidate
+
+[Croctopus cache-boundary investigation](WIDESCREEN_WATER_FLASH.md) identifies and removes the reproduced black-margin flashes behind `DKC1_WS_SCROLL_REBASE=1`. The 40-entrance promotion floor remains incomplete; standard release defaults retain the previous policy.
+
+## Coral Capers authored wall seam candidate
+
+The separate default-off `DKC1_WS_WALL_SEAMS=1` capability repairs a verified populated-art junction in the supplied Coral Capers save. It uses a complete matching wall pattern from the same source and changes only the offscreen west column. It is not an expansion of generic empty-cell continuation. See [source evidence, validation, and fresh-entry limits](WIDESCREEN_WALL_SEAM.md).
