@@ -10,4 +10,7 @@
              target:(id<MTLTexture>)target viewport:(MTLViewport)viewport
            settings:(Dkc1GraphicsSettings)settings
       commandBuffer:(id<MTLCommandBuffer>)commandBuffer;
+- (BOOL)encodeTexture:(id<MTLTexture>)source target:(id<MTLTexture>)target
+            viewport:(MTLViewport)viewport settings:(Dkc1GraphicsSettings)settings
+       commandBuffer:(id<MTLCommandBuffer>)commandBuffer;
 @end

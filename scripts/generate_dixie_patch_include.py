@@ -4,7 +4,7 @@
 The include is committed deliberately (user-directed exception to the
 "never commit extracted assets" rule) so the mod needs no external patched
 ROM: the variant synthesizes the modded image in memory from the user's
-verified clean DKC1 ROM at startup. See docs/DIXIE_MOD.md.
+verified clean DKC1 ROM at startup. See docs/DIXIE_HD_MAC.md.
 """
 
 import argparse
@@ -28,7 +28,7 @@ def main() -> int:
         " * of the hack's public distribution patch. Committed deliberately so the",
         " * mod needs no external patched ROM: the variant synthesizes the modded",
         " * image in memory from the user's verified clean DKC1 ROM. See",
-        " * docs/DIXIE_MOD.md. Regenerate with:",
+        " * docs/DIXIE_HD_MAC.md. Regenerate with:",
         " *   python scripts/generate_dixie_patch_include.py --ips <patch> --out <inc>",
         " */",
         "#ifndef DKC1_DIXIE_PATCH_INC",

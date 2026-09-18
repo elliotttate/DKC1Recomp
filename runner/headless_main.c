@@ -1,3 +1,8 @@
+#ifdef __APPLE__
+#include "macos_hd_scene.h"
+#endif
+#include "dkc1_hd_sprites.h"
+#include "dkc1_dixie_mod.h"
 #include "dkc1_blank_scan.h"
 #include "dkc1_dixie_mod.h"
 #include "snes/dma.h"
@@ -14,6 +19,7 @@
 #include "common_rtl.h"
 #include "cpu_state.h"
 #include "sha256.h"
+#include "snes/dma.h"
 #include "snes/ppu.h"
 #include "snes/ws_shadow.h"
 #include "snes/apu.h"
@@ -93,6 +99,9 @@ static void TracePc(CpuState *cpu, uint32_t pc24) {
 }
 
 int main(int argc, char **argv) {
+#ifdef DKC1_DIXIE_VARIANT
+  dma_set_zero_size_vram_noop(1);
+#endif
   /* Contain default-named tier2 discovery captures instead of littering
    * the working directory; explicit env settings are respected. */
   if (!getenv("SNESRECOMP_TIER2_DIR") && !getenv("SNESRECOMP_TIER2_MANIFEST")) {
@@ -131,8 +140,6 @@ int main(int argc, char **argv) {
   size_t rom_size = 0;
   char rom_error[160];
 #ifdef DKC1_DIXIE_VARIANT
-  /* The variant synthesizes the modded ROM image from the clean ROM
-   * argument (no patched-ROM file needed). */
   uint8_t *rom =
       Dkc1DixieLoadRom(argv[1], &rom_size, rom_error, sizeof rom_error);
 #else
@@ -147,6 +154,9 @@ int main(int argc, char **argv) {
   const char *widescreen_text = getenv("DKC1_WIDESCREEN");
   Dkc1VideoSetWidescreen(
       widescreen_text && *widescreen_text && *widescreen_text != '0');
+#ifdef DKC1_DIXIE_VARIANT
+  Dkc1VideoSetAspect(kDkc1VideoAspectNative);
+#endif
   const char *aspect = getenv("DKC1_ASPECT");
   if (Dkc1VideoIsWidescreen() && aspect && strcmp(aspect, "16:10") == 0)
     Dkc1VideoSetAspect(kDkc1VideoAspect16x10);
@@ -482,8 +492,22 @@ int main(int argc, char **argv) {
       return 5;
     }
     Dkc1DrawPpuFrame();
+#ifdef __APPLE__
+    const char *metal_validate=getenv("DKC1_HD_METAL_VALIDATE");
+    if(metal_validate && !strcmp(metal_validate,"1") &&
+       !Dkc1HdMetalValidateFrame((const uint32_t *)pixels,(int)frame_width,kHeight)) {
+      fprintf(stderr,"HD Metal validation failed at frame %llu\n",(unsigned long long)frame);
+      return 22;
+    }
+#endif
     Dkc1BlankScanFrame(frame + 1, pixels, Dkc1VideoWidth(),
                        kDkc1VideoHeight, Dkc1VideoTerrainReady());
+    const char *hd_every_frame = getenv("DKC1_HD_RENDER_EVERY_FRAME");
+    if (hd_every_frame && !strcmp(hd_every_frame, "1")) {
+      int hd_scale = 1;
+      (void)Dkc1HdPresent((const uint32_t *)pixels, (int)frame_width, kHeight,
+                         &hd_scale);
+    }
     Dkc1InvariantMonitorFrame(frame + 1);
     if (g_ppu->rangeOver) obj_range_over_frames++;
     if (g_ppu->timeOver) obj_time_over_frames++;
@@ -505,11 +529,18 @@ int main(int argc, char **argv) {
         frame >= frame_sequence_start && frame <= frame_sequence_end &&
         (frame - frame_sequence_start) % frame_sequence_step == 0) {
       char path[1024];
+      int capture_scale = 1;
+      const uint8_t *capture_pixels = pixels;
+      const char *hd_sequence = getenv("DKC1_HD_SEQUENCE");
+      if (hd_sequence && !strcmp(hd_sequence, "1"))
+        capture_pixels = (const uint8_t *)Dkc1HdPresent(
+            (const uint32_t *)pixels, (int)frame_width, kHeight, &capture_scale);
       int length = snprintf(path, sizeof path, "%s_%06ld.ppm",
                             frame_sequence_prefix, frame);
       if (length < 0 || (size_t)length >= sizeof path ||
-          !WriteFramePpm(path, pixels, frame_width, kHeight,
-                         frame_width * kBytesPerPixel)) {
+          !WriteFramePpm(path, capture_pixels, frame_width * capture_scale,
+                         kHeight * capture_scale,
+                         frame_width * capture_scale * kBytesPerPixel)) {
         fprintf(stderr, "unable to write private frame sequence at %ld\n",
                 frame);
         if (audio_pcm) fclose(audio_pcm);
@@ -784,6 +815,12 @@ int main(int argc, char **argv) {
       return 7;
     }
     printf("\nframe_output=%s", frame_output);
+  }
+  const char *hd_output = getenv("DKC1_HD_FRAME_PPM");
+  if (hd_output && *hd_output) {
+    int scale;
+    const uint32_t *hd = Dkc1HdPresent((const uint32_t *)pixels, (int)frame_width, kHeight, &scale);
+    if (!WriteFramePpm(hd_output, (const uint8_t *)hd, frame_width * scale, kHeight * scale, frame_width * scale * 4)) return 7;
   }
   const char *wram_output = getenv("DKC1_WRAM_OUTPUT");
   if (wram_output && *wram_output) {

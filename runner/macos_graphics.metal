@@ -22,6 +22,38 @@ fragment float4 dkc1_flat(VertexOutput in [[stage_in]], texture2d<float> source 
   return float4(source.sample(linearSampler,(base+adjusted+0.5)/size).rgb,1);
 }
 
+float finish_luma(float3 c) { return dot(c,float3(.2126,.7152,.0722)); }
+float finish_curve(float x) {
+  x=clamp(x,0.0f,1.0f);
+  if(x<.18)return x*(.17/.18);
+  if(x<.50)return .17+(x-.18)*(.31/.32);
+  if(x<.78)return .48+(x-.50)*(.25/.28);
+  return .73+(x-.78)*(.21/.22);
+}
+uint finish_hash(uint2 p,uint seed) {
+  uint v=p.x*0x9e3779b9u^p.y*0x85ebca6bu^seed;
+  v^=v>>16;v*=0x7feb352du;v^=v>>15;v*=0x846ca68bu;v^=v>>16;
+  return v;
+}
+float3 grounded_finish(float3 color,uint2 p,float strength) {
+  float luma=finish_luma(color);
+  float3 subdued=mix(float3(luma),color,.92);
+  float3 graded=float3(finish_curve(subdued.r),finish_curve(subdued.g),
+                       finish_curve(subdued.b));
+  float a=float(finish_hash(p,0x1234u)&0xffffu)/65535.0;
+  float b=float(finish_hash(p,0x9abcu)&0xffffu)/65535.0;
+  float level=clamp(strength,0.0f,1.0f)*3.0;
+  return clamp(color+(graded-color)*level+(a-b)*.010*level,0.0f,1.0f);
+}
+fragment float4 dkc1_finish(VertexOutput in [[stage_in]],
+    texture2d<float> source [[texture(0)]],constant float *u [[buffer(0)]]) {
+  uint2 p=uint2(clamp(floor(in.uv*float2(u[0],u[1])),float2(0),
+                       float2(u[0]-1,u[1]-1)));
+  float4 result=source.sample(pointSampler,in.uv);
+  result.rgb=grounded_finish(result.rgb,p,u[5]);
+  return result;
+}
+
 float3 tx(float2 t, texture2d<float> source, float2 source_size) { return source.sample(pointSampler, (t + 0.5) / source_size).rgb; }
 float df(float3 a, float3 b) {
   float3 d = abs(a - b);

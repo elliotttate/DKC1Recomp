@@ -12,9 +12,16 @@ continuous audio, and an opt-in 342x224 widescreen presentation path. See `docs/
 chronological bring-up record and `docs/WIDESCREEN.md` for the widescreen
 architecture, ported SuperZSNES findings, validation, and limitations.
 
-Windows releases now include the Mac host's graphics, CRT/reconstruction,
-16:10/16:9, remapping, Assist, music and mod controls in a dark native menu and
-settings panel. See [Windows build, features and validation](docs/WINDOWS_RELEASE.md).
+**Windows v0.0.17** is the SDL player host again, with everything the
+v0.0.16 native host added folded in: a Direct3D 11 flip-model presenter paced
+by the display's own refresh, optional 60/120 Hz frame generation, SNES pixel
+aspect control and the pacing log. Double-click the executable, pick your ROM
+once, and press Escape for the settings panel; the dark native menus keep the
+Mac host's graphics, CRT/reconstruction, 16:10/16:9, remapping, Assist, music
+and Dixie controls. See [Windows build, features and validation](docs/WINDOWS_RELEASE.md)
+and the [v0.0.17 release notes](docs/RELEASE_0.0.17.md). The 4× HD
+sprite-replacement work remains a Mac-only preview
+([experiment status](docs/HD_SPRITE_EXPERIMENT.md)).
 
 Windows v0.0.13 adds the optional **Mods > Dixie Kong Country** variant,
 including the map sprite fix. Keep both executables and `SDL2.dll` together;
@@ -119,12 +126,26 @@ cartridge program.
 
 ## Build and run
 
-With a Visual Studio developer environment available:
+The Windows player build is the SDL host. In an x64 Visual Studio developer
+PowerShell:
 
 ```powershell
-.\build_host.bat
-.\build\dkc1_desktop.exe "C:\private\dkc1.sfc"
+.\build_windows.ps1 -Rom "C:\private\dkc1.sfc"
+.\build-windows\release\DKC1Recomp.exe
 ```
+
+The script generates the stock and Dixie sources, builds `DKC1Recomp.exe`,
+`dkc1_dixie_desktop.exe` and `SDL2.dll`, and runs CTest plus the public
+suite. The host presents through a Direct3D 11 flip-model swap chain paced
+by its frame-latency waitable object, so frames follow the display's own
+cadence and the pacing log records which refresh each image landed on
+(OpenGL 3.3 paced by `DwmFlush` is the fallback; `DKC1_PRESENTER=opengl`
+forces it). `View > Pixel aspect` switches between the 7:6 CRT pixel and
+square pixels. See `docs/WINDOWS_RELEASE.md` and `docs/HOST_PACING.md`.
+
+The native Win32 debugger (`build_host.bat`, `build\dkc1_desktop.exe <rom>`)
+remains the diagnostics tool with its panel, layer isolation and route
+automation; it is not the shipped player host.
 
 The desktop host enables widescreen by default. Set `DKC1_WIDESCREEN=0` for
 the exact 256x224 presentation path. At a level's authored walls the
@@ -132,9 +153,16 @@ the exact 256x224 presentation path. At a level's authored walls the
 over eight margins of travel, so nothing past the level is shown; View >
 Level Edge on macOS (or `DKC1_WIDESCREEN_EDGE=reflect|bars|shift|glide`)
 switches to a view locked to the camera with the terrain mirrored past the
-wall, black past the wall, or the earlier inward clamp. The headless validator accepts a frame
-count and supports deterministic input playback and private frame/state
-captures; its environment variables are documented in `docs/BRINGUP.md`.
+wall, black past the wall, or the earlier inward clamp. On Windows,
+`DKC1_FRAMEGEN=1` (or View > Smooth animation / frame generation, F10)
+smooths held character poses at 60 Hz with a four-frame (~67 ms) visual
+buffer. A 120/240 Hz display also receives intermediate motion/animation
+images at 120 Hz. The game clock and raw native output remain unchanged;
+unsupported cases keep cartridge artwork. The choice persists in
+`windows.ini`. See `docs/HOST_PACING.md` and `docs/FRAMEGEN_REVIEW.md` for
+verification and limits. The headless validator accepts a frame count and
+supports deterministic input playback and private frame/state captures; its
+environment variables are documented in `docs/BRINGUP.md`.
 
 ### macOS
 
@@ -184,22 +212,20 @@ renderer wait independently. `DKC1_DISABLE_DISPLAY_LINK=1` and
 `SNESRECOMP_INPUT_PLAY=path` supplies the same deterministic
 per-frame input playback supported by the Windows debugger for visible Mac QA.
 
-**Escape → Settings → Aquatic widescreen fixes** enables the water-level
-presentation improvements tested in this build. This experimental option is
-off by default and takes effect after restarting the app. It includes native
-edge protection, live water scroll alignment, cache-boundary and bottom-row
-repairs, and verified Coral Capers wall continuations. Whole-game entrance
-coverage is still incomplete; see [the validation record](docs/WIDESCREEN_WALL_SEAM.md).
+The optional **Mods > Dixie Kong Country** switch now replaces the former
+Kiddy/Baby Kong overlay. Dixie runs as a separate recompilation synthesized
+in memory from the same verified clean DKC1 ROM and the pinned mod patch; no
+second ROM is needed. The stock and Dixie runtimes are bundled together and
+use separate save directories. Dixie currently uses its validated native 4:3
+presentation, while the stock HD runtime retains its widescreen settings. See
+[the Mac HD integration record](docs/DIXIE_HD_MAC.md) for behavior and scope.
 
-The optional **Mods > Baby Kong** switch replaces active Donkey with Kiddy
-Kong's DKC3 gameplay frames and a heavier, Kiddy-inspired movement profile.
-Choose **Mods > Choose DKC3 ROM...** once to select the exact supported,
-headerless North American DKC3 ROM; it is verified and decoded only in memory,
-never copied into the app or repository. The mod is off by default and can be
-toggled during play. DKC1's own semantic animation state drives Kiddy idle,
-walk, run, jump, roll, carry, throw, hurt, rope, swim, and other matching pose
-groups. See [docs/BABY_KONG_MOD.md](docs/BABY_KONG_MOD.md) for the ROM identity,
-controlled-launch variables, behavior, and scope.
+The macOS HD preview also includes **Mods > Upscaled HD Textures (Jungle
+Hijinxs only)**. It is off by default and can be changed at runtime (or compared
+with F10). The bundled material set covers Jungle Hijinxs and the connected
+bonus, Banana Hoard, and treehouse rooms developed as part of that first-level
+slice. Every other scene fails closed to the original game textures. The app
+never bundles a ROM or save state; it asks for the user's verified clean ROM.
 
 The native Mac host also supports controller feedback and external MSU-1
 replacement music. A successful enemy stomp produces a short controller

@@ -1,3 +1,4 @@
+#include "dkc1_hd_sprites.h"
 /* Shared macOS/Windows SDL2 frontend for DKC1Recomp.
  *
  * The recompiled cartridge/runtime stays identical to the Win32 and headless
@@ -5,9 +6,17 @@
  * and user-facing save/repro shortcuts.
  */
 #include "dkc1_blank_scan.h"
-#include "dkc1_baby_kong.h"
 #include "dkc1_dixie_mod.h"
 #include "snes/dma.h"
+
+/* Sibling executables for the Dixie Kong Country variant hand-off. */
+#ifdef _WIN32
+#define kDkc1DixieExecutable "dkc1_dixie_desktop.exe"
+#define kDkc1StockExecutable "DKC1Recomp.exe"
+#else
+#define kDkc1DixieExecutable "DKC1Recomp-HD-Dixie"
+#define kDkc1StockExecutable "DKC1Recomp-HD"
+#endif
 #include "dkc1_debug_dump.h"
 #include "dkc1_flight_recorder.h"
 #include "dkc1_game.h"
@@ -26,12 +35,14 @@
 #include "desktop_filter.h"
 #include "macos_file_picker.h"
 #include "macos_metal_presenter.h"
+#include "macos_hd_scene.h"
 #include "verified_rom.h"
 #include "wram_dump.h"
 
 #include "common_cpu_infra.h"
 #include "common_rtl.h"
 #include "audio_trace.h"
+#include "snes/dma.h"
 #include "snes/snes.h"
 
 #include <SDL.h>
@@ -45,6 +56,7 @@
 #ifdef _WIN32
 #include "windows_compat.h"
 #include "windows_platform.h"
+#include "windows_present.h"
 #else
 #include <mach/mach_time.h>
 #include <pthread.h>
@@ -209,7 +221,17 @@ static int s_fullscreen;
 static Dkc1MacFullscreenScaling s_fullscreen_scaling;
 static Dkc1GraphicsSettings s_graphics;
 static Dkc1DesktopColorFilter s_color_filter;
-static uint8_t s_display_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
+static uint8_t s_display_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4 * kDkc1HdScale * kDkc1HdScale];
+#ifdef _WIN32
+/* Windows presenter inputs prepared per frame: the (smoothed) display image
+ * and, with 120 Hz frame generation, its following midpoint. */
+static uint8_t s_mid_display_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
+static const uint8_t *s_win_display, *s_win_mid;
+static int s_win_display_width, s_win_display_height, s_win_paced;
+static int s_square_pixels;  /* View > Pixel aspect: ignore the 7:6 CRT pixel */
+static Dkc1WinFrameTiming s_win_timing;
+static char s_relaunch_rom[PATH_MAX];  /* Game > Change ROM: relaunch after cleanup */
+#endif
 static int s_input_release_gate;
 static void OpenPauseMenu(int graphics_page);
 
@@ -547,6 +569,9 @@ static void DisplayPacerPrintStats(const Dkc1DisplayPacer *display) {
 static void PacingLogInit(Dkc1PacingLog *log) {
   memset(log, 0, sizeof *log);
   const char *path = getenv("DKC1_PACING_LOG");
+#ifdef _WIN32
+  path = NULL;  /* the Windows pacer writes its own v5 log */
+#endif
   if (path && *path) {
     log->stream = fopen(path, "wb");
     if (!log->stream)
@@ -790,22 +815,44 @@ static void UpdateWindowTitle(void) {
   if (!s_window)
     return;
   char title[512];
+#ifdef _WIN32
+  if (!EnvironmentEnabled("DKC1_LIVE_TITLE")) {
+    /* Player title: product, variant and pause state. Layer isolation and
+     * the provenance overlay are named so a stray F-key is explained; the
+     * commit, frame counter and host status stay in the settings panel. */
+    const int isolated = Dkc1DebugLayerMask() != 0xff;
+    snprintf(title, sizeof title, "DKC1Recomp%s%s%s%s%s",
+             Dkc1DixieIsVariant() ? " - Dixie Kong Country" : "",
+             s_paused ? " (paused)" : "",
+             isolated ? " [" : "", isolated ? LayerName(Dkc1DebugLayerMask()) : "",
+             isolated ? " only]" : "");
+    if (Dkc1DebugProvenanceOverlay())
+      snprintf(title + strlen(title), sizeof title - strlen(title),
+               " [provenance overlay]");
+  } else
+#endif
   if (!EnvironmentEnabled("DKC1_LIVE_TITLE")) {
     snprintf(title, sizeof title,
-             "DKC1Recomp %s | %s | %s | %s | %s",
+             "%s %s | %s | %s | %s | %s",
+             Dkc1DixieIsVariant() ? "Dixie Kong Country HD Experiment" :
+                                    "DKC1 HD Experiment",
              DKC1_BUILD_COMMIT, s_paused ? "PAUSED" : "running",
              AspectName(Dkc1VideoGetAspect()),
              LayerName(Dkc1DebugLayerMask()), s_status);
   } else if (s_present_fps > 0.0) {
     snprintf(title, sizeof title,
-             "DKC1Recomp %s | frame %ld | %.1f FPS | %s | %s | %s | %s",
+             "%s %s | frame %ld | %.1f FPS | %s | %s | %s | %s",
+             Dkc1DixieIsVariant() ? "Dixie Kong Country HD Experiment" :
+                                    "DKC1 HD Experiment",
              DKC1_BUILD_COMMIT, s_host_frame, s_present_fps,
              s_paused ? "PAUSED" : "running",
              AspectName(Dkc1VideoGetAspect()),
              LayerName(Dkc1DebugLayerMask()), s_status);
   } else {
     snprintf(title, sizeof title,
-             "DKC1Recomp %s | frame %ld | %s | %s | %s | %s",
+             "%s %s | frame %ld | %s | %s | %s | %s",
+             Dkc1DixieIsVariant() ? "Dixie Kong Country HD Experiment" :
+                                    "DKC1 HD Experiment",
              DKC1_BUILD_COMMIT, s_host_frame,
              s_paused ? "PAUSED" : "running",
              AspectName(Dkc1VideoGetAspect()),
@@ -817,6 +864,7 @@ static void UpdateWindowTitle(void) {
 static void UpdateTitle(void) {
 #ifdef _WIN32
   Dkc1WindowsUpdateHapticsMenu(s_haptics_enabled);
+  Dkc1WindowsUpdateHostMenu(Dkc1WinFrameGenEnabled(), s_square_pixels);
 #endif
   UpdateWindowTitle();
   Dkc1MacUpdateMenuState(s_paused, s_fullscreen,
@@ -824,8 +872,8 @@ static void UpdateTitle(void) {
                          Dkc1VideoGetAspect(), Dkc1VideoGetEdgePolicy(),
                          Dkc1DebugLayerMask(),
                          Dkc1DebugProvenanceOverlay(), s_msu1 != NULL,
-                         0, 0,  /* Baby Kong removed from the Mods menu */
-                         Dkc1DixieIsVariant() || Dkc1DixieSavedEnabled());
+                         Dkc1DixieIsVariant() || Dkc1DixieSavedEnabled(),
+                         Dkc1HdEnabled());
   Dkc1MacUpdateGraphicsMenuState(s_graphics.display,s_graphics.upscaler,s_graphics.screen);
 }
 
@@ -896,14 +944,37 @@ static void PrepareUserDirectory(void) {
   if (chdir(path) != 0)
     fprintf(stderr, "warning: could not use app data directory: %s\n", path);
   SDL_free(path);
+#ifdef _WIN32
+  /* Tier-2 coverage journals are recompiler telemetry, not a player feature.
+   * The pinned engine writes them unconditionally, so the player build
+   * routes them to the NUL device unless a capture is explicitly requested
+   * (SNESRECOMP_TIER2_CAPTURE=1 keeps the build/tier2 directory as before,
+   * and explicit DIR/MANIFEST/JOURNAL paths are always respected). */
+  if (!getenv("SNESRECOMP_TIER2_DIR") && !getenv("SNESRECOMP_TIER2_MANIFEST") &&
+      !getenv("SNESRECOMP_TIER2_JOURNAL")) {
+    if (EnvironmentEnabled("SNESRECOMP_TIER2_CAPTURE") ||
+        EnvironmentEnabled("SNESRECOMP_TIER2")) {
+      mkdir("build", 0755);
+      mkdir("build/tier2", 0755);
+      setenv("SNESRECOMP_TIER2_DIR", "build/tier2", 0);
+    } else {
+      setenv("SNESRECOMP_TIER2_MANIFEST", "NUL", 0);
+      setenv("SNESRECOMP_TIER2_JOURNAL", "NUL", 0);
+    }
+  }
+#else
   mkdir("build", 0755);
   mkdir("build/tier2", 0755);
   if (!getenv("SNESRECOMP_TIER2_DIR") &&
       !getenv("SNESRECOMP_TIER2_MANIFEST"))
     setenv("SNESRECOMP_TIER2_DIR", "build/tier2", 0);
+#endif
 }
 
 static int PresentationWidth(void) {
+#ifdef _WIN32
+  if (s_square_pixels) return s_width;
+#endif
   return (s_width * kSnesPixelAspectNumerator +
           kSnesPixelAspectDenominator / 2) /
          kSnesPixelAspectDenominator;
@@ -971,7 +1042,14 @@ static bool InitVideo(void) {
     return false;
 #ifdef _WIN32
   Dkc1WindowsAttach(s_window);
-  return Dkc1WindowsGraphicsInit(s_window);
+  {
+    char error[256];
+    if (!Dkc1WinPresentInit(s_window, error, sizeof error)) {
+      SDL_SetError("%s", error);
+      return false;
+    }
+  }
+  return true;
 #endif
 
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
@@ -1025,7 +1103,12 @@ static bool InitVideo(void) {
 
 static void InitDisplayLink(void) {
 #ifdef _WIN32
-  return; /* QPC owns emulation cadence; Windows uses the OpenGL presenter. */
+  /* The compositor-locked pacer replaces CADisplayLink: the swap chain's
+   * frame-latency waitable object (or DwmFlush/timer) sets the cadence. */
+  Dkc1WinFrameGenSetEnabled(Dkc1WindowsSavedFrameGen() != 0);
+  Dkc1WinPacerStart();
+  s_audio_pacing_fps = Dkc1WinPacerRefreshHz();
+  return;
 #else
   SDL_SysWMinfo window_info;
   SDL_VERSION(&window_info.version);
@@ -1084,27 +1167,50 @@ static void InitDisplayLink(void) {
 }
 
 static void PreparePresentation(void) {
-  const uint8_t *display=Dkc1DesktopColorFilterApply(&s_color_filter,s_pixels,
-      s_display_pixels,(size_t)s_width*kDkc1VideoHeight);
-  if (!display) display=s_pixels;
+  Dkc1MacPresentationFrameInfo info = {
+    .host_frame = s_host_frame,
+    .camera_x = ReadWram16(0x088b),
+    .camera_y = ReadWram16(0x0895),
+  };
+  if(s_metal_presenter_active) {
+    for(int layer=0;layer<4;layer++) {
+      info.bg_hscroll[layer]=g_ppu->hScroll[layer];
+      info.bg_vscroll[layer]=g_ppu->vScroll[layer];
+    }
+    if(s_color_filter.screen_kind==kDkc1ScreenRaw &&
+       Dkc1MacMetalPresenterQueueHdFrame((const uint32_t *)s_pixels,s_width,
+           kDkc1VideoHeight,PresentationWidth(),&info))return;
+  }
+  int hd_scale = 1;
+  const uint32_t *hd = Dkc1HdPresent((const uint32_t *)s_pixels, s_width, kDkc1VideoHeight, &hd_scale);
+  const int texture_width = s_width * hd_scale;
+  const int texture_height = kDkc1VideoHeight * hd_scale;
 #ifdef _WIN32
-  Dkc1WindowsGraphicsDraw((const uint32_t *)display,s_width,kDkc1VideoHeight,
-                         PresentationWidth(),&s_graphics);
+  /* Frame generation substitutes the delayed smoothed image for the raw
+   * frame; the midpoint receives the same screen-color filter. */
+  const uint8_t *frame = Dkc1WinFrameGenDisplay((const uint8_t *)hd);
+  const uint8_t *display=Dkc1DesktopColorFilterApply(&s_color_filter,frame,
+      s_display_pixels,(size_t)texture_width * texture_height);
+  if (!display) display=frame;
+  s_win_display = display;
+  s_win_display_width = texture_width;
+  s_win_display_height = texture_height;
+  s_win_mid = NULL;
+  const uint8_t *mid = Dkc1WinFrameGenMid();
+  if (mid && hd_scale == 1) {
+    s_win_mid = Dkc1DesktopColorFilterApply(&s_color_filter, mid,
+        s_mid_display_pixels, (size_t)texture_width * texture_height);
+    if (!s_win_mid) s_win_mid = mid;
+  }
   return;
+#else
+  const uint8_t *display=Dkc1DesktopColorFilterApply(&s_color_filter,(const uint8_t *)hd,
+      s_display_pixels,(size_t)texture_width * texture_height);
+  if (!display) display=(const uint8_t *)hd;
 #endif
   if (s_metal_presenter_active) {
-    Dkc1MacPresentationFrameInfo info = {
-      .host_frame = s_host_frame,
-      .camera_x = ReadWram16(0x088b),
-      .camera_y = ReadWram16(0x0895),
-    };
-    for (int layer = 0; layer < 4; layer++) {
-      info.bg_hscroll[layer] = g_ppu->hScroll[layer];
-      info.bg_vscroll[layer] = g_ppu->vScroll[layer];
-    }
-    Dkc1MacMetalPresenterQueueFrame(
-        (const uint32_t *)display, s_width, kDkc1VideoHeight,
-        PresentationWidth(), &info);
+    Dkc1MacMetalPresenterQueueFrame((const uint32_t *)display,texture_width,
+        texture_height,PresentationWidth()*hd_scale,&info);
     return;
   }
   SDL_Rect destination;
@@ -1134,14 +1240,25 @@ static void PreparePresentation(void) {
       destination_ptr = &destination;
     }
   }
-  SDL_UpdateTexture(s_texture, NULL, display, s_width * 4);
+  int old_w = 0, old_h = 0;
+  SDL_QueryTexture(s_texture, NULL, NULL, &old_w, &old_h);
+  if (old_w != texture_width || old_h != texture_height) {
+    SDL_Texture *next = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, texture_width, texture_height);
+    if (!next) return;
+    SDL_DestroyTexture(s_texture); s_texture = next;
+    SDL_SetTextureBlendMode(s_texture, SDL_BLENDMODE_NONE);
+  }
+  SDL_UpdateTexture(s_texture, NULL, display, texture_width * 4);
   SDL_RenderClear(s_renderer);
   SDL_RenderCopy(s_renderer, s_texture, NULL, destination_ptr);
 }
 
 static void SubmitPresentation(void) {
 #ifdef _WIN32
-  Dkc1WindowsGraphicsSwap();
+  if (!s_win_display) return;
+  Dkc1WinPresentFrame(s_win_display, s_win_mid, s_win_display_width,
+                      s_win_display_height, PresentationWidth() * (s_win_display_width / s_width),
+                      &s_graphics, s_win_paced != 0, s_host_frame, &s_win_timing);
   return;
 #endif
   if (!s_metal_presenter_active)
@@ -1580,6 +1697,9 @@ static void CaptureRewind(void) {
 }
 
 static void ReconcileHostTimeline(void) {
+#ifdef _WIN32
+  Dkc1WinFrameGenInvalidate();
+#endif
   ResetAudioTimeline();
   Dkc1MacMetalPresenterFlush();
   Dkc1Msu1Reset(s_msu1);
@@ -1664,6 +1784,12 @@ static void ExportRepro(void) {
  * untouched, while the existing visible frame is center-cropped or centered
  * over black so a paused aspect change is immediately intelligible. */
 static void SetAspectMode(Dkc1VideoAspect requested) {
+  if (Dkc1DixieIsVariant() && requested != kDkc1VideoAspectNative) {
+    snprintf(s_status, sizeof s_status,
+             "Dixie currently uses its validated native 4:3 presentation");
+    UpdateTitle();
+    return;
+  }
   const Dkc1VideoAspect old_aspect = Dkc1VideoGetAspect();
   if (old_aspect == requested)
     return;
@@ -1707,6 +1833,9 @@ static void SetAspectMode(Dkc1VideoAspect requested) {
   s_width = new_width;
   s_graphics.aspect=requested; Dkc1MacSaveGraphics(&s_graphics);
   Dkc1BeginDrawing(s_pixels, (size_t)s_width * 4);
+#ifdef _WIN32
+  Dkc1WinFrameGenInvalidate();
+#endif
   ApplyPresentationGeometry();
   if (!s_fullscreen)
     ApplyWindowedSize();
@@ -1798,6 +1927,8 @@ void Dkc1MacApplyGraphics(Dkc1GraphicsSettings *settings) {
   int resize=next.window_scale!=s_graphics.window_scale;
   int audio_change=next.audio_enabled!=s_graphics.audio_enabled;
   s_graphics=next;
+  Dkc1HdMetalSetPolish(s_graphics.hd_polish);
+  Dkc1HdMetalSetFinish(s_graphics.hd_finish);
   if (Dkc1VideoGetAspect()!=next.aspect) SetAspectMode(next.aspect);
   if (Dkc1VideoGetEdgePolicy()!=next.edge) SetEdgePolicy(next.edge);
   if (s_fullscreen!=next.fullscreen) SetFullscreen(next.fullscreen);
@@ -1879,6 +2010,17 @@ static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
     s_reanchor_pacer = 1;
   } else if (key == SDLK_F8 && s_paused) {
     s_step_once = 1;
+  } else if (key == SDLK_F10) {
+#ifdef _WIN32
+    Dkc1MacMenuCommand(kDkc1MacMenuFrameGen);
+    return;
+#endif
+    Dkc1HdToggle();
+    Dkc1MacSetHdTexturesEnabled(Dkc1HdEnabled());
+    snprintf(s_status, sizeof s_status,
+             "Upscaled HD textures %s — Jungle Hijinxs only | F10 compare",
+             Dkc1HdEnabled() ? "ON" : "OFF");
+    if (s_paused) { Dkc1DrawPpuFrame(); Present(); }
   } else if (key == SDLK_F9) {
     ExportRepro();
   } else if (key == SDLK_F11 || ((mod & KMOD_GUI) && key == SDLK_s)) {
@@ -1892,6 +2034,36 @@ static void HandleKey(SDL_Keycode key, SDL_Keymod mod) {
 void Dkc1MacMenuCommand(int command) {
   switch (command) {
 #ifdef _WIN32
+    case kDkc1MacMenuFrameGen:
+      Dkc1WinFrameGenSetEnabled(!Dkc1WinFrameGenEnabled());
+      Dkc1WindowsSetFrameGen(Dkc1WinFrameGenEnabled());
+      snprintf(s_status, sizeof s_status, "smooth animation %s%s",
+               Dkc1WinFrameGenEnabled() ? "on (67 ms display buffer)" : "off",
+               Dkc1WinFrameGenEnabled() && Dkc1WinFrameGenSupported()
+                   ? ", 120 Hz motion pairs" : "");
+      s_reanchor_pacer = 1;
+      break;
+    case kDkc1MacMenuPixelAspectSnes:
+    case kDkc1MacMenuPixelAspectSquare:
+      s_square_pixels = command == kDkc1MacMenuPixelAspectSquare;
+      Dkc1WindowsSetSquarePixels(s_square_pixels);
+      ApplyPresentationGeometry();
+      if (!s_fullscreen) ApplyWindowedSize();
+      snprintf(s_status, sizeof s_status, "%s pixels",
+               s_square_pixels ? "square" : "SNES 7:6");
+      Present();
+      break;
+    case kDkc1MacMenuChangeRom: {
+      /* Verified and remembered by the picker; the game exits cleanly
+       * (saves flushed) and the matching runtime restarts on the new file. */
+      char *path = Dkc1WindowsPickRom();
+      if (path) {
+        snprintf(s_relaunch_rom, sizeof s_relaunch_rom, "%s", path);
+        free(path);
+        s_running = 0;
+      }
+      return;
+    }
     case kDkc1MacMenuToggleHaptics:
       s_haptics_enabled = !s_haptics_enabled;
       if (s_haptics_enabled && !HapticWorkerStart()) {
@@ -1970,12 +2142,6 @@ void Dkc1MacMenuCommand(int command) {
     case kDkc1MacMenuExportRepro:
       ExportRepro();
       return;
-    case kDkc1MacMenuToggleBabyKong:
-      /* Removed: Baby Kong (Kiddy) is no longer offered; the menu item is
-       * gone, so this is unreachable. */
-      break;
-    case kDkc1MacMenuChooseBabyKongRom:
-      break;
     case kDkc1MacMenuToggleDixie:
       /* The Dixie mod is a full recompilation variant: toggling persists the
        * choice and relaunches the sibling executable (see dkc1_dixie_mod.h).
@@ -1983,12 +2149,12 @@ void Dkc1MacMenuCommand(int command) {
        * is needed: the variant synthesizes the modded image from the same
        * clean-ROM argument. */
       if (Dkc1DixieIsVariant()) {
-        Dkc1DixieSwitchAndRelaunch(0, "dkc1_dixie_desktop.exe",
-                                   "DKC1Recomp.exe", s_status,
+        Dkc1DixieSwitchAndRelaunch(0, kDkc1DixieExecutable,
+                                   kDkc1StockExecutable, s_status,
                                    sizeof s_status);
       } else if (!Dkc1DixieSavedEnabled()) {
-        Dkc1DixieSwitchAndRelaunch(1, "dkc1_dixie_desktop.exe",
-                                   "DKC1Recomp.exe", s_status,
+        Dkc1DixieSwitchAndRelaunch(1, kDkc1DixieExecutable,
+                                   kDkc1StockExecutable, s_status,
                                    sizeof s_status);
       } else {
         Dkc1DixieSetEnabled(0);
@@ -1996,8 +2162,13 @@ void Dkc1MacMenuCommand(int command) {
                  "Dixie Kong Country will stay off from now on");
       }
       break;
-    case kDkc1MacMenuChooseDixieRom:
-      /* Removed: the mod ROM is synthesized; there is nothing to pick. */
+    case kDkc1MacMenuToggleHdTextures:
+      Dkc1HdToggle();
+      Dkc1MacSetHdTexturesEnabled(Dkc1HdEnabled());
+      snprintf(s_status, sizeof s_status,
+               "Upscaled HD textures %s — Jungle Hijinxs only",
+               Dkc1HdEnabled() ? "ON" : "OFF");
+      if (s_paused) { Dkc1DrawPpuFrame(); Present(); }
       break;
     case kDkc1MacMenuChooseMusicPack: {
       char *path = Dkc1MacChooseMsu1();
@@ -2104,6 +2275,14 @@ static void PollEvents(void) {
                    event.window.event == SDL_WINDOWEVENT_HIDDEN) {
           Dkc1MacMetalPresenterSetActive(0);
         }
+#ifdef _WIN32
+        if (event.window.event == SDL_WINDOWEVENT_MINIMIZED)
+          Dkc1WinPacerSetMinimized(true);
+        else if (event.window.event == SDL_WINDOWEVENT_RESTORED ||
+                 event.window.event == SDL_WINDOWEVENT_SHOWN ||
+                 event.window.event == SDL_WINDOWEVENT_MAXIMIZED)
+          Dkc1WinPacerSetMinimized(false);
+#endif
         if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED ||
             event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
             event.window.event == SDL_WINDOWEVENT_RESIZED ||
@@ -2120,7 +2299,7 @@ static void PollEvents(void) {
 static void Cleanup(uint8_t *rom) {
 #ifdef _WIN32
   Dkc1WindowsDetach();
-  Dkc1WindowsGraphicsClose();
+  Dkc1WinPresentClose();
 #endif
   char error[256];
   if (!Dkc1WramDumpClose(&s_wram_dump, error, sizeof error))
@@ -2142,7 +2321,6 @@ static void Cleanup(uint8_t *rom) {
   }
   Dkc1Msu1Close(s_msu1);
   s_msu1 = NULL;
-  Dkc1BabyKongUnload();
   if (s_audio_device)
     SDL_CloseAudioDevice(s_audio_device);
   if (s_texture)
@@ -2155,14 +2333,43 @@ static void Cleanup(uint8_t *rom) {
   SDL_Quit();
 }
 
+#ifdef _WIN32
+/* The paced Windows present: folds the frame's measurements into the pacing
+ * log, waits for the slot in work-first modes, presents and hands the
+ * midpoint to the half-frame worker. */
+static void PresentWindowsFrame(const Dkc1FrameWorkProfile *profile,
+                                const Dkc1PacingLog *log, double interp_ticks,
+                                double frequency) {
+  s_win_timing.events_ms = profile->events * 1000.0 / frequency;
+  s_win_timing.setup_ms = log->setup_ms;
+  s_win_timing.emulation_ms = log->emulation_ms;
+  s_win_timing.render_ms = log->render_ms;
+  s_win_timing.diagnostics_ms = log->diagnostics_ms;
+  s_win_timing.audio_ms = log->audio_ms;
+  s_win_timing.interp_ms = interp_ticks * 1000.0 / frequency;
+  s_win_timing.audio_queued_frames = (int)s_audio_last_queued_frames;
+  s_win_timing.audio_starvations = s_audio_starvations;
+  s_win_timing.audio_drops = s_audio_drops;
+  s_win_timing.audio_ring_frames = s_audio_ring_frames;
+  s_win_timing.audio_internal_underflows = s_audio_internal_underflows;
+  s_win_paced = 1;
+  SubmitPresentation();
+  s_win_paced = 0;
+}
+#endif
+
 int main(int argc, char **argv) {
+  Dkc1MacConfigureHdExperiment();
+#ifdef DKC1_DIXIE_VARIANT
+  dma_set_zero_size_vram_noop(1);
+#endif
   SDL_SetMainReady();
   /* Optional Dixie Kong Country mod: when the persisted setting is on, this
    * stock build hands the session to the sibling variant executable before
    * SDL starts. */
   {
     char note[256];
-    if (Dkc1DixieHandoffCheck(argc, argv, "dkc1_dixie_desktop.exe", note,
+    if (Dkc1DixieHandoffCheck(argc, argv, kDkc1DixieExecutable, note,
                               sizeof note)) {
       return 0; /* the variant executable owns the session */
     }
@@ -2194,7 +2401,10 @@ int main(int argc, char **argv) {
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,3);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_CORE);
   if (argc>1 && strcmp(argv[1],"--graphics-test")==0) {
-    int result=Dkc1WindowsGraphicsTest(); SDL_Quit(); return result;
+    /* Both presenters: the Direct3D 11 default and the OpenGL fallback. */
+    int result=Dkc1WindowsGraphicsTest();
+    if (!result) { result=Dkc1WinPresentTest(); if (result) result+=100; }
+    SDL_Quit(); return result;
   }
   if (argc>1 && strcmp(argv[1],"--haptics-test")==0) {
     int result=HapticOutputTest(); SDL_Quit(); return result;
@@ -2214,8 +2424,8 @@ int main(int argc, char **argv) {
   {
     char note[256];
     /* A no-argument launch only has a ROM after the picker/cache resolves it. */
-    if (Dkc1DixieHandoffCheck(0, NULL, "dkc1_dixie_desktop.exe", note,
-                            sizeof note)) {
+    if (Dkc1DixieHandoffCheck(0, NULL, kDkc1DixieExecutable, note,
+                              sizeof note)) {
       SDL_Quit();
       return 0;
     }
@@ -2257,6 +2467,8 @@ int main(int argc, char **argv) {
 
   PrepareUserDirectory();
   Dkc1MacLoadGraphics(&s_graphics);
+  Dkc1HdMetalSetPolish(s_graphics.hd_polish);
+  Dkc1HdMetalSetFinish(s_graphics.hd_finish);
   Dkc1DesktopColorFilterInit(&s_color_filter,s_graphics.screen);
   const char *aspect = getenv("DKC1_ASPECT");
   const char *widescreen = getenv("DKC1_WIDESCREEN");
@@ -2270,6 +2482,7 @@ int main(int argc, char **argv) {
     Dkc1VideoSetWidescreen(*widescreen!='0');
   else
     Dkc1VideoSetAspect(s_graphics.aspect);
+  if (Dkc1DixieIsVariant()) Dkc1VideoSetAspect(kDkc1VideoAspectNative);
   s_graphics.aspect=Dkc1VideoGetAspect();
   {
     /* Level-wall presentation: the View menu's saved choice (glide when
@@ -2297,9 +2510,6 @@ int main(int argc, char **argv) {
     return 13;
   }
 
-  /* Baby Kong was removed from the Mods menu (Dixie Kong Country is the only
-   * character option now); its persisted state is intentionally ignored so
-   * old settings cannot silently reactivate it. */
 
   const char *snapshot = getenv("DKC1_SAVESTATE_INPUT");
   if (snapshot && *snapshot && !RtlLoadSnapshot(snapshot)) {
@@ -2334,6 +2544,8 @@ int main(int argc, char **argv) {
   s_fullscreen_scaling = Dkc1MacSavedFullscreenScaling();
 #ifdef _WIN32
   s_haptics_enabled = Dkc1WindowsSavedHaptics();
+  s_square_pixels = Dkc1WindowsSavedSquarePixels() ||
+                    EnvironmentEnabled("DKC1_SQUARE_PIXELS");
 #endif
   if (getenv("DKC1_HAPTICS"))
     s_haptics_enabled = EnvironmentEnabled("DKC1_HAPTICS");
@@ -2438,8 +2650,15 @@ int main(int argc, char **argv) {
         break;
       if (s_paused && !s_step_once) {
         s_reanchor_pacer = 1;
+#ifdef _WIN32
+        /* Keep the paused image on the display cadence; no catch-up later. */
+        Dkc1WinPacerReset();
+        Dkc1WinPacerWaitFrame(true);
+        Present();
+#else
         Present();
         SDL_Delay(16);
+#endif
         continue;
       }
     }
@@ -2452,11 +2671,25 @@ int main(int argc, char **argv) {
       s_reanchor_pacer = 0;
     }
     int display_frame_sync = 0;
+#ifdef _WIN32
+    /* Compositor-locked modes wait for the slot first so the controller is
+     * sampled as late as possible; timer mode and the 120 Hz pair keep the
+     * deterministic work-first ordering (the wait precedes the present). */
+    if (s_reanchor_pacer) {
+      Dkc1WinPacerReset();
+      s_reanchor_pacer = 0;
+    }
+    if (!single_step && !Dkc1WinPacerWorkFirst())
+      Dkc1WinPacerWaitFrame(false);
+    Dkc1WinPacerMarkWorkStart();
+    if (0) {
+#else
     if (!single_step) {
       if (s_reanchor_pacer) {
         FramePacerReanchor(&pacer, FramePacerNow());
         s_reanchor_pacer = 0;
       }
+#endif
       if (s_display_link_active) {
         if (!DisplayPacerWaitForTarget(&pacer, &display_pacer)) {
           PollEvents();
@@ -2517,9 +2750,16 @@ int main(int argc, char **argv) {
       if (!s_rewinding) ReconcileHostTimeline();
       s_rewinding = 1;
       RewindOneStep();
+#ifdef _WIN32
+      Dkc1WinFrameGenInvalidate();
+      s_win_paced = 1;
+      Present();
+      s_win_paced = 0;
+#else
       Present();
       FramePacerWaitUntil(pacer.next_deadline, pacer.frequency);
       FramePacerAdvance(&pacer, FramePacerNow(), 0);
+#endif
       if (s_assist_test_log) fprintf(s_assist_test_log,
           "%ld rewind host=%ld guest=%u pops=%lu history=%zu\n",
           s_assist_test_tick, s_host_frame, snes_frame_counter,
@@ -2602,6 +2842,18 @@ int main(int argc, char **argv) {
     phase_end = FramePacerNow();
     work_profile.title = phase_end - phase_start;
     phase_start = phase_end;
+#ifdef _WIN32
+    /* Host-only smoothing of the completed frame. Isolated layers, the
+     * provenance overlay, stepping, rewind and fast-forward keep raw output
+     * and drop the pose history so no image is built across a jump. */
+    Dkc1WinFrameGenProcess(s_pixels, s_width, kDkc1VideoHeight,
+                           !single_step && !s_fast_forward && !s_rewinding &&
+                           Dkc1DebugLayerMask() == 0xff &&
+                           !Dkc1DebugProvenanceOverlay());
+    phase_end = FramePacerNow();
+    const double interp_ticks = phase_end - phase_start;
+    phase_start = phase_end;
+#endif
     /* Upload and encode while the target still has several milliseconds of
      * lead. Only the lightweight drawable submission remains after the final
      * display-link wait. */
@@ -2622,11 +2874,18 @@ int main(int argc, char **argv) {
     pacing_log.audio_ms = work_profile.audio * 1000.0 / pacer.frequency;
     PacingLogInjectTestStall(&pacing_log, s_host_frame);
 
+#ifdef _WIN32
+    PresentWindowsFrame(&work_profile, &pacing_log, interp_ticks,
+                        pacer.frequency);
+    if (single_step || s_paused) s_reanchor_pacer = 1;
+    if (0) {
+#else
     /* CADisplayLink wakes one interval before a concrete targetTimestamp.
      * Texture upload and command encoding are already complete. Submit the
      * prepared drawable at a four-millisecond lead so compositor pickup
      * variance cannot move ordinary frames between adjacent refresh slots. */
     if (!single_step) {
+#endif
       if (display_frame_sync &&
           FramePacerNow() > pacer.next_deadline -
               pacer.frequency * kMacSubmitLeadSeconds) {
@@ -2644,6 +2903,7 @@ int main(int argc, char **argv) {
       pacing_log.wait_ms +=
           (FramePacerNow() - final_wait_start) * 1000.0 / pacer.frequency;
     }
+#ifndef _WIN32
     const double present_start = FramePacerNow();
     SubmitPresentation();
     const double presented_at = FramePacerNow();
@@ -2660,6 +2920,7 @@ int main(int argc, char **argv) {
                         s_reanchor_pacer || s_paused);
       s_reanchor_pacer = s_paused ? 1 : 0;
     }
+#endif
     const char *pause_after = getenv("DKC1_PAUSE_AFTER_FRAME");
     if (pause_after && s_host_frame == strtol(pause_after, NULL, 10)) {
       s_paused = 1;
@@ -2695,5 +2956,14 @@ int main(int argc, char **argv) {
                     true, save_error, sizeof save_error);
   if (!saved) ShowError("Unable to write in-game saves", save_error);
   Cleanup(rom);
+#ifdef _WIN32
+  if (saved && s_relaunch_rom[0]) {
+    char note[256] = {0};
+    Dkc1DixieSetRomPath(s_relaunch_rom);
+    Dkc1DixieSwitchAndRelaunch(Dkc1DixieSavedEnabled(), kDkc1DixieExecutable,
+                               kDkc1StockExecutable, note, sizeof note);
+    if (note[0]) fprintf(stderr, "change rom: %s\n", note);
+  }
+#endif
   return saved ? 0 : 13;
 }

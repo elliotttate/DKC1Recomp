@@ -121,6 +121,38 @@ static inline int Dkc1EdgeClamp(int64_t value, int64_t low, int64_t high) {
   return (int)value;
 }
 
+/* Locked 256-wide interiors have no published camera span, so Dkc1EdgePresent
+ * fails closed. The authored picture is still the native 256; both walls sit
+ * at its edges. Mirror source matches PpuMergeAxisMirroredBackground. */
+static inline int Dkc1LockedInteriorLeftAxis(void) {
+  return kDkc1EdgeWallInset;
+}
+static inline int Dkc1LockedInteriorRightAxis(void) {
+  return kDkc1EdgeNativeWidth - kDkc1EdgeWallInset;
+}
+static inline int Dkc1LockedInteriorRightEdge(void) {
+  return kDkc1EdgeNativeWidth - 1;
+}
+static inline int Dkc1LockedInteriorMirrorSourceX(int native_x) {
+  if (native_x < 0)
+    return 2 * Dkc1LockedInteriorLeftAxis() - 1 - native_x;
+  if (native_x >= kDkc1EdgeNativeWidth)
+    return 2 * Dkc1LockedInteriorRightAxis() - 1 - native_x;
+  return native_x;
+}
+/* Banana Hoard: left wall keeps the Jungle inset reflection; the right
+ * opening continues the last authored column instead of flipping the hole. */
+static inline int Dkc1LockedInteriorSourceX(int native_x) {
+  if (native_x < 0)
+    return 2 * Dkc1LockedInteriorLeftAxis() - 1 - native_x;
+  if (native_x >= kDkc1EdgeNativeWidth)
+    return Dkc1LockedInteriorRightEdge();
+  return native_x;
+}
+static inline bool Dkc1LockedInteriorSourceFlipped(int native_x) {
+  return native_x < 0;
+}
+
 static inline void Dkc1EdgePresent(Dkc1EdgePolicy policy, uint32_t camera_x,
                                    uint32_t lower, uint32_t upper, int extra,
                                    Dkc1EdgePresentation *out) {

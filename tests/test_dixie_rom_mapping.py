@@ -10,6 +10,31 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DixieRomMappingTests(unittest.TestCase):
+    def test_hd_host_bundles_dixie_and_removes_kiddy_overlay(self):
+        cmake = (ROOT / 'CMakeLists.txt').read_text()
+        host = (ROOT / 'runner/sdl_host.c').read_text()
+        menu = (ROOT / 'runner/macos_file_picker.m').read_text()
+        pause = (ROOT / 'runner/macos_pause_menu.m').read_text()
+        packaging = (ROOT / 'build_macos.sh').read_text()
+
+        self.assertIn('dkc1_macos_dixie', cmake)
+        self.assertIn('DKC1Recomp-HD-Dixie', packaging)
+        self.assertIn('@"Dixie Kong Country"', menu)
+        self.assertIn('Dkc1DixieSwitchAndRelaunch', host)
+        self.assertIn('@"Switch Donkey / Dixie"', pause)
+        self.assertIn('Dkc1VideoSetAspect(kDkc1VideoAspectNative)', host)
+
+        active = '\n'.join((cmake, host, menu, pause, packaging)).lower()
+        self.assertNotIn('baby_kong', active)
+        self.assertNotIn('kiddy kong', active)
+        for name in (
+            'dkc1_baby_kong.c',
+            'dkc1_baby_kong.h',
+            'dkc1_baby_kong_animation.c',
+            'dkc1_baby_kong_movement.c',
+        ):
+            self.assertFalse((ROOT / 'runner' / name).exists(), name)
+
     def test_expanded_data_banks_preserve_stock_aliases(self):
         src = ROOT / 'snesrecomp/runner/src'
         with tempfile.TemporaryDirectory() as directory:

@@ -96,6 +96,24 @@ int main(void) {
   e = present(kDkc1EdgeShift, 5120, 0, 5120);
   check(e.bias == -43, "shift at the east wall slides the view outward");
 
+  /* Locked 256 interiors keep the 4:3 tiles: left wall reflects, right
+   * opening continues the last authored column. */
+  check(Dkc1LockedInteriorLeftAxis() == kDkc1EdgeWallInset &&
+        Dkc1LockedInteriorRightAxis() == 256 - kDkc1EdgeWallInset &&
+        Dkc1LockedInteriorRightEdge() == 255,
+        "locked interior axes sit one tile inside each 256 wall");
+  check(Dkc1LockedInteriorSourceX(0) == 0 &&
+        Dkc1LockedInteriorSourceX(255) == 255,
+        "the authored 256 is not remapped");
+  check(Dkc1LockedInteriorSourceX(-1) == 2 * kDkc1EdgeWallInset &&
+        Dkc1LockedInteriorSourceFlipped(-1) &&
+        Dkc1LockedInteriorSourceX(256) == 255 &&
+        !Dkc1LockedInteriorSourceFlipped(256),
+        "left margin reflects; right margin continues the last column");
+  check(Dkc1LockedInteriorMirrorSourceX(256) ==
+            2 * (256 - kDkc1EdgeWallInset) - 1 - 256,
+        "the unused both-wall reflection formula stays defined");
+
   /* Bounds narrower than the extension are not trusted by any policy. */
   e = present(kDkc1EdgeReflect, 10, 0, 80);
   check(e.bias == 0 && e.left == 43 && e.right == 43 && !e.beyond_extent,

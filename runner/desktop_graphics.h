@@ -10,6 +10,9 @@ typedef struct Dkc1GraphicsSettings {
   Dkc1CrtSettings crt;
   int window_scale, fullscreen, aspect, edge;
   int audio_enabled, volume, state_slot;
+  int hd_polish, hd_finish;
+  /* Windows opt-in for the experimental aquatic widescreen flags (applied
+   * at the next launch); the Mac HD preview menu does not expose it. */
   int aquatic_fixes;
 } Dkc1GraphicsSettings;
 void Dkc1GraphicsDefault(Dkc1GraphicsSettings *s);

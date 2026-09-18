@@ -39,6 +39,7 @@ def main():
         'docs/DIXIE_HAPTICS.md': ROOT/'docs/DIXIE_HAPTICS.md',
         'docs/DIXIE_MAP_FIX_2026-09-14.md': ROOT/'docs/DIXIE_MAP_FIX_2026-09-14.md',
         'docs/INGAME_SAVES.md': ROOT/'docs/INGAME_SAVES.md',
+        'docs/WINDOWS_RELEASE.md': ROOT/'docs/WINDOWS_RELEASE.md',
         f'docs/RELEASE_{version}.md': ROOT/f'docs/RELEASE_{version}.md',
         'licenses/SDL-LICENSE.txt': ROOT/'third_party/windows/SDL-LICENSE.txt',
         'licenses/miniz-LICENSE.txt': ROOT/'third_party/windows/miniz-LICENSE.txt',
@@ -56,30 +57,40 @@ def main():
     payload['README.md'] = f'''# DKC1Recomp v{version} for Windows x64
 
 Extract this entire folder and open DKC1Recomp.exe. Keep
-dkc1_dixie_desktop.exe and SDL2.dll beside it. Select your own headerless
-Donkey Kong Country USA v1.0 ROM (4 MiB, SHA-256
-fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15).
+dkc1_dixie_desktop.exe and SDL2.dll beside it. On the first launch, select
+your own headerless Donkey Kong Country USA v1.0 ROM (4 MiB, SHA-256
+fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15). The
+verified path is remembered, so later launches open the game directly;
+Game > Change ROM... picks a different file. No ROM is bundled.
+
+Press Escape (or use Game > Pause / Settings) for the settings panel:
+Graphics, CRT, Settings, Controls, Assist and Mods / Music tabs. Escape
+never closes the game. The View menu switches 4:3, 16:10 and 16:9,
+fullscreen (Alt+Enter), the upscaler, display model, level-edge policy
+and pixel aspect; View > Smooth animation / frame generation (F10)
+enables the optional held-pose interpolation with about 67 ms of extra
+display latency, adding generated in-between images on 120/240 Hz
+displays. Game > Controller rumble covers enemy stomps and is on by
+default.
+
+Presentation uses a Direct3D 11 flip-model swap chain paced by the
+display's own refresh (DXGI statistics record which refresh each image
+landed on); OpenGL 3.3 is the automatic fallback. Frame generation and
+the pacing modes are the same as the v0.0.16 native host, now with the
+full graphics, controls, save-state, Dixie and MSU-1 feature set.
 
 Choose Mods > Dixie Kong Country to enable Dixie. This restarts into the
-Dixie executable using the same clean ROM. The embedded IPS patch is applied
-in memory; no separate patched ROM is needed. Switch the menu item off to
-return to stock. Use View > 4:3 for the tested Dixie presentation.
+Dixie executable using the same clean ROM; the embedded IPS patch is
+applied in memory. Switch the item off to return to stock. Use View > 4:3
+for the tested Dixie presentation.
 
-Game > Controller rumble (enemy stomps) turns the existing stomp feedback on
-or off and remembers your preference. Game > Test controller rumble sends a
-short test pulse to a supported controller. Feedback currently covers enemy
-stomps; it is enabled by default.
+In-game saves from Candy persist in %APPDATA%/Flat2VR/DKC1Recomp/saves/
+save.srm; host save states and windows.ini live beside it. Back up saves
+before replacing an installation.
 
-Dixie includes the map sprite-addressing fix. A save made while graphics were
-corrupt can retain old graphics until leaving and re-entering the map normally.
-Back up existing saves before replacing your installation. In-game saves from
-Candy persist in %APPDATA%/Flat2VR/DKC1Recomp/saves/save.srm; host save states
-are separate. This build retains the v0.0.12 save-persistence fix.
-
-Windows 10/11 x64 and OpenGL 3.3 are required. No ROM or private save is bundled.
-Full-game and exhaustive widescreen/controller coverage remain unverified.
-The separately supplied Mac archive is unchanged v0.0.9 and has neither Dixie
-nor the v0.0.12 in-game save fix. See the included docs for details.
+Windows 10/11 x64 with Direct3D 11 (feature level 10.0) or OpenGL 3.3 is
+required. Full-game and exhaustive widescreen/controller coverage remain
+unverified. See the included docs for details and limits.
 '''.encode('utf-8')
     buildinfo = {
         'version': 'v'+version,

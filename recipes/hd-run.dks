@@ -1,0 +1,10 @@
+# Run and jump right, settle, then run and jump left from the same root.
+000 * 30
+082 * 60
+083 * 25
+082 * 35
+000 * 30
+042 * 60
+043 * 25
+042 * 35
+000 * 30

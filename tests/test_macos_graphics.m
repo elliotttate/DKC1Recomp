@@ -53,6 +53,26 @@ int main(int argc,char **argv) {
         [command commit];[command waitUntilCompleted];
         if (command.status==MTLCommandBufferStatusError) {fprintf(stderr,"GPU error: %s\n",command.error.description.UTF8String);return 1;}
         uint32_t *data=malloc((size_t)ow*oh*4);[out getBytes:data bytesPerRow:ow*4 fromRegion:MTLRegionMake2D(0,0,ow,oh) mipmapLevel:0];
+        // GPU-resident input must preserve every display/filter mode, including
+        // a letterboxed viewport's CRT mask and dither phase.
+        MTLTextureDescriptor *inputDescription=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:w height:h mipmapped:NO];
+        inputDescription.storageMode=MTLStorageModeShared;inputDescription.usage=MTLTextureUsageShaderRead;
+        id<MTLTexture> input=[device newTextureWithDescriptor:inputDescription];
+        [input replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:pixels bytesPerRow:w*4];
+        id<MTLTexture> direct=[device newTextureWithDescriptor:d],reference=[device newTextureWithDescriptor:d];
+        uint32_t *gpu=malloc((size_t)ow*oh*4),*cpu=malloc((size_t)ow*oh*4);
+        for(int inset=0;inset<2;inset++) {
+          MTLViewport v=inset?(MTLViewport){3,5,ow-8,oh-12,0,1}:(MTLViewport){0,0,ow,oh,0,1};
+          id<MTLCommandBuffer> compare=[queue commandBuffer];
+          if(![g encodePixels:pixels width:w height:h target:reference viewport:v settings:s commandBuffer:compare] ||
+             ![g encodeTexture:input target:direct viewport:v settings:s commandBuffer:compare])return 1;
+          [compare commit];[compare waitUntilCompleted];
+          if(compare.status==MTLCommandBufferStatusError)return 1;
+          [reference getBytes:cpu bytesPerRow:ow*4 fromRegion:MTLRegionMake2D(0,0,ow,oh) mipmapLevel:0];
+          [direct getBytes:gpu bytesPerRow:ow*4 fromRegion:MTLRegionMake2D(0,0,ow,oh) mipmapLevel:0];
+          if(memcmp(cpu,gpu,(size_t)ow*oh*4)){fprintf(stderr,"GPU texture input differs case=%d inset=%d\n",test,inset);failures++;}
+        }
+        free(gpu);free(cpu);[input release];[direct release];[reference release];
         uint64_t hash=1469598103934665603ull;
         for (int i=0;i<ow*oh;i++) {
           hash=(hash^(data[i]&0xffffffu))*1099511628211ull;
@@ -95,6 +115,67 @@ int main(int argc,char **argv) {
       }
     }
     if (hashes[1]==hashes[2] || hashes[3]==hashes[4] || hashes[1]==hashes[8] || hashes[8]==hashes[9] || hashes[9]==hashes[10]) failures++;
+    // Fixed-room HD plates are CPU-composited 4x frames. Grounded finish must
+    // affect that upload path, retain the documented 33% < 100% relationship,
+    // and stay out of encodeTexture because the GPU HD compositor has already
+    // applied it there.
+    {
+      const int fw=64,fh=224*4;
+      const size_t count=(size_t)fw*fh,bytes=count*4;
+      uint32_t *source=malloc(bytes),*raw=malloc(bytes),*weak=malloc(bytes),
+          *strong=malloc(bytes),*again=malloc(bytes),*direct=malloc(bytes);
+      for(int y=0;y<fh;y++)for(int x=0;x<fw;x++) {
+        int r=(x*255)/(fw-1),green=(y*255)/(fh-1),b=((x*11+y*7)&255);
+        source[y*fw+x]=0xff000000u|(r<<16)|(green<<8)|b;
+      }
+      MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:
+          MTLPixelFormatBGRA8Unorm width:fw height:fh mipmapped:NO];
+      d.storageMode=MTLStorageModeShared;d.usage=MTLTextureUsageRenderTarget;
+      id<MTLTexture> outputs[4];for(int i=0;i<4;i++)outputs[i]=[device newTextureWithDescriptor:d];
+      Dkc1GraphicsSettings settings;Dkc1GraphicsDefault(&settings);
+      for(int i=0;i<4;i++) {
+        settings.hd_finish=i==0?0:i==1?33:100;
+        id<MTLCommandBuffer> command=[queue commandBuffer];
+        if(![g encodePixels:source width:fw height:fh target:outputs[i]
+            viewport:(MTLViewport){0,0,fw,fh,0,1} settings:settings commandBuffer:command])return 1;
+        [command commit];[command waitUntilCompleted];if(command.status==MTLCommandBufferStatusError)return 1;
+      }
+      [outputs[0] getBytes:raw bytesPerRow:fw*4 fromRegion:MTLRegionMake2D(0,0,fw,fh) mipmapLevel:0];
+      [outputs[1] getBytes:weak bytesPerRow:fw*4 fromRegion:MTLRegionMake2D(0,0,fw,fh) mipmapLevel:0];
+      [outputs[2] getBytes:strong bytesPerRow:fw*4 fromRegion:MTLRegionMake2D(0,0,fw,fh) mipmapLevel:0];
+      [outputs[3] getBytes:again bytesPerRow:fw*4 fromRegion:MTLRegionMake2D(0,0,fw,fh) mipmapLevel:0];
+      unsigned changed=0;uint64_t weakDelta=0,strongDelta=0;
+      for(size_t i=0;i<count;i++) {
+        if((raw[i]^source[i])&0xffffffu)failures++;
+        if((raw[i]^strong[i])&0xffffffu)changed++;
+        for(int shift=0;shift<24;shift+=8) {
+          int base=(raw[i]>>shift)&255;
+          weakDelta+=llabs((int)((weak[i]>>shift)&255)-base);
+          strongDelta+=llabs((int)((strong[i]>>shift)&255)-base);
+        }
+      }
+      if(changed<=count*9/10 || weakDelta>=strongDelta || memcmp(strong,again,bytes)) {
+        fprintf(stderr,"CPU HD finish failed changed=%u weak=%llu strong=%llu deterministic=%d\n",
+            changed,(unsigned long long)weakDelta,(unsigned long long)strongDelta,!memcmp(strong,again,bytes));
+        failures++;
+      }
+      MTLTextureDescriptor *inputDescription=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:
+          MTLPixelFormatBGRA8Unorm width:fw height:fh mipmapped:NO];
+      inputDescription.storageMode=MTLStorageModeShared;inputDescription.usage=MTLTextureUsageShaderRead;
+      id<MTLTexture> input=[device newTextureWithDescriptor:inputDescription];
+      [input replaceRegion:MTLRegionMake2D(0,0,fw,fh) mipmapLevel:0 withBytes:source bytesPerRow:fw*4];
+      settings.hd_finish=100;id<MTLCommandBuffer> command=[queue commandBuffer];
+      if(![g encodeTexture:input target:outputs[3] viewport:(MTLViewport){0,0,fw,fh,0,1}
+          settings:settings commandBuffer:command])return 1;
+      [command commit];[command waitUntilCompleted];if(command.status==MTLCommandBufferStatusError)return 1;
+      [outputs[3] getBytes:direct bytesPerRow:fw*4 fromRegion:MTLRegionMake2D(0,0,fw,fh) mipmapLevel:0];
+      if(memcmp(raw,direct,bytes)){fprintf(stderr,"GPU HD texture was double-finished\n");failures++;}
+      printf("CPU HD finish: changed=%u weak_delta=%llu strong_delta=%llu deterministic=%d direct_raw=%d\n",
+          changed,(unsigned long long)weakDelta,(unsigned long long)strongDelta,
+          !memcmp(strong,again,bytes),!memcmp(raw,direct,bytes));
+      [input release];for(int i=0;i<4;i++)[outputs[i] release];
+      free(source);free(raw);free(weak);free(strong);free(again);free(direct);
+    }
     free(pixels);[g release];[queue release];[device release];
     printf("Metal graphics: %s (%d mismatches)\n",failures ? "FAILED" : "passed",failures);return failures ? 1 : 0;
   }

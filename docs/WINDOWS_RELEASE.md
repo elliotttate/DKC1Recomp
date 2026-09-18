@@ -1,7 +1,46 @@
-# Windows SDL/OpenGL release
+# Windows SDL release
 
-Current Windows release: [v0.0.13, Dixie Kong update](RELEASE_0.0.13.md).
+Current Windows release: [v0.0.17, player host with frame generation](RELEASE_0.0.17.md).
 The sections below retain the earlier host validation history.
+
+## v0.0.17 Direct3D presenter, pacing and frame generation
+
+The SDL host presents through `runner/windows_present.c`: a Direct3D 11
+flip-model swap chain (three buffers, frame-latency waitable object, maximum
+latency one, `DKC1_MAX_FRAME_LATENCY=2` to widen it) that runs the Mac graphics
+passes as HLSL generated at build time by `scripts/generate_windows_hlsl.py`.
+The viewport, pixel-aspect and pass sequence are the OpenGL presenter's, which
+remains the fallback (`DKC1_PRESENTER=opengl`) and is still built and tested.
+
+Pacing follows the native host: a display whose refresh divides to 59.5-60.5 Hz
+locks the emulated frame to an integer divisor and waits on the swap chain's
+waitable object (`waitable`); the OpenGL fallback waits on `DwmFlush`
+(`dwmflush`); other rates or `DKC1_PRESENT_HZ` use the absolute QPC timer
+(`timer`). Wait-first ordering samples the controller as late as possible in
+the locked modes; timer mode and the 120 Hz pair keep work-first ordering. The
+emulation thread joins the MMCSS Games class and opts out of power throttling.
+`DKC1_PACING_LOG` writes the asynchronous `dkc1.pacing.v5` record with DXGI
+scanout statistics; the Mac pacing log is not opened on Windows.
+
+**View > Smooth animation / frame generation** (F10, `[Host] FrameGen`,
+`DKC1_FRAMEGEN=1|force`) enables the four-frame pose interpolation and, on an
+even display divisor with Direct3D, the midpoint worker that presents the
+generated in-between image on the following refresh. A frame splits its
+refreshes only when it produced a midpoint; stepping, rewind, fast-forward,
+layer isolation, the provenance overlay, state loads and aspect changes drop
+the history so no image is built across a jump. **View > Pixel aspect**
+(`[Host] SquarePixels`, `DKC1_SQUARE_PIXELS=1`) presents square pixels instead
+of the 7:6 CRT pixel.
+
+**Game > Change ROM...** verifies and remembers a new ROM, exits after the
+in-game save flush and restarts the matching stock or Dixie executable. The
+window title is the product name plus variant, paused state and any isolated
+layer. Tier-2 coverage journals go to the `NUL` device unless
+`SNESRECOMP_TIER2_CAPTURE=1` or an explicit tier-2 path is set.
+
+`DKC1Recomp.exe --graphics-test` runs the OpenGL test and then the Direct3D
+test (readback of the flip-model back buffer before presentation). See the
+[v0.0.17 release notes](RELEASE_0.0.17.md) for the measured pacing evidence.
 
 ## v0.0.12 in-game saves
 
@@ -28,11 +67,14 @@ PowerShell:
 
 ```powershell
 .\build_windows.ps1 -Rom 'C:\private\Donkey Kong Country (USA).sfc'
-& .\build-windows\release\DKC1Recomp.exe 'C:\private\Donkey Kong Country (USA).sfc'
+& .\build-windows\release\DKC1Recomp.exe
 ```
 
-Double-clicking the release executable opens a ROM picker. Keep `SDL2.dll`
-beside the executable; the MSVC runtime and miniz are statically linked. The
+The script also generates and builds the Dixie sibling (`-SkipDixie` omits
+it) and runs CTest plus the public suite (`-SkipPublicTests`). Double-clicking
+the release executable opens a ROM picker the first time and remembers the
+verified path. Keep `SDL2.dll` and `dkc1_dixie_desktop.exe` beside the
+executable; the MSVC runtime and miniz are statically linked. The
 supported headerless 4 MiB ROM has SHA-256
 `fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15`.
 No ROM, extracted assets or private state belongs in the release ZIP.
@@ -41,9 +83,9 @@ No ROM, extracted assets or private state belongs in the release ZIP.
 
 | Controls | Windows implementation |
 | --- | --- |
-| Graphics / CRT | All 23 persisted graphics fields; Nearest, Bilinear, Sharp Bilinear, Reconstruct; five reconstruction modes including dither decoding; strength/softness/shading; CRT presets, masks, scanlines, sharpness, glow, halation and curvature |
+| Graphics / CRT | All 23 persisted graphics fields; Nearest, Bilinear, Sharp Bilinear, Reconstruct; five reconstruction modes including dither decoding; strength/softness/shading; CRT presets, masks, scanlines, sharpness, glow, halation and curvature; v0.0.17 renders them through Direct3D 11 (OpenGL fallback) |
 | Screen colors | Same Raw, CRT, Composite and Trinitron lookup tables |
-| View | 4:3, 16:10 and 16:9; window scale, fullscreen, Reflect/Bars/Shift/Glide; layer isolation and provenance |
+| View | 4:3, 16:10 and 16:9; window scale, fullscreen, Reflect/Bars/Shift/Glide; layer isolation and provenance; v0.0.17 adds Smooth animation / frame generation and Pixel aspect |
 | Controls | Both players' keyboard/gamepad bindings, source routing and analog deadzones; controller pause navigation |
 | Assist / states | Opt-in rewind, 3x fast-forward, four remappable host actions, five independent state slots |
 | Sound | Canonical game audio, host-only drift correction, mute/volume; MSU-1 folder or bounded `.msu1`/ZIP import |

@@ -1,14 +1,16 @@
 #import "macos_graphics.h"
 #import <Foundation/Foundation.h>
+#include "dkc1_hd_sprites.h"
+#include "dkc1_video.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { Flat, Reconstruct, Lines, Beam, Down, Blur, Compose, PassCount };
+enum { Flat, Reconstruct, Lines, Beam, Down, Blur, Compose, Finish, PassCount };
 @implementation Dkc1MetalGraphics {
   id<MTLDevice> _device;
   id<MTLRenderPipelineState> _pipelines[PassCount];
-  id<MTLTexture> _inputs[3], _lines, _beam, _glow[2], _halo[2];
+  id<MTLTexture> _inputs[3], _finished[3], _lines, _beam, _glow[2], _halo[2];
   NSLock *_inputLock;
   BOOL _busy[3];
   id<MTLTexture> _cachedOutput;
@@ -32,14 +34,14 @@ enum { Flat, Reconstruct, Lines, Beam, Down, Blur, Compose, PassCount };
   id<MTLLibrary> library=[device newLibraryWithSource:source options:options error:error];
   if (!library) { [self release]; return nil; }
   id<MTLFunction> vertex=[library newFunctionWithName:@"dkc1_vertex"];
-  NSArray *names=@[@"flat",@"reconstruct",@"lines",@"beam",@"down",@"blur",@"compose"];
+  NSArray *names=@[@"flat",@"reconstruct",@"lines",@"beam",@"down",@"blur",@"compose",@"finish"];
   BOOL ok=YES;
   for (int i=0;i<PassCount;i++) {
     id<MTLFunction> fragment=[library newFunctionWithName:
         [@"dkc1_" stringByAppendingString:names[i]]];
     MTLRenderPipelineDescriptor *d=[[MTLRenderPipelineDescriptor alloc] init];
     d.vertexFunction=vertex; d.fragmentFunction=fragment;
-    d.colorAttachments[0].pixelFormat=(i==Flat || i==Reconstruct || i==Compose)
+    d.colorAttachments[0].pixelFormat=(i==Flat || i==Reconstruct || i==Compose || i==Finish)
         ? MTLPixelFormatBGRA8Unorm : MTLPixelFormatRGBA16Float;
     _pipelines[i]=[device newRenderPipelineStateWithDescriptor:d error:error];
     [d release]; [fragment release];
@@ -140,10 +142,42 @@ enum { Flat, Reconstruct, Lines, Beam, Down, Blur, Compose, PassCount };
     (void)completed;
     [_inputLock lock]; _busy[slot]=NO; [_inputLock unlock];
   }];
+  id<MTLTexture> source=_inputs[slot];
+  /* Fixed-room HD plates use the CPU scene compositor and arrive here as an
+   * already composed 4x frame.  The GPU scene path applies this finish before
+   * encodeTexture; apply the identical pass only to 4x CPU uploads so neither
+   * native frames nor GPU-composed HD frames are processed twice. */
+  if (s.hd_finish>0 && h==kDkc1VideoHeight*kDkc1HdScale) {
+    if (!_finished[slot] || _finished[slot].width!=(NSUInteger)w ||
+        _finished[slot].height!=(NSUInteger)h) {
+      [_finished[slot] release];
+      _finished[slot]=[self texture:w height:h format:MTLPixelFormatBGRA8Unorm shared:NO];
+    }
+    if (!_finished[slot]) return NO;
+    float finish[27]={w,h,w,h,0,s.hd_finish/100.f};
+    [self pass:Finish source:source target:_finished[slot]
+        viewport:(MTLViewport){0,0,w,h,0,1} parameters:finish buffer:buffer];
+    source=_finished[slot];
+  }
+  if (![self encodeSource:source target:target viewport:v settings:s
+      originX:(cacheEffect?finalViewport.originX:0) originY:(cacheEffect?finalViewport.originY:0)
+      commandBuffer:buffer]) return NO;
+  if (cacheEffect) {
+    memcpy(_cachedPixels,pixels,bytes);_cachedSettings=s;
+    _cachedViewport=finalViewport;_cachedWidth=w;_cachedHeight=h;_cacheValid=YES;
+    float copy[27]={target.width,target.height,finalViewport.width,finalViewport.height,0};
+    [self pass:Flat source:target target:finalTarget viewport:finalViewport parameters:copy buffer:buffer];
+  }
+  return YES;
+}
+- (BOOL)encodeSource:(id<MTLTexture>)source target:(id<MTLTexture>)target
+    viewport:(MTLViewport)v settings:(Dkc1GraphicsSettings)s
+    originX:(float)originX originY:(float)originY commandBuffer:(id<MTLCommandBuffer>)buffer {
+  int w=(int)source.width,h=(int)source.height;
   float p[27]={w,h,v.width,v.height,s.reconstruct_mode,
                s.strength/100.f,s.softness/100.f,s.shading/100.f};
-  p[25]=cacheEffect ? finalViewport.originX : 0;
-  p[26]=cacheEffect ? finalViewport.originY : 0;
+  p[25]=originX;
+  p[26]=originY;
   Dkc1CrtFrameParams c;
   BOOL crt=s.display==kDkc1DisplayCrt && Dkc1CrtDerive(&s.crt,v.width,v.height,w,h,&c);
   if (crt) {
@@ -158,7 +192,7 @@ enum { Flat, Reconstruct, Lines, Beam, Down, Blur, Compose, PassCount };
     p[18]=c.corner_radius; p[19]=c.vignette;
     p[20]=c.mask==kDkc1CrtMaskNone ? 0 : c.mask==kDkc1CrtMaskSlot ? 2 : 1;
     p[21]=c.mask_pitch; p[22]=c.mask_strength; p[23]=c.mask_gain; p[24]=c.knee;
-    [self pass:Lines source:_inputs[slot] target:_lines parameters:p buffer:buffer];
+    [self pass:Lines source:source target:_lines parameters:p buffer:buffer];
     [self pass:Beam source:_lines target:_beam parameters:p buffer:buffer];
     for (int i=0;i<2;i++) {
       id<MTLTexture> source=i ? _glow[0] : _beam;
@@ -171,19 +205,39 @@ enum { Flat, Reconstruct, Lines, Beam, Down, Blur, Compose, PassCount };
   } else {
     if (s.upscaler!=kDkc1UpscalerReconstruct) p[4]=s.upscaler;
     [self pass:s.upscaler==kDkc1UpscalerReconstruct ? Reconstruct : Flat
-        source:_inputs[slot] target:target viewport:v parameters:p buffer:buffer];
-  }
-  if (cacheEffect) {
-    memcpy(_cachedPixels,pixels,bytes);_cachedSettings=s;
-    _cachedViewport=finalViewport;_cachedWidth=w;_cachedHeight=h;_cacheValid=YES;
-    float copy[27]={target.width,target.height,finalViewport.width,finalViewport.height,0};
-    [self pass:Flat source:target target:finalTarget viewport:finalViewport parameters:copy buffer:buffer];
+        source:source target:target viewport:v parameters:p buffer:buffer];
   }
   return YES;
 }
+- (BOOL)encodeTexture:(id<MTLTexture>)source target:(id<MTLTexture>)target
+    viewport:(MTLViewport)viewport settings:(Dkc1GraphicsSettings)settings
+    commandBuffer:(id<MTLCommandBuffer>)buffer {
+  if(!source || !target || !buffer)return NO;
+  Dkc1GraphicsClamp(&settings);
+  const BOOL effect=settings.display==kDkc1DisplayCrt || settings.upscaler==kDkc1UpscalerReconstruct;
+  if(effect) {
+    // Match the established CPU-input path's origin-zero effect raster exactly.
+    // Direct rendering at an inset viewport changes interpolation rounding.
+    _cacheValid=NO;
+    if(!_cachedOutput || _cachedOutput.width!=(NSUInteger)viewport.width ||
+       _cachedOutput.height!=(NSUInteger)viewport.height) {
+      [_cachedOutput release];
+      _cachedOutput=[self texture:viewport.width height:viewport.height format:MTLPixelFormatBGRA8Unorm shared:NO];
+    }
+    if(!_cachedOutput)return NO;
+    if(![self encodeSource:source target:_cachedOutput
+        viewport:(MTLViewport){0,0,viewport.width,viewport.height,0,1} settings:settings
+        originX:viewport.originX originY:viewport.originY commandBuffer:buffer])return NO;
+    float copy[27]={_cachedOutput.width,_cachedOutput.height,viewport.width,viewport.height,0};
+    [self pass:Flat source:_cachedOutput target:target viewport:viewport parameters:copy buffer:buffer];
+    return YES;
+  }
+  return [self encodeSource:source target:target viewport:viewport settings:settings
+      originX:0 originY:0 commandBuffer:buffer];
+}
 - (void)dealloc {
   for (int i=0;i<PassCount;i++) [_pipelines[i] release];
-  for (int i=0;i<3;i++) [_inputs[i] release];
+  for (int i=0;i<3;i++) { [_inputs[i] release]; [_finished[i] release]; }
   for (int i=0;i<2;i++) { [_glow[i] release]; [_halo[i] release]; }
   [_cachedOutput release]; free(_cachedPixels);
   [_lines release]; [_beam release]; [_inputLock release]; [_device release];

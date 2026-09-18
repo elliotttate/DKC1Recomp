@@ -2,6 +2,7 @@ build/
 build-*/
 .DS_Store
 generated/
+.DS_Store
 *.sfc
 *.smc
 *.srm

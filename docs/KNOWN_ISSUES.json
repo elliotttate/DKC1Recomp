@@ -2,86 +2,6 @@
   "schema": "dkc1.known-issues.v1",
   "issues": [
     {
-      "id": "ios-single-thumb-run-jump-roll",
-      "status": "fixed",
-      "summary": "A thumb that began on Y could not also press B by rolling across the touch diamond; the preceding adapter update handled separate fingers only.",
-      "repro": "Press Y with one thumb, roll toward B without lifting, roll back to Y, then repeat.",
-      "expected": "Y stays held, B presses when the same thumb overlaps it, and rolling back releases B for another jump. Double-tap Y hold still works.",
-      "first_seen": "2026-09-14",
-      "evidence": "docs/IOS.md; tests/test_ios_touch_button.c; build/ios-roll-tests.log; build/ios-validation/roll-y-b.png; build/ios-roll-install.json; build/ios-roll-launch.json",
-      "fixed_note": "UIKit keeps a contact with its initial view. Y now forwards per-contact overlap with B using stable layout coordinates and a bounded contact-radius estimate. B combines rolled contributions with its independent direct touches; rolling away or lifting removes only the matching contribution. A release band prevents boundary jitter and a roll invalidates Y double-tap candidacy. The production model passes repeated single-contact Y/B rolls, direct-plus-rolled touches, edge jitter, radius bounds and cancellation; both native Release builds pass. Simulator display QA checks both highlights. Physical thumb feel remains for user playtesting; no runtime/video or save-format changes."
-    },
-    {
-      "id": "ios-simultaneous-run-jump-touch",
-      "status": "fixed",
-      "summary": "The original UIKit game buttons used transient highlight state for input; the player needs reliable Y+B chords and a double-tap Y hold toggle.",
-      "repro": "Keep Y pressed and press/release B repeatedly. Double-tap Y, lift the finger, jump with B, then double-tap Y again.",
-      "expected": "Each button remains independently pressed for its touch lifetime; Y can latch on/off with a visible HOLD indicator.",
-      "first_seen": "2026-09-14",
-      "evidence": "docs/IOS.md; tests/test_ios_touch_button.c; build/ios-touch-tests.log; build/ios-validation/touch-hold-y.png",
-      "fixed_note": "Track actual UITouch identities and independent button state, explicitly enable concurrent controls, and OR active button masks. Recognize short Y tap pairs without delaying normal button input. Display a green HOLD ring/label and clear input on pause/cancellation. The real input model passes overlapping Y/B presses, repeated jumps, latch on/off, non-latching B taps, long press, drag, multiple fingers and stale release tests. Simulator visible QA and signed device build/install complete; physical touch feel remains for user playtesting. Guest masks, runtime timing and landscape rendering are unchanged."
-    },
-    {
-      "id": "ios-landscape-stretched-native-image",
-      "status": "fixed",
-      "summary": "The first iOS landscape overlay stretched a 256x224 framebuffer to the phone aspect, distorting the game.",
-      "repro": "Load the iOS game and enter landscape; distortion appeared on the first displayed landscape frame.",
-      "expected": "Render additional native source columns, preserve SNES pixel proportions, fill the phone with transparent touch controls.",
-      "first_seen": "2026-09-14",
-      "evidence": "docs/IOS.md; build/ios-validation/native-wide/; build/ios-release/BUILDINFO.json",
-      "fixed_note": "The UIKit host selects an even display-matched source width, 418x224 on iPhone 16 Pro Max, bounded by the existing 448-column PPU capacity. Rebind the framebuffer pitch on geometry changes; present at fixed 7:6 pixel aspect with nearest sampling. Gameplay enters landscape automatically. Native-center exact-state comparisons and six cross-platform replays pass; all 27 samples across four tested transitions pass. Four available clean entrances pass terrain grades and repeat determinism; native-wide machine differences remain investigations and the 40-entrance floor is incomplete. Desktop presets are unchanged. No ROM, generated code, submodule, shared calibration or gameplay-policy edits."
-    },
-    {
-      "id": "ios27-scene-lifecycle-launch",
-      "status": "fixed",
-      "summary": "The initial UIKit device build traps before the first game frame on iOS 27 because it creates an application window without adopting scene lifecycle.",
-      "repro": "Launch the initial signed arm64 build on iPhone 16 Pro Max running iOS 27.0 (24A5408d). The iOS 26.5 simulator does not enforce the requirement.",
-      "expected": "Create the native window through UIWindowScene and boot the verified game normally.",
-      "first_seen": "2026-09-14",
-      "evidence": "docs/IOS.md; build/ios-validation/device-crash.ips; build/ios-device-console-fixed.log; build/ios-install.json; build/ios-validation/jungle-replays/comparison.json",
-      "fixed_note": "The crash names ___UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption_block_invoke. Add a single Game scene declaration, DKCSceneDelegate, and initWithWindowScene. The corrected app boots and remains running on the same phone; the live intro and touch interface were inspected via QuickTime. Three iOS and desktop fresh Jungle replays match all seven frame/memory/audio fingerprints. No game, ROM, saved-state, or widescreen changes. Whole-game mobile performance and physical Bluetooth controllers are not yet validated."
-    },
-    {
-      "id": "dixie-stomp-haptics",
-      "status": "fixed",
-      "summary": "Dixie enemy stomps produce no feedback because the host compares her rebound to stock DK's value; the Windows host also lacks visible rumble controls.",
-      "repro": "contracts/dixie-stomp.json: fresh boot, falling at frame 7749, stomp at 7750. Equivalent immutable Jungle-state route reaches the stomp at relative frame 149.",
-      "expected": "Recognize the pinned variant's accepted rebound and expose a persistent on/off setting and controller test.",
-      "first_seen": "2026-09-14",
-      "evidence": "docs/DIXIE_HAPTICS.md; build/release-v0.0.13/haptics/; build/release-v0.0.13/stomp-regression.json; haptics-ctest.log; haptics-unittest.log",
-      "fixed_note": "Select $0900 only for DKC1_DIXIE_VARIANT, grounded in the pinned bytes at BF:A79F and consecutive WRAM frames. Preserve stock $0720, Diddy $0880 and all existing guards. The real detector recognizes exactly one hit in the 300-frame trace. Three fresh-boot stomp/landing runs are byte-identical with lives preserved. Both SDL variants pass actual worker-to-virtual-controller pulse/disable/stop tests; platform tests cover preference persistence and menu state. No controller was connected during device inspection, so physical vibration remains unverified. No guest state or save format changes."
-    },
-    {
-      "id": "dixie-map-sprite-corruption",
-      "status": "fixed",
-      "summary": "The optional Dixie variant shows conspicuous garbage sprite clusters on Kongo Jungle and Jungle entrance maps, including after death. Fresh controller-only boot reproduces it; Jungle gameplay is clean in the inspected movement branches.",
-      "repro": "Dixie headless, native mode, first 5750 frames of recipes/dixie-jungle-startup.dks from the verified clean ROM; tracked Jungle-map OAM cluster begins at frame 5728, with earlier corruption on the preceding map.",
-      "expected": "Clean map sprites and transitions without filtering visible OAM or rewriting historical save-state contents.",
-      "first_seen": "2026-09-13",
-      "evidence": "docs/DIXIE_MAP_FIX_2026-09-14.md; build/dixie-map-fix-20260914/final-manifest.json; map-regression.json; final-validation.json; final-visible-after.jpg; historical docs/DIXIE_QA_2026-09-13.md",
-      "fixed_note": "The pinned mod's pose table at BB:F8A8 points to 41:6000, file offset 416000. Stock folding read unrelated bytes at 016000 as sprite layout data. Enable bounded linear low data banks only in the Dixie variant, retaining C0-FF stock aliases and default-off stock mapping. Fresh boot and normal map refresh are clean; three controller-only refreshes produce identical snapshots with six lives, 83 bananas and progress preserved. Ropey entry, Jungle spin, stock output, save continuity and visible SDL QA pass. Old serialized graphics remain historical until normal reload; the original tester save is backed up. Full-game and widescreen validation remain incomplete."
-    },
-    {
-      "id": "sdl-startup-route-oam-port-timing",
-      "status": "fixed",
-      "summary": "Input-only SDL startup routes skipped the per-frame drawing/HDMA/VBlank step, leaving PPU OAM uploads misaligned and visibly corrupting both stock and Dixie sprites at first interactive presentation.",
-      "repro": "DKC1_STARTUP_SCRIPT=recipes/dixie-jungle-startup.dks, native mode, clean boot; Dixie first interactive frame 7602.",
-      "expected": "The startup route must execute the same CPU and rendering/VBlank sequence as the normal runner, preserving its native framebuffer and all guest-memory hashes.",
-      "first_seen": "2026-09-13",
-      "evidence": "docs/DIXIE_QA_2026-09-13.md; build/dixie-qa-20260913/startup-comparison.json; final-checks.log",
-      "fixed_note": "Initialize the offscreen drawing buffer and run Dkc1DrawPpuFrame once per successful startup frame. Three fresh Dixie SDL runs match the headless framebuffer and WRAM/VRAM/CGRAM/PPU OAM/OAM-shadow hashes; stock SDL also matches its independent headless oracle. The existing no-startup-script path is unchanged. Old corrupt startup snapshots remain historical evidence."
-    },
-    {
-      "id": "dixie-windows-relaunch-integration",
-      "status": "fixed",
-      "summary": "Dixie menu restarts lost the selected ROM path and the SDL variant could return to the debugger filename; the regular Windows build lacked a matching SDL variant target.",
-      "repro": "Toggle Mods > Dixie Kong Country in both Windows hosts with a clean ROM path containing spaces; also start SDL with a persisted choice and cached ROM.",
-      "expected": "Preserve the resolved ROM and restart into the correct sibling frontend; stock must reject the 6 MiB image against stock generated code.",
-      "first_seen": "2026-09-13",
-      "evidence": "docs/DIXIE_QA_2026-09-13.md; build/dixie-qa-20260913/",
-      "fixed_note": "Preserve the selected ROM, quote paths, specify the CreateProcess target, resolve picker/cache paths before handoff, honor explicit menu changes over inherited automation settings, and restore the prior preference on a failed menu launch. Added opt-in SDL CMake variant target, repaired Windows platform self-tests, and restored the stock ROM identity gate. Actual stock/Dixie/stock menu restarts, native GPU smoke and all three Windows CTests pass."
-    },
-    {
       "id": "no-contact-damage",
       "status": "fixed",
       "summary": "Contact damage never lands: DK overlaps the first Gnawty for 3800+ frames unharmed in BOTH native and wide modes, and identically under forced LLE (not a dispatch/widescreen defect).",
@@ -266,7 +186,187 @@
       "repro": "build/repros/water-seam-20260906/inputs/quicksave.state; frame 34978, mode 3, level $0061, entrance $00BF, camera 943/10113; right-face follow-up: build/repros/water-right-seam-20260906/inputs/quicksave.state, frame 78551, camera 671/10048",
       "expected": "Continue only the verified offscreen wall pattern, preserving every native-center pixel and guest state; retain source defaults until the fresh-entry promotion gate passes.",
       "first_seen": "2026-09-06",
-      "mitigation_note": "DKC1_WS_WALL_SEAMS=1 checks the complete original junction and reads correctly phased donor cells from the same wall. Exact A/B changes 2105 left-margin composite pixels; native center, right margin and all guest hashes remain exact. Both aspects pass three-repeat nearby scrolling and native/layer comparisons. The real window is clean with the user graphics settings. Fresh Coral Capers entry is still unverified. See docs/WIDESCREEN_WALL_SEAM.md. The right-facing extension changes 4982 right-margin pixels at 16:10 and 8375 at 16:9; matching donor triples also close the blue gap. Three-repeat routes and native/isolated-layer checks pass, and the original left-seam routes remain exact. The rebuilt normal app is visually verified at the new save. The next ceiling-corner hole at frame 110246/camera 671,9898 is repaired by extending the verified donor range to row 312; explicit 16:10/16:9 occupancy checks pass. Original ripple retained by user choice."
+      "mitigation_note": "DKC1_WS_WALL_SEAMS=1 checks the complete original junction and reads correctly phased donor cells from the same wall. Exact A/B changes 2105 left-margin composite pixels; native center, right margin and all guest hashes remain exact. Both aspects pass three-repeat nearby scrolling and native/layer comparisons. The real window is clean with the user graphics settings. Fresh Coral Capers entry is still unverified. See docs/WIDESCREEN_WALL_SEAM.md. The right-facing extension changes 4982 right-margin pixels at 16:10 and 8375 at 16:9; matching donor triples also close the blue gap. Three-repeat routes and native/isolated-layer checks pass, and the original left-seam routes remain exact. The rebuilt normal app is visually verified at the new save."
+    },
+    {
+      "id": "hd-opposite-facing-stale-materials",
+      "status": "fixed",
+      "summary": "The private HD Nano motion preview updated canonical DK rasters only; left-facing walking/turning retained old restoration art, and left-facing running could fall back to original pixels.",
+      "repro": "recipes/hd-actions.dks from build/hd-slice/entry.state; compare private motion and reviewed packs at relative frame 326.",
+      "evidence": "docs/HD_ANIMATION_REVIEW.md; build/hd-slice/animation-review-20260906/live-left-before/window.png; build/hd-slice/animation-review-20260906/live-left-after/window.png",
+      "expected": "Every explicitly selected DK candidate supplies byte-verified original-facing and mirrored keys using the same chosen HD art.",
+      "first_seen": "2026-09-06",
+      "fixed_note": "Local experiment only. tools/hd_sprite_pack.py registered writes both directions after exact source-raster hash validation. The 110-pose candidate writes 220 materials, replacing 52 stale entries and adding 85 missing entries; 83 canonical entries remain unchanged. 108 deterministic HD on/off, native/wide replays preserve guest output and audio. Actual left-running windows differ only in the intended selected art, and their saved machine states are byte-identical. No renderer or scene guard was changed."
+    },
+    {
+      "id": "hd-animation-draft-quality-and-coverage",
+      "status": "open",
+      "summary": "The 700 DK candidates have broad pose and continuity defects. The complete 53-group contact-sheet review does not establish full-game runtime coverage or landmark acceptance.",
+      "repro": "Private build/hd-slice/reimagined/all-animations/review boards; see the per-group register in docs/HD_ANIMATION_REVIEW.md.",
+      "expected": "Preserve source pose, direction, contacts, partial-body cropping, appearance and cartridge-timed transitions before accepting each group.",
+      "first_seen": "2026-09-06",
+      "evidence": "docs/HD_ANIMATION_REVIEW.md; docs/HD_BARREL_ROLL_REVIEW.md; docs/HD_BOUNCE_IDLE_REVIEW.md; build/hd-slice/bounce-idle-20260907/coverage.json",
+      "mitigation_note": "The private selection now contains 208 DK poses / 416 facing materials. The previous roll/carry/throw pass remains byte-identical. All 16 enemy-bounce spin and 24 chest-beating poses are now covered in both directions; stale right-facing chest art and missing left-facing chest keys were repaired. 60 additional native/wide HD on/off replay legs pass with explicit required-pose coverage. Two 6,000-frame idle probes have no reconstruction mismatches or missing DK materials. Both directions were checked in the visible app. Strict geometry, Turn2, several provisional poses, ropes, swimming, minecart, scripted sequences and full-game coverage remain open. The unchanged $0016 scene guard still limits HD rendering. See docs/HD_BOUNCE_IDLE_REVIEW.md."
+    },
+    {
+      "id": "hd-bounce-and-left-idle-materials",
+      "status": "fixed",
+      "summary": "Within the supported Jungle slice, enemy-bounce spin had no HD keys in either direction; chest-beating used stale right-facing drafts and missing left-facing keys, causing original-sprite fallback during idle.",
+      "repro": "recipes/hd-bounce-right.dks, hd-bounce-left.dks, hd-idle-cycle-right.dks and hd-idle-cycle-left.dks from the private immutable HD root.",
+      "expected": "All spin and chest-beating poses render with the selected HD art in both directions through recovery.",
+      "first_seen": "2026-09-06",
+      "evidence": "docs/HD_BOUNCE_IDLE_REVIEW.md; build/hd-slice/bounce-idle-20260907/verification/results.json; build/hd-slice/bounce-idle-20260907/long-idle-results.json",
+      "mitigation_note": "Installed 16 Bounce and 24 BeatChest source poses with exact mirrored keys. 60 replay legs require every targeted original raster key; 6,000-frame idle checks pass both ways. Visual and guest logic are unchanged outside material selection. Full-game art quality remains tracked separately."
+    },
+    {
+      "id": "hd-material-cache-exhaustion",
+      "status": "fixed",
+      "summary": "The private HD scene cache stopped loading materials after 4096 identities, causing installed walking poses and background chunks to fall back to original pixels.",
+      "repro": "recipes/hd-cache-pressure.dks and the preserved tester-state warm replay; old/new divergence starts at eligible HD frame 637 in the wide route.",
+      "expected": "Keep loading installed HD poses during long play while retaining every material referenced by the current frame.",
+      "first_seen": "2026-09-07",
+      "evidence": "docs/HD_MATERIAL_CACHE_REVIEW.md; build/hd-slice/left-fallback-20260907/live-cache.json; build/hd-slice/left-fallback-20260907/warm-exact-results.json",
+      "mitigation_note": "Bounded least-recently-used eviction protects retained background and current object pointers. 120 native/wide on/off replay legs pass; three exact tester-state warm repeats have zero reconstruction mismatches, unchanged guest hashes and deterministic HD. Native-window walking poses pass after actual cache saturation. Existing artwork and the $0016 guard are unchanged; full-game coverage remains open."
+    },
+    {
+      "id": "hd-environment-nano-coverage",
+      "status": "open",
+      "summary": "Connected Nano scenery covers Jungle and the tested Jungle Bonus 1 cave; broader sprite/composite and other-room coverage remain incomplete.",
+      "repro": "recipes/hd-barrel-right.dks and recipes/hd-barrel-left.dks with scene-pack-nano-environment-v7",
+      "evidence": "docs/HD_ENVIRONMENT_REVIEW.md; build/hd-slice/environment-nano-20260907/motion-v7; build/hd-slice/environment-nano-20260907/live-v7; docs/HD_NANO_POLISH_REVIEW.md; build/hd-slice/nano-level-20260916/polish/verification-final/results.json",
+      "expected": "Complete connected, source-aligned environment coverage without hard changes between replacement and older materials; preserve exact source context matching and guest behavior.",
+      "first_seen": "2026-09-07",
+      "mitigation_note": "Private connected-world pack verifies every source subtile and preserves guest hashes; visible BG misses are zero on the native exit route and bounded wide route. Offline source-constrained matte cleanup removes tested DK/Diddy gray fringes. A focused Nano revision restores the floating life-balloon face in 27 source frames and 54 facing keys; native red-balloon QA and bounded replays are documented in docs/HD_BALLOON_FACE_REVIEW.md. A later saved-state scrolling fix keeps verified connected subtiles stable while exact fallback fills only unresolved neighbors; see docs/HD_NANO_POPIN_REVIEW.md. The same-pack motion diagnostic drops stable-source changes from 29714 to 4914, with zero visible background misses on the final exact-state route. Unseen object composites and unsupported rooms still fall back; no full-game visual acceptance or release-default promotion. The later left-doorway patch was a partial-left ring-period binding error, corrected in the opt-in connected renderer; exact/fresh evidence and remaining coverage misses are recorded in docs/HD_NANO_LEFT_EDGE_REVIEW.md. Jungle Bonus 1 now has a separately registered Nano terrain/backdrop/foreground pack, correct uniform cave color math and OBJ palette exemption, plus verified Jungle return selection. See docs/HD_NANO_BONUS_REVIEW.md; remaining original composites and other rooms keep this issue open."
+    },
+    {
+      "id": "framegen-held-poses-and-half-period-budget",
+      "status": "fixed",
+      "summary": "Opt-in Windows frame generation left held character poses unchanged at 60 Hz; synchronous midpoint scheduling also skipped 120 Hz images when pose rendering exceeded half a game period. Fixed within the verified Jungle scope.",
+      "repro": "tools/verify_framegen.py; exact and fresh-entry schedules in docs/FRAMEGEN_REVIEW.md",
+      "evidence": "build/framegen-audit-20260918/accepted-native/report.json; build/framegen-audit-20260918/accepted-wide/report.json; build/framegen-audit-20260918/accepted-fresh-entry/report.json; build/framegen-audit-20260918/accepted-long-timing/report.json",
+      "expected": "Optional buffered interpolation fills supported held poses and 120 Hz midpoint slots while preserving raw cartridge frames and guest state.",
+      "first_seen": "2026-09-18",
+      "fixed_note": "Four-frame look-ahead over decoded OAM artwork, exact composite gate, fractional pose sampling and an immutable-image midpoint worker. Three deterministic replays per mode/branch pass; 1341/1341 long-run midpoints submitted without skips or audio errors. Physical 120 Hz and full-game artwork coverage remain unverified; unsupported/overlapping groups keep raw artwork. See docs/FRAMEGEN_REVIEW.md."
+    },
+    {
+      "id": "framegen-120hz-double-speed-after-click",
+      "status": "fixed",
+      "summary": "On a 120 Hz display with frame generation enabled, the game ran at double speed after the first click in the game window. The click armed provenance tracking permanently, which bypasses interpolation, yet real frames kept the half-divisor sync interval meant for a real+midpoint pair, so each emulated frame occupied one refresh.",
+      "repro": "v0.0.16 DKC1Recomp.exe, 120 Hz display, DKC1_FRAMEGEN=1 or F10, then one left click in the game area; DKC1_PACING_LOG shows submit_interval_ms 8.33 and interp_valid 0 from the click onward.",
+      "evidence": "Release build on a 120 Hz 4K display: 60.0 fps and every midpoint presented before the click, median 8.33 ms per emulated frame and no midpoints after it; standalone waitable-object probe: main+worker pair 60.00 iterations/s, worker skipped 120.00 iterations/s, sync interval 2 alone 60.10 iterations/s.",
+      "expected": "Every emulated frame occupies exactly the display divisor's refreshes whether or not a midpoint accompanies it; a click inspects a pixel without disabling smoothing for the session.",
+      "first_seen": "2026-09-18",
+      "fixed_note": "fixed 2026-09-18: the sync interval (and the DwmFlush pass count) is split only for a frame that actually produced a midpoint; a lone real frame keeps the whole divisor. Click-to-inspect arms provenance only until the inspection resolves. Unit test tests/test_win32_present_cadence.c; docs/HOST_PACING.md."
+    },
+    {
+      "id": "framegen-background-scroll-quantization",
+      "status": "fixed",
+      "summary": "Whole-pixel BG scroll caused uneven parallax steps in optional Windows frame generation. Fractional per-layer sampling fixes the measured Jungle running paths; other layouts are not certified.",
+      "repro": "docs/BACKGROUND_PACING_REVIEW.md; cleared-run.dks from the preserved user root, with independent fresh-entry replay",
+      "evidence": "docs/BACKGROUND_SMOOTHING_REVIEW.md; build/bg-smooth-20260918/accepted60-captures.json; build/bg-smooth-20260918/captures.json; build/bg-smooth-20260918/candidate-1-motion-120-60.json; build/bg-smooth-20260918/fresh-motion-420-60.json",
+      "expected": "Optional generated background phases advance each layer fractionally at its own velocity, preserving raw cartridge output and failing closed on unsupported composition.",
+      "first_seen": "2026-09-18",
+      "fixed_note": "Existing scratch PPU passes capture isolated priority/palette planes. A centered eight-interval filter using the accepted four-frame look-ahead samples each BG fractionally, with exact composition and bounds gates. Three wide 60 Hz replays, native on/off, fresh entry and serial/worker comparisons preserve raw images and guest bytes. Independent pixel registration measures smooth BG1/BG2 motion in both directions at 60 and software 120 cadence. BG3 has synthetic coverage but insufficient visible texture for scene grading. Default-off frame generation only; this spatial fix does not close the separate Windows display-pacing issue. Follow-up: filtering the terrain independently of world OBJ caused K-letter/ground wobble. Terrain now preserves real camera endpoints and shares OBJ midpoint timing; the eight-interval filter is limited to parallax. See docs/FRAMEGEN_TERRAIN_STABILITY_REVIEW.md."
+    },
+    {
+      "id": "win32-running-pacing-outliers",
+      "status": "open",
+      "summary": "Additional Windows running samples contain occasional 33-50 ms real-submission gaps despite clean median and p99 pacing; overrun re-anchoring adds a long wait after late work.",
+      "repro": "docs/BACKGROUND_PACING_REVIEW.md; fresh-running-timing-60 frame 421 and cleared-timing-0-60-3 frames 322/455",
+      "evidence": "build/background-pacing-20260918/cleared-timings.json; build/background-pacing-20260918/fresh-running-timing-60/pacing.jsonl",
+      "expected": "Bounded late-frame recovery and independently verified presentation cadence; no universal zero-drop claim from host submission intervals alone.",
+      "first_seen": "2026-09-18",
+      "mitigation_note": "User is independently fixing the Windows host/compositor path. This audit preserves the tested executable and logs without changing that code. A 2.277 ms late frame incurred 31.0844 ms additional wait and a 50.0322 ms interval. Audio-phase elapsed spikes do not isolate whether an OS call or scheduling caused the initial lateness. Physical scanout remains unverified. 2026-09-18 follow-up: the GDI/timer presenter was replaced by the Direct3D 11 flip-model presenter paced by the swap chain waitable object (docs/HOST_PACING.md, Windows presenter). Its DXGI frame statistics are the scanout oracle: in the September 18 captures every present landed on its own refresh except one 33 ms slot in a debug-panel run where the compositor itself held the image for two refreshes, and a one-time 58-81 ms Present at about 1.5 s after the first present (the compositor changing presentation path; DKC1_PRESENT_WARMUP_MS=2500 moves it before frame 1). Remaining outliers are attributable to the compositor/virtual display, not host submission. Later counterbalanced tests supersede the blanket compositor attribution above: a 323 ms message-pump stall was directly identified as WM_NCLBUTTONDOWN, while an audio submission delay and other gaps remain incompletely classified. Async diagnostic writes and complete QPC/ETW API correlation are implemented; queue 1 remains default. Repeated 30-minute soaks were not run after the user deprioritized pacing. The attempted kernel trace failed. See docs/PACING_HARDENING_REVIEW.md; no universal zero-hitch claim."
+    },
+    {
+      "id": "framegen-terrain-object-registration",
+      "status": "fixed",
+      "summary": "Terrain camera filtering made fixed KONG letters drift against the ground and softened fine hatch texture. Corrected within the tested Jungle sequence.",
+      "repro": "Cleared Jungle exact and independent fresh-entry roots, 570-frame left/right route; source 120 to 135 measures the relative drift.",
+      "evidence": "docs/FRAMEGEN_TERRAIN_STABILITY_REVIEW.md; build/framegen-stability-20260918/captures.json; build/framegen-stability-20260918/letter-terrain-registration.json; build/framegen-stability-20260918/raw-regions.json",
+      "expected": "Terrain and world OBJ share native real camera endpoints and generated midpoint timing; character and parallax smoothing remain active.",
+      "first_seen": "2026-09-18",
+      "fixed_note": "Source-backed terrain-plane identity limits temporal dequantization to other parallax layers. Unknown ownership retains endpoints; identity changes reset history. Relative image-measured drift falls from 0.875 native pixels to zero in the measured window. Three repeat captures at each 60 and software 120 cadence, serial/worker, fresh-entry and native-width checks preserve raw and guest evidence. No physical 120 Hz or full-game certification; frame generation remains opt-in."
+    },
+    {
+      "id": "ios-single-thumb-run-jump-roll",
+      "status": "fixed",
+      "summary": "A thumb that began on Y could not also press B by rolling across the touch diamond; the preceding adapter update handled separate fingers only.",
+      "repro": "Press Y with one thumb, roll toward B without lifting, roll back to Y, then repeat.",
+      "expected": "Y stays held, B presses when the same thumb overlaps it, and rolling back releases B for another jump. Double-tap Y hold still works.",
+      "first_seen": "2026-09-14",
+      "evidence": "docs/IOS.md; tests/test_ios_touch_button.c; build/ios-roll-tests.log; build/ios-validation/roll-y-b.png; build/ios-roll-install.json; build/ios-roll-launch.json",
+      "fixed_note": "UIKit keeps a contact with its initial view. Y now forwards per-contact overlap with B using stable layout coordinates and a bounded contact-radius estimate. B combines rolled contributions with its independent direct touches; rolling away or lifting removes only the matching contribution. A release band prevents boundary jitter and a roll invalidates Y double-tap candidacy. The production model passes repeated single-contact Y/B rolls, direct-plus-rolled touches, edge jitter, radius bounds and cancellation; both native Release builds pass. Simulator display QA checks both highlights. Physical thumb feel remains for user playtesting; no runtime/video or save-format changes."
+    },
+    {
+      "id": "ios-simultaneous-run-jump-touch",
+      "status": "fixed",
+      "summary": "The original UIKit game buttons used transient highlight state for input; the player needs reliable Y+B chords and a double-tap Y hold toggle.",
+      "repro": "Keep Y pressed and press/release B repeatedly. Double-tap Y, lift the finger, jump with B, then double-tap Y again.",
+      "expected": "Each button remains independently pressed for its touch lifetime; Y can latch on/off with a visible HOLD indicator.",
+      "first_seen": "2026-09-14",
+      "evidence": "docs/IOS.md; tests/test_ios_touch_button.c; build/ios-touch-tests.log; build/ios-validation/touch-hold-y.png",
+      "fixed_note": "Track actual UITouch identities and independent button state, explicitly enable concurrent controls, and OR active button masks. Recognize short Y tap pairs without delaying normal button input. Display a green HOLD ring/label and clear input on pause/cancellation. The real input model passes overlapping Y/B presses, repeated jumps, latch on/off, non-latching B taps, long press, drag, multiple fingers and stale release tests. Simulator visible QA and signed device build/install complete; physical touch feel remains for user playtesting. Guest masks, runtime timing and landscape rendering are unchanged."
+    },
+    {
+      "id": "ios-landscape-stretched-native-image",
+      "status": "fixed",
+      "summary": "The first iOS landscape overlay stretched a 256x224 framebuffer to the phone aspect, distorting the game.",
+      "repro": "Load the iOS game and enter landscape; distortion appeared on the first displayed landscape frame.",
+      "expected": "Render additional native source columns, preserve SNES pixel proportions, fill the phone with transparent touch controls.",
+      "first_seen": "2026-09-14",
+      "evidence": "docs/IOS.md; build/ios-validation/native-wide/; build/ios-release/BUILDINFO.json",
+      "fixed_note": "The UIKit host selects an even display-matched source width, 418x224 on iPhone 16 Pro Max, bounded by the existing 448-column PPU capacity. Rebind the framebuffer pitch on geometry changes; present at fixed 7:6 pixel aspect with nearest sampling. Gameplay enters landscape automatically. Native-center exact-state comparisons and six cross-platform replays pass; all 27 samples across four tested transitions pass. Four available clean entrances pass terrain grades and repeat determinism; native-wide machine differences remain investigations and the 40-entrance floor is incomplete. Desktop presets are unchanged. No ROM, generated code, submodule, shared calibration or gameplay-policy edits."
+    },
+    {
+      "id": "ios27-scene-lifecycle-launch",
+      "status": "fixed",
+      "summary": "The initial UIKit device build traps before the first game frame on iOS 27 because it creates an application window without adopting scene lifecycle.",
+      "repro": "Launch the initial signed arm64 build on iPhone 16 Pro Max running iOS 27.0 (24A5408d). The iOS 26.5 simulator does not enforce the requirement.",
+      "expected": "Create the native window through UIWindowScene and boot the verified game normally.",
+      "first_seen": "2026-09-14",
+      "evidence": "docs/IOS.md; build/ios-validation/device-crash.ips; build/ios-device-console-fixed.log; build/ios-install.json; build/ios-validation/jungle-replays/comparison.json",
+      "fixed_note": "The crash names ___UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption_block_invoke. Add a single Game scene declaration, DKCSceneDelegate, and initWithWindowScene. The corrected app boots and remains running on the same phone; the live intro and touch interface were inspected via QuickTime. Three iOS and desktop fresh Jungle replays match all seven frame/memory/audio fingerprints. No game, ROM, saved-state, or widescreen changes. Whole-game mobile performance and physical Bluetooth controllers are not yet validated."
+    },
+    {
+      "id": "dixie-stomp-haptics",
+      "status": "fixed",
+      "summary": "Dixie enemy stomps produce no feedback because the host compares her rebound to stock DK's value; the Windows host also lacks visible rumble controls.",
+      "repro": "contracts/dixie-stomp.json: fresh boot, falling at frame 7749, stomp at 7750. Equivalent immutable Jungle-state route reaches the stomp at relative frame 149.",
+      "expected": "Recognize the pinned variant's accepted rebound and expose a persistent on/off setting and controller test.",
+      "first_seen": "2026-09-14",
+      "evidence": "docs/DIXIE_HAPTICS.md; build/release-v0.0.13/haptics/; build/release-v0.0.13/stomp-regression.json; haptics-ctest.log; haptics-unittest.log",
+      "fixed_note": "Select $0900 only for DKC1_DIXIE_VARIANT, grounded in the pinned bytes at BF:A79F and consecutive WRAM frames. Preserve stock $0720, Diddy $0880 and all existing guards. The real detector recognizes exactly one hit in the 300-frame trace. Three fresh-boot stomp/landing runs are byte-identical with lives preserved. Both SDL variants pass actual worker-to-virtual-controller pulse/disable/stop tests; platform tests cover preference persistence and menu state. No controller was connected during device inspection, so physical vibration remains unverified. No guest state or save format changes."
+    },
+    {
+      "id": "dixie-map-sprite-corruption",
+      "status": "fixed",
+      "summary": "The optional Dixie variant shows conspicuous garbage sprite clusters on Kongo Jungle and Jungle entrance maps, including after death. Fresh controller-only boot reproduces it; Jungle gameplay is clean in the inspected movement branches.",
+      "repro": "Dixie headless, native mode, first 5750 frames of recipes/dixie-jungle-startup.dks from the verified clean ROM; tracked Jungle-map OAM cluster begins at frame 5728, with earlier corruption on the preceding map.",
+      "expected": "Clean map sprites and transitions without filtering visible OAM or rewriting historical save-state contents.",
+      "first_seen": "2026-09-13",
+      "evidence": "docs/DIXIE_MAP_FIX_2026-09-14.md; build/dixie-map-fix-20260914/final-manifest.json; map-regression.json; final-validation.json; final-visible-after.jpg; historical docs/DIXIE_QA_2026-09-13.md",
+      "fixed_note": "The pinned mod's pose table at BB:F8A8 points to 41:6000, file offset 416000. Stock folding read unrelated bytes at 016000 as sprite layout data. Enable bounded linear low data banks only in the Dixie variant, retaining C0-FF stock aliases and default-off stock mapping. Fresh boot and normal map refresh are clean; three controller-only refreshes produce identical snapshots with six lives, 83 bananas and progress preserved. Ropey entry, Jungle spin, stock output, save continuity and visible SDL QA pass. Old serialized graphics remain historical until normal reload; the original tester save is backed up. Full-game and widescreen validation remain incomplete."
+    },
+    {
+      "id": "sdl-startup-route-oam-port-timing",
+      "status": "fixed",
+      "summary": "Input-only SDL startup routes skipped the per-frame drawing/HDMA/VBlank step, leaving PPU OAM uploads misaligned and visibly corrupting both stock and Dixie sprites at first interactive presentation.",
+      "repro": "DKC1_STARTUP_SCRIPT=recipes/dixie-jungle-startup.dks, native mode, clean boot; Dixie first interactive frame 7602.",
+      "expected": "The startup route must execute the same CPU and rendering/VBlank sequence as the normal runner, preserving its native framebuffer and all guest-memory hashes.",
+      "first_seen": "2026-09-13",
+      "evidence": "docs/DIXIE_QA_2026-09-13.md; build/dixie-qa-20260913/startup-comparison.json; final-checks.log",
+      "fixed_note": "Initialize the offscreen drawing buffer and run Dkc1DrawPpuFrame once per successful startup frame. Three fresh Dixie SDL runs match the headless framebuffer and WRAM/VRAM/CGRAM/PPU OAM/OAM-shadow hashes; stock SDL also matches its independent headless oracle. The existing no-startup-script path is unchanged. Old corrupt startup snapshots remain historical evidence."
+    },
+    {
+      "id": "dixie-windows-relaunch-integration",
+      "status": "fixed",
+      "summary": "Dixie menu restarts lost the selected ROM path and the SDL variant could return to the debugger filename; the regular Windows build lacked a matching SDL variant target.",
+      "repro": "Toggle Mods > Dixie Kong Country in both Windows hosts with a clean ROM path containing spaces; also start SDL with a persisted choice and cached ROM.",
+      "expected": "Preserve the resolved ROM and restart into the correct sibling frontend; stock must reject the 6 MiB image against stock generated code.",
+      "first_seen": "2026-09-13",
+      "evidence": "docs/DIXIE_QA_2026-09-13.md; build/dixie-qa-20260913/",
+      "fixed_note": "Preserve the selected ROM, quote paths, specify the CreateProcess target, resolve picker/cache paths before handoff, honor explicit menu changes over inherited automation settings, and restore the prior preference on a failed menu launch. Added opt-in SDL CMake variant target, repaired Windows platform self-tests, and restored the stock ROM identity gate. Actual stock/Dixie/stock menu restarts, native GPU smoke and all three Windows CTests pass."
     },
     {
       "id": "aquatic-fine-scroll-bottom-row-gap",

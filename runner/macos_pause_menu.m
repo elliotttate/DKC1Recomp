@@ -13,7 +13,7 @@ static const struct { const char *name; size_t offset; } kFields[]={
   FIELD(softness),FIELD(shading),FIELD(crt.preset),FIELD(crt.scanlines),FIELD(crt.sharpness),
   FIELD(crt.mask),FIELD(crt.mask_strength),FIELD(crt.glow),FIELD(crt.halation),FIELD(crt.curvature),
   FIELD(window_scale),FIELD(fullscreen),FIELD(aspect),FIELD(edge),FIELD(audio_enabled),
-  FIELD(volume),FIELD(state_slot),FIELD(aquatic_fixes)
+  FIELD(volume),FIELD(state_slot),FIELD(hd_polish),FIELD(hd_finish)
 };
 #undef FIELD
 void Dkc1MacSaveGraphics(const Dkc1GraphicsSettings *s) {
@@ -42,13 +42,11 @@ void Dkc1MacLoadGraphics(Dkc1GraphicsSettings *s) {
   const char *keys[]={"DKC1_RECONSTRUCT_MODE","DKC1_RECONSTRUCT_STRENGTH","DKC1_RECONSTRUCT_SOFTNESS","DKC1_RECONSTRUCT_SHADING"};
   int *values[]={&s->reconstruct_mode,&s->strength,&s->softness,&s->shading};
   for (int i=0;i<4;i++) if ((v=getenv(keys[i]))) *values[i]=atoi(v);
+  if(!d[@"hd_polish"] && (v=getenv("DKC1_HD_POLISH_DEFAULT")))s->hd_polish=atoi(v);
+  if((v=getenv("DKC1_HD_POLISH")))s->hd_polish=atoi(v);
+  if(!d[@"hd_finish"] && (v=getenv("DKC1_HD_FINISH_DEFAULT")))s->hd_finish=atoi(v);
+  if((v=getenv("DKC1_HD_FINISH")))s->hd_finish=atoi(v);
   Dkc1GraphicsClamp(s);
-  /* Public builds keep these presentation experiments opt-in. A saved
-   * choice applies on launch; individual diagnostic overrides take priority. */
-  const char *aquatic_flags[]={"DKC1_WS_PIXEL_BOUNDARIES","DKC1_WS_LIVE_SCROLL",
-    "DKC1_WS_SCROLL_REBASE","DKC1_WS_WALL_ADJACENCY","DKC1_WS_WALL_SEAMS"};
-  for (size_t i=0;i<sizeof aquatic_flags/sizeof *aquatic_flags;i++)
-    setenv(aquatic_flags[i],s->aquatic_fixes ? "1" : "0",0);
 }
 
 @interface Dkc1MenuDocument : NSView
@@ -184,6 +182,10 @@ int Dkc1MacPauseMenuIsOpen(void) { return s_open; }
   [self option:@"display" title:@"Display" labels:@[@"Flat panel",@"CRT television"] view:view y:&y max:0];
   [self option:@"upscaler" title:@"Upscaler" labels:@[@"Nearest (pixel exact)",@"Bilinear",@"Reconstruct",@"Sharp bilinear"] view:view y:&y max:0];
   [self option:@"screen" title:@"Phosphor colors" labels:@[@"Raw",@"CRT",@"Composite",@"Trinitron"] view:view y:&y max:0];
+  [self heading:@"HD scenery" view:view y:&y];
+  [self option:@"hd_polish" title:@"Edge cleanup" labels:nil view:view y:&y max:100];
+  [self option:@"hd_finish" title:@"Grounded finish" labels:nil view:view y:&y max:100];
+  [self text:@"Edge cleanup softens verified scenery silhouettes. Grounded finish adds a filmic curve and stable luminance grain; 33% is the original finish and 100% is 3× strength. Zero shows raw HD art. F10 compares HD with the original." view:view y:&y height:58];
   [self heading:@"Reconstruct" view:view y:&y];
   [self option:@"reconstruct_mode" title:@"Detail" labels:@[@"Sharp pixels only",@"+ Dither decoding",@"+ Diagonal edges",@"+ Level-2 slopes",@"+ Level-3 slopes"] view:view y:&y max:0];
   [self option:@"strength" title:@"Edge strength" labels:nil view:view y:&y max:100];
@@ -205,8 +207,6 @@ int Dkc1MacPauseMenuIsOpen(void) { return s_open; }
   [self option:@"fullscreen" title:@"Window mode" labels:@[@"Windowed",@"Full screen"] view:view y:&y max:0];
   [self option:@"aspect" title:@"Aspect ratio" labels:@[@"4:3 (Native)",@"16:10",@"16:9"] view:view y:&y max:0];
   [self option:@"edge" title:@"Level edge" labels:@[@"Reflect terrain",@"Black margins",@"Shift inward",@"Glide inward"] view:view y:&y max:0];
-  [self option:@"aquatic_fixes" title:@"Aquatic widescreen fixes" labels:@[@"Off",@"On (experimental)"] view:view y:&y max:0];
-  [self text:@"Restart the app to apply. Improves water-level scenery and scrolling; coverage is still being tested." view:view y:&y height:44];
   [self heading:@"Audio" view:view y:&y];
   [self option:@"audio_enabled" title:@"Audio" labels:@[@"Muted",@"Enabled"] view:view y:&y max:0];
   [self option:@"volume" title:@"Volume" labels:nil view:view y:&y max:100];
@@ -228,9 +228,12 @@ int Dkc1MacPauseMenuIsOpen(void) { return s_open; }
   [self button:@"Load Selected Slot" tag:kDkc1MacMenuQuickLoad view:view y:&y];
   [self text:@"Slot 1 uses your existing quicksave. Loading clears rewind history; save files remain separate from cartridge saves." view:view y:&y height:48];[self finish:view y:y];
   view=[self page:@"Mods"];y=16;
+  [self heading:@"Upscaled HD Textures" view:view y:&y];
+  [self button:@"Toggle HD Textures — Jungle Hijinxs only" tag:kDkc1MacMenuToggleHdTextures view:view y:&y];
+  [self text:@"This preview currently covers the first level, Jungle Hijinxs, plus its connected bonus, hoard, and treehouse rooms. Unsupported scenes keep the original game textures." view:view y:&y height:68];
   [self heading:@"Dixie Kong Country" view:view y:&y];
-  [self button:@"Enable / Disable Dixie Kong Country" tag:kDkc1MacMenuToggleDixie view:view y:&y];
-  [self text:@"The Dixie Kong Country mod is built in and needs no extra ROM; enabling it restarts into the mod." view:view y:&y height:60];[self finish:view y:y];
+  [self button:@"Switch Donkey / Dixie" tag:kDkc1MacMenuToggleDixie view:view y:&y];
+  [self text:@"Dixie uses the verified built-in character mod and a separate save directory. Switching restarts into the selected runtime." view:view y:&y height:60];[self finish:view y:y];
   view=[self page:@"Credits"];y=16;
   [self heading:@"Donkey Kong Country — Native Recompilation" view:view y:&y];
   [self text:@"Original game by Rare and Nintendo. Native recompilation uses snesrecomp. Graphics and CRT models are adapted from DKC2Recomp; color profiles use the shared engine’s screen-color models.\n\nThis app uses your own game data. Third-party source notices are retained with the project." view:view y:&y height:150];[self finish:view y:y];

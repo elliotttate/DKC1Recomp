@@ -11,8 +11,7 @@ import shutil
 import subprocess
 import sys
 
-# Stock DKC1 USA v1.0 (headerless) and the Dixie Kong Country mod ROM
-# (supported DKC1 + user-supplied IPS, 6 MiB expanded). See docs/DIXIE_MOD.md.
+
 EXPECTED_ROMS = (
     (0x400000, "fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15"),
     (0x600000, "2769b72a8a2050000336f5dd6dea1a45385f4f35ee710dafb0c0a3592295643b"),
@@ -26,12 +25,11 @@ def integer(value: str) -> int:
 def validate_rom(path: Path) -> None:
     size = path.stat().st_size
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    for expected_size, expected_sha256 in EXPECTED_ROMS:
-        if size == expected_size and digest == expected_sha256:
-            return
-    raise ValueError(
-        f"Unsupported ROM size {size} / SHA-256 {digest}; "
-        "expected the supported stock DKC1 or the pinned Dixie mod ROM.")
+    if not any(size == expected_size and digest == expected_digest
+               for expected_size, expected_digest in EXPECTED_ROMS):
+        raise ValueError(
+            f"Unsupported ROM size {size} / SHA-256 {digest}; expected the "
+            "supported stock DKC1 or pinned Dixie mod image.")
 
 
 def run(command: list[str], description: str) -> None:
@@ -45,17 +43,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rom", required=True, type=Path)
     parser.add_argument("--snesrecomp-root", type=Path)
-    parser.add_argument(
-        "--config-dir", type=Path,
-        help="per-bank cfg directory (default: recomp/; the Dixie variant "
-             "uses recomp/dixie/)")
-    parser.add_argument(
-        "--output-dir", type=Path,
-        help="generated source directory (default: generated/snesrecomp)")
-    parser.add_argument(
-        "--no-widescreen-overrides", action="store_true",
-        help="skip the stock-DKC1 widescreen override pass (used for the "
-             "Dixie variant, which targets stock presentation first)")
+    parser.add_argument("--config-dir", type=Path)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--no-widescreen-overrides", action="store_true")
     parser.add_argument(
         "--analysis-backend", choices=("native", "python", "auto"),
         default="native")
@@ -78,10 +68,8 @@ def main() -> int:
     native_analyzer = (snesrecomp_root / "recompiler-rs" / "target" /
                        "release" / native_name)
     header_sync = snesrecomp_root / "tools" / "v2_sync_funcs_h.py"
-    config_directory = args.config_dir or repository / "recomp"
-    output_directory = args.output_dir or repository / "generated" / "snesrecomp"
-    config_directory = config_directory.resolve()
-    output_directory = output_directory.resolve()
+    config_directory = (args.config_dir or repository / "recomp").resolve()
+    output_directory = (args.output_dir or repository / "generated" / "snesrecomp").resolve()
 
     if not emitter.is_file():
         raise FileNotFoundError(

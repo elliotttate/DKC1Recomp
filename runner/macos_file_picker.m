@@ -1,4 +1,5 @@
 #import "macos_file_picker.h"
+#include "dkc1_dixie_mod.h"
 
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -6,6 +7,54 @@
 
 #include <stdlib.h>
 #include <string.h>
+
+int Dkc1MacSavedHdTexturesEnabled(void) {
+  const char *override=getenv("DKC1_HD_SPRITES");
+  if(override && *override)return !strcmp(override,"1");
+  NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
+  if(![defaults objectForKey:@"DKC1HdTexturesEnabled"])return 0;
+  return [defaults boolForKey:@"DKC1HdTexturesEnabled"] ? 1 : 0;
+}
+
+void Dkc1MacSetHdTexturesEnabled(int enabled) {
+  [[NSUserDefaults standardUserDefaults]
+      setBool:enabled != 0 forKey:@"DKC1HdTexturesEnabled"];
+}
+
+void Dkc1MacConfigureHdExperiment(void) {
+  @autoreleasepool {
+    NSBundle *bundle=[NSBundle mainBundle];
+    BOOL nanoPreview=[bundle.bundleIdentifier isEqualToString:@"com.flat2vr.dkc1recomp.hd.nano-preview"];
+    BOOL hdExperiment=[bundle.bundleIdentifier isEqualToString:@"com.flat2vr.dkc1recomp.hdexperiment"] ||
+      [[[NSProcessInfo processInfo] processName] isEqualToString:@"DKC1Recomp-HD-Dixie"];
+    if(!nanoPreview && !hdExperiment)return;
+    NSString *root=[bundle.resourcePath stringByAppendingPathComponent:@"HDScene"];
+    NSString *pack=[root stringByAppendingPathComponent:@"Materials"];
+    NSFileManager *fm=[NSFileManager defaultManager];
+    BOOL currentPack=[fm fileExistsAtPath:[pack stringByAppendingPathComponent:@"preload.txt"]];
+    BOOL legacyPack=[fm fileExistsAtPath:[pack stringByAppendingPathComponent:@"pack-manifest.json"]];
+    if(!currentPack && !legacyPack)return;
+    NSString *support=[NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,NSUserDomainMask,YES) firstObject];
+    const char *userOverride=getenv("DKC1_USER_DIR");
+    NSString *user=userOverride && *userOverride ? [NSString stringWithUTF8String:userOverride] :
+      [support stringByAppendingPathComponent:nanoPreview ? @"DKC1 HD Nano Preview" : @"DKC1Recomp HD Experiment"];
+    if(Dkc1DixieIsVariant() && ![user.lastPathComponent isEqualToString:@"Dixie"])
+      user=[user stringByAppendingPathComponent:@"Dixie"];
+    [fm createDirectoryAtPath:user withIntermediateDirectories:YES attributes:nil error:nil];
+    setenv("DKC1_USER_DIR",user.fileSystemRepresentation,1);
+    setenv("DKC1_HD_SCENE_PACK",pack.fileSystemRepresentation,0);
+    setenv("DKC1_HD_PACK",pack.fileSystemRepresentation,0);
+    if(!getenv("DKC1_HD_SPRITES"))
+      setenv("DKC1_HD_SPRITES",Dkc1MacSavedHdTexturesEnabled()?"1":"0",1);
+    setenv("DKC1_HD_SCENE","1",0);
+    if(currentPack) {
+      setenv("DKC1_HD_SCENE_PRELOAD","1",0);
+      setenv("DKC1_HD_EXACT_CENTERS","1",0);
+      setenv("DKC1_HD_CONNECTED_WORLD","1",0);
+    }
+    setenv("DKC1_UPSCALER","nearest",0);setenv("DKC1_DISPLAY","flat",0);setenv("DKC1_SCREEN","raw",0);
+  }
+}
 
 @interface Dkc1MenuController : NSObject
 - (void)runCommand:(id)sender;
@@ -258,7 +307,11 @@ void Dkc1MacInstallMenu(void) {
     AddSubmenu(bar, @"Game", game);
 
     NSMenu *mods = [[NSMenu alloc] initWithTitle:@"Mods"];
-  AddCommand(mods, @"Dixie Kong Country", kDkc1MacMenuToggleDixie, @"d", 0);
+    AddCommand(mods, @"Dixie Kong Country", kDkc1MacMenuToggleDixie, @"d",
+               NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    AddCommand(mods, @"Upscaled HD Textures (Jungle Hijinxs only)",
+               kDkc1MacMenuToggleHdTextures, @"h",
+               NSEventModifierFlagCommand | NSEventModifierFlagShift);
     AddSubmenu(bar, @"Mods", mods);
 
     NSMenu *music = [[NSMenu alloc] initWithTitle:@"Music"];
@@ -330,8 +383,8 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
                             Dkc1MacFullscreenScaling fullscreen_scaling,
                             Dkc1VideoAspect aspect, Dkc1EdgePolicy edge,
                             unsigned char layer_mask, int provenance,
-                            int replacement_music, int baby_kong_enabled,
-                            int baby_kong_ready, int dixie_enabled) {
+                            int replacement_music, int dixie_enabled,
+                            int hd_textures_enabled) {
   if (!s_menu_controller)
     return;
   s_menu_items[kDkc1MacMenuPause].title = paused ? @"Resume" : @"Pause";
@@ -393,10 +446,10 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
       stringForKey:@"DKC1Msu1Directory"];
   s_menu_items[kDkc1MacMenuDisableMusicPack].enabled =
       replacement_music != 0 || configuredMusic.length != 0;
-  (void)baby_kong_enabled;
-  (void)baby_kong_ready;
   s_menu_items[kDkc1MacMenuToggleDixie].state =
       dixie_enabled ? NSControlStateValueOn : NSControlStateValueOff;
+  s_menu_items[kDkc1MacMenuToggleHdTextures].state =
+      hd_textures_enabled ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
 int Dkc1MacDisplayLinkStart(void *native_window, double preferred_fps) {
@@ -521,46 +574,6 @@ char *Dkc1MacChooseRom(void) {
     if (copy)
       memcpy(copy, path, size);
     return copy;
-  }
-}
-
-char *Dkc1MacSavedBabyKongRom(void) {
-  @autoreleasepool {
-    NSString *path = [[NSUserDefaults standardUserDefaults]
-        stringForKey:@"DKC1BabyKongRom"];
-    if (!path.length || ![[NSFileManager defaultManager]
-                            isReadableFileAtPath:path])
-      return NULL;
-    return CopyFileSystemPath(path);
-  }
-}
-
-void Dkc1MacSetBabyKongRom(const char *path) {
-  @autoreleasepool {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    if (path && *path) {
-      NSString *value = [NSString stringWithUTF8String:path];
-      if (value)
-        [defaults setObject:value forKey:@"DKC1BabyKongRom"];
-    } else {
-      [defaults removeObjectForKey:@"DKC1BabyKongRom"];
-    }
-    [defaults synchronize];
-  }
-}
-
-int Dkc1MacSavedBabyKongEnabled(void) {
-  @autoreleasepool {
-    return [[NSUserDefaults standardUserDefaults]
-        boolForKey:@"DKC1BabyKongEnabled"] ? 1 : 0;
-  }
-}
-
-void Dkc1MacSetBabyKongEnabled(int enabled) {
-  @autoreleasepool {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [defaults setBool:enabled != 0 forKey:@"DKC1BabyKongEnabled"];
-    [defaults synchronize];
   }
 }
 

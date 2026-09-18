@@ -16,13 +16,17 @@ cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:interp_bridge.obj ..\..\snesrecomp\runne
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_video.obj ..\..\runner\dkc1_video.c
 if errorlevel 1 exit /b 1
-cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_baby_kong.obj ..\..\runner\dkc1_baby_kong.c
-if errorlevel 1 exit /b 1
-cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_baby_kong_movement.obj ..\..\runner\dkc1_baby_kong_movement.c
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_dixie_mod.obj ..\..\runner\dkc1_dixie_mod.c
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_margin_proxy.obj ..\..\runner\dkc1_margin_proxy.c
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_game.obj ..\..\runner\dkc1_game.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_hd_scene.obj ..\..\runner\dkc1_hd_scene.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_hd_sprites.obj ..\..\runner\dkc1_hd_sprites.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_framegen.obj ..\..\runner\dkc1_framegen.c
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_ws_trace.obj ..\..\runner\dkc1_ws_trace.c
 if errorlevel 1 exit /b 1
@@ -37,8 +41,8 @@ if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:ws_shadow.obj ..\..\snesrecomp\runner\src\snes\ws_shadow.c
 if errorlevel 1 exit /b 1
 dir /b *.obj > objects.rsp
-link /nologo /out:..\dkc1_widescreen_headless_candidate.exe @objects.rsp ..\main_headless.obj ws2_32.lib user32.lib
+link /nologo /out:..\dkc1_widescreen_headless_candidate.exe @objects.rsp ..\main_headless.obj ws2_32.lib user32.lib advapi32.lib
 if errorlevel 1 exit /b 1
-link /nologo /out:..\dkc1_widescreen_desktop_next.exe @objects.rsp ..\main_win32.obj ws2_32.lib user32.lib gdi32.lib winmm.lib comdlg32.lib
+link /nologo /out:..\dkc1_widescreen_desktop_next.exe @objects.rsp ..\main_win32.obj ws2_32.lib user32.lib advapi32.lib gdi32.lib winmm.lib comdlg32.lib
 if errorlevel 1 exit /b 1
 echo WIDESCREEN_RUNTIME_CANDIDATE_BUILD_OK

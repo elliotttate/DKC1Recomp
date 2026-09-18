@@ -32,7 +32,9 @@ cl /nologo /c /MP8 /W0 /O1 %DEFS% %INCS% ^
   %SR%\snes\superfx.c %SR%\snes\interp816.c %SR%\snes\tier2_capture.c ^
   %SR%\snes\interp_bridge.c %SR%\snes\cx4.c ^
   ..\..\runner\dkc1_game.c ..\..\runner\dkc1_video.c ..\..\runner\desktop_sram.c ^
-  ..\..\runner\dkc1_baby_kong.c ..\..\runner\dkc1_baby_kong_animation.c ..\..\runner\dkc1_dixie_mod.c ..\..\runner\dkc1_baby_kong_movement.c ^
+  ..\..\runner\dkc1_dixie_mod.c ^
+  ..\..\runner\dkc1_hd_scene.c ..\..\runner\dkc1_hd_sprites.c ^
+  ..\..\runner\dkc1_framegen.c ^
   ..\..\runner\dkc1_margin_proxy.c ^
   ..\..\runner\dkc1_ws_trace.c ^
   ..\..\runner\headless_host.c ..\..\runner\input_playback.c ^

@@ -317,6 +317,18 @@ class WidescreenRuntimeContractTests(unittest.TestCase):
         self.assertIn("adapt_function_cpu_constant", injector)
         self.assertNotIn("shadow_world_ready || cartridge_stream_ready", game)
         self.assertIn("const bool extend_world = shadow_world_ready", game)
+        self.assertIn("hoard_fixed_wide", game)
+        self.assertIn("Dkc1HdHoardSceneEligible", game)
+        self.assertIn(
+            "Dkc1VideoSetTerrainReady(hoard_fixed_wide && !shadow_world_ready",
+            game)
+        self.assertIn("Dkc1LockedInteriorLeftAxis", game)
+        self.assertIn("hoard_mirror", game)
+        self.assertIn("PpuSetWidescreenLayerRightEdgeClamp", game)
+        hd_scene = (ROOT / "runner" / "dkc1_hd_scene.c").read_text(
+            encoding="utf-8")
+        self.assertIn("Dkc1LockedInteriorSourceX", hd_scene)
+        self.assertIn("HoardBgSample", hd_scene)
         self.assertIn("stream_revalidated", game)
         self.assertIn(
             "cartridge_stream_ready &&\n             s_ws_layout != kDkc1LayoutUnknown",

@@ -1,3 +1,4 @@
+#include "dkc1_hd_sprites.h"
 #import "macos_metal_presenter.h"
 
 #import <AppKit/AppKit.h>
@@ -7,6 +8,8 @@
 #include "dkc1_video.h"
 #include "desktop_refresh.h"
 #import "macos_graphics.h"
+#import "macos_hd_scene.h"
+#include "dkc1_hd_scene.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +18,7 @@
 enum {
   kDkc1MetalFrameSlots = 3,
   kDkc1MetalFrameBytes =
-      kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4,
+      kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4 * kDkc1HdScale * kDkc1HdScale,
 };
 
 typedef struct Dkc1MetalFrame {
@@ -25,11 +28,25 @@ typedef struct Dkc1MetalFrame {
   int presentationWidth;
   uint64_t sequence;
   Dkc1MacPresentationFrameInfo info;
+  Dkc1HdMetalFrame *hdFrame;
 } Dkc1MetalFrame;
+
+static void ClearMetalFrame(Dkc1MetalFrame *frame) {
+  [frame->hdFrame release];frame->hdFrame=nil;
+}
+static void TakeMetalFrame(Dkc1MetalFrame *destination,Dkc1MetalFrame *source) {
+  ClearMetalFrame(destination);
+  destination->width=source->width;destination->height=source->height;
+  destination->presentationWidth=source->presentationWidth;
+  destination->sequence=source->sequence;destination->info=source->info;
+  destination->hdFrame=source->hdFrame;source->hdFrame=nil;
+  if(!destination->hdFrame)memcpy(destination->pixels,source->pixels,(size_t)source->width*source->height*4);
+}
 
 typedef struct Dkc1MetalTraceFrame {
   uint64_t sequence;
   Dkc1MacPresentationFrameInfo info;
+  BOOL hdGpu;
 } Dkc1MetalTraceFrame;
 
 @interface Dkc1MetalView : NSView
@@ -72,6 +89,8 @@ typedef struct Dkc1MetalTraceFrame {
   id<MTLDevice> device;
   id<MTLCommandQueue> commandQueue;
   Dkc1MetalGraphics *graphics;
+  Dkc1HdMetalRenderer *hdRenderer;
+  BOOL hdInitializationFailed;
   Dkc1GraphicsSettings graphicsSettings;
   CAMetalDisplayLink *displayLink;
   NSThread *displayThread;
@@ -195,7 +214,7 @@ static Dkc1MetalPresenter *s_metal_presenter;
     if (!hasCurrentFrame) {
       callbacksWithoutFrame++;
       if (count >= 2 || (count && callbacksWithoutFrame >= 2)) {
-        memcpy(&currentFrame, &frames[head], sizeof currentFrame);
+        TakeMetalFrame(&currentFrame, &frames[head]);
         head = (head + 1) % kDkc1MetalFrameSlots;
         count--;
         hasCurrentFrame = YES;
@@ -203,12 +222,13 @@ static Dkc1MetalPresenter *s_metal_presenter;
       }
     } else if (Dkc1RefreshAdvance(&refresh, targetPresentation, currentRepeats)) {
       while (count > 2) {
+        ClearMetalFrame(&frames[head]);
         head = (head + 1) % kDkc1MetalFrameSlots;
         count--;
         consumerSkips++;
       }
       if (count) {
-        memcpy(&currentFrame, &frames[head], sizeof currentFrame);
+        TakeMetalFrame(&currentFrame, &frames[head]);
         head = (head + 1) % kDkc1MetalFrameSlots;
         count--;
         currentRepeats = 0;
@@ -230,12 +250,14 @@ static Dkc1MetalPresenter *s_metal_presenter;
     const uint64_t presentStarvedCallbacks = starvedCallbacks;
     const Dkc1GraphicsSettings presentSettings=graphicsSettings;
     Dkc1MetalFrame *presentFrame = &currentFrame;
+    Dkc1HdMetalFrame *hdFrame=[presentFrame->hdFrame retain];
     const int sourceWidth = presentFrame->width;
     const int sourceHeight = presentFrame->height;
     const int framePresentationWidth = presentFrame->presentationWidth;
     const Dkc1MetalTraceFrame traceFrame = {
       .sequence = presentFrame->sequence,
       .info = presentFrame->info,
+      .hdGpu = hdFrame != nil,
     };
     [frameLock unlock];
 
@@ -260,10 +282,25 @@ static Dkc1MetalPresenter *s_metal_presenter;
     const int fittedY = ((int)outputHeight - fittedHeight) / 2;
 
     id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
-    if (![graphics encodePixels:(const uint32_t *)presentFrame->pixels
-        width:sourceWidth height:sourceHeight target:drawable.texture
-        viewport:(MTLViewport){fittedX,fittedY,fittedWidth,fittedHeight,0,1}
-        settings:presentSettings commandBuffer:commandBuffer]) return;
+    if(!commandBuffer){[hdFrame release];return;}
+    MTLViewport viewport={fittedX,fittedY,fittedWidth,fittedHeight,0,1};
+    BOOL encoded=NO;
+    if(hdFrame) {
+      if([hdFrame->owner encodeFrame:hdFrame commandBuffer:commandBuffer])
+        encoded=[graphics encodeTexture:hdFrame->texture target:drawable.texture
+            viewport:viewport settings:presentSettings commandBuffer:commandBuffer];
+      else
+        encoded=[graphics encodePixels:((HdGpuFrame *)hdFrame->snapshot.contents)->native
+            width:sourceWidth/4 height:sourceHeight/4 target:drawable.texture
+            viewport:viewport settings:presentSettings commandBuffer:commandBuffer];
+      /* Each repeat also retains the pooled texture until scanout work ends. */
+      [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completed) { [hdFrame release]; }];
+    } else {
+      encoded=[graphics encodePixels:(const uint32_t *)presentFrame->pixels
+          width:sourceWidth height:sourceHeight target:drawable.texture
+          viewport:viewport settings:presentSettings commandBuffer:commandBuffer];
+    }
+    if(!encoded) { [commandBuffer commit]; return; }
 
     [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
       if (completed.status == MTLCommandBufferStatusError) {
@@ -321,7 +358,7 @@ static Dkc1MetalPresenter *s_metal_presenter;
           "\"target_timestamp\":%.9f,"
           "\"target_presentation_timestamp\":%.9f,"
           "\"presented_time\":%.9f,\"scanout_interval_ms\":%.6f,"
-          "\"source_sequence\":%llu,\"host_frame\":%lld,"
+          "\"source_sequence\":%llu,\"host_frame\":%lld,\"hd_gpu\":%d,"
           "\"repeat_index\":%u,\"repeat_goal\":%u,"
           "\"queue_depth\":%u,\"producer_drops\":%llu,"
           "\"consumer_skips\":%llu,\"starved_callbacks\":%llu,"
@@ -333,7 +370,7 @@ static Dkc1MetalPresenter *s_metal_presenter;
           (unsigned long long)drawable.drawableID,
           targetTimestamp, targetPresentationTimestamp, presented, intervalMs,
           (unsigned long long)frame.sequence,
-          (long long)frame.info.host_frame, repeatIndex, presentRepeatGoal,
+          (long long)frame.info.host_frame, frame.hdGpu, repeatIndex, presentRepeatGoal,
           queueDepth, (unsigned long long)presentProducerDrops,
           (unsigned long long)presentConsumerSkips,
           (unsigned long long)presentStarvedCallbacks,
@@ -351,6 +388,9 @@ static Dkc1MetalPresenter *s_metal_presenter;
     fflush(trace);
     fclose(trace);
   }
+  for(int i=0;i<kDkc1MetalFrameSlots;i++)ClearMetalFrame(&frames[i]);
+  ClearMetalFrame(&currentFrame);
+  [hdRenderer release];
   [graphics release];
   [commandQueue release];
   [device release];
@@ -480,7 +520,7 @@ void Dkc1MacMetalPresenterQueueFrame(
     const Dkc1MacPresentationFrameInfo *info) {
   Dkc1MetalPresenter *presenter = s_metal_presenter;
   if (!presenter || !pixels || !info || width <= 0 || height <= 0 ||
-      width > kDkc1VideoWidescreenWidth || height > kDkc1VideoHeight)
+      width > kDkc1VideoWidescreenWidth * kDkc1HdScale || height > kDkc1VideoHeight * kDkc1HdScale)
     return;
   const size_t bytes = (size_t)width * (size_t)height * 4;
   [presenter->frameLock lock];
@@ -489,11 +529,13 @@ void Dkc1MacMetalPresenterQueueFrame(
     return;
   }
   if (presenter->count == kDkc1MetalFrameSlots) {
+    ClearMetalFrame(&presenter->frames[presenter->head]);
     presenter->head = (presenter->head + 1) % kDkc1MetalFrameSlots;
     presenter->count--;
     presenter->producerDrops++;
   }
   Dkc1MetalFrame *frame = &presenter->frames[presenter->tail];
+  ClearMetalFrame(frame);
   memcpy(frame->pixels, pixels, bytes);
   frame->width = width;
   frame->height = height;
@@ -505,6 +547,38 @@ void Dkc1MacMetalPresenterQueueFrame(
   [presenter->frameLock unlock];
 }
 
+int Dkc1MacMetalPresenterQueueHdFrame(const uint32_t *native,int width,int height,
+    int presentationWidth,const Dkc1MacPresentationFrameInfo *info) {
+  Dkc1MetalPresenter *p=s_metal_presenter;
+  const char *enabled=getenv("DKC1_HD_METAL");
+  if(!p || !info || !enabled || strcmp(enabled,"1") || p->hdInitializationFailed ||
+      !Dkc1HdSceneGpuFrameSize(native,width,height))return 0;
+  @autoreleasepool {
+    if(!p->hdRenderer) {
+      NSError *error=nil;
+      p->hdRenderer=[[Dkc1HdMetalRenderer alloc] initWithDevice:p->device shaderPath:nil error:&error];
+      if(!p->hdRenderer) {
+        p->hdInitializationFailed=YES;
+        fprintf(stderr,"[hd-metal] initialization failed; using CPU compositor: %s\n",error.localizedDescription.UTF8String ?: "unavailable");
+        return 0;
+      }
+    }
+    Dkc1HdMetalFrame *hd=[p->hdRenderer captureNative:native width:width height:height];
+    if(!hd)return 0;
+    [p->frameLock lock];
+    if(!p->active){[p->frameLock unlock];[hd release];return 1;}
+    if(p->count==kDkc1MetalFrameSlots) {
+      ClearMetalFrame(&p->frames[p->head]);
+      p->head=(p->head+1)%kDkc1MetalFrameSlots;p->count--;p->producerDrops++;
+    }
+    Dkc1MetalFrame *frame=&p->frames[p->tail];ClearMetalFrame(frame);
+    frame->hdFrame=hd;frame->width=width*4;frame->height=height*4;
+    frame->presentationWidth=presentationWidth*4;frame->sequence=++p->nextSequence;frame->info=*info;
+    p->tail=(p->tail+1)%kDkc1MetalFrameSlots;p->count++;
+    [p->frameLock unlock];return 1;
+  }
+}
+
 void Dkc1MacMetalPresenterSetGeometry(int newPresentationWidth,
                                       int newFullscreen) {
   Dkc1MetalPresenter *presenter = s_metal_presenter;
@@ -513,6 +587,8 @@ void Dkc1MacMetalPresenterSetGeometry(int newPresentationWidth,
   [presenter->frameLock lock];
   presenter->presentationWidth = newPresentationWidth;
   presenter->fullscreen = newFullscreen != 0;
+  for(int i=0;i<kDkc1MetalFrameSlots;i++)ClearMetalFrame(&presenter->frames[i]);
+  ClearMetalFrame(&presenter->currentFrame);
   presenter->head = presenter->tail = presenter->count = 0;
   presenter->hasCurrentFrame = NO;
   presenter->currentRepeats = 0;
@@ -524,6 +600,8 @@ void Dkc1MacMetalPresenterFlush(void) {
   Dkc1MetalPresenter *presenter = s_metal_presenter;
   if (!presenter) return;
   [presenter->frameLock lock];
+  for(int i=0;i<kDkc1MetalFrameSlots;i++)ClearMetalFrame(&presenter->frames[i]);
+  ClearMetalFrame(&presenter->currentFrame);
   presenter->head = presenter->tail = presenter->count = 0;
   presenter->hasCurrentFrame = NO;
   presenter->currentRepeats = presenter->callbacksWithoutFrame = 0;
@@ -550,7 +628,9 @@ void Dkc1MacMetalPresenterSetActive(int newActive) {
     presenter->active = active;
     Dkc1RefreshReset(&presenter->refresh);
     presenter->previousTargetPresentation = 0.0;
-    presenter->head = presenter->tail = presenter->count = 0;
+    for(int i=0;i<kDkc1MetalFrameSlots;i++)ClearMetalFrame(&presenter->frames[i]);
+  ClearMetalFrame(&presenter->currentFrame);
+  presenter->head = presenter->tail = presenter->count = 0;
     presenter->hasCurrentFrame = NO;
     presenter->currentRepeats = 0;
     presenter->callbacksWithoutFrame = 0;

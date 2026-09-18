@@ -19,6 +19,12 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#include <mach-o/dyld.h>
+#include <spawn.h>
+#include <unistd.h>
+extern char **environ;
 #endif
 
 #include "dkc1_dixie_patch.inc"
@@ -33,7 +39,7 @@ void Dkc1DixieSetRomPath(const char *path) {
   snprintf(s_rom_path, sizeof s_rom_path, "%s", path ? path : "");
 }
 
-/* sha256 of the pinned modded image (see docs/DIXIE_MOD.md). */
+/* sha256 of the pinned modded image (see docs/DIXIE_HD_MAC.md). */
 static const uint8_t kModSha256[32] = {
   0x27, 0x69, 0xb7, 0x2a, 0x8a, 0x20, 0x50, 0x00,
   0x03, 0x36, 0xf5, 0xdd, 0x6d, 0xea, 0x1a, 0x45,
@@ -268,6 +274,16 @@ static void RegWriteInt(const wchar_t *value, int data) {
 int Dkc1DixieSavedEnabled(void) {
 #if defined(_WIN32)
   return RegReadInt(L"Dixie", 0) != 0;
+#elif defined(__APPLE__)
+  const char *env = getenv("DKC1_DIXIE");
+  if (env && env[0] && env[1] == '\0') return env[0] != '0';
+  CFPropertyListRef value = CFPreferencesCopyAppValue(
+      CFSTR("DixieKongCountryEnabled"),
+      CFSTR("com.flat2vr.dkc1recomp.hdexperiment"));
+  int enabled = value && CFGetTypeID(value) == CFBooleanGetTypeID() &&
+                CFBooleanGetValue((CFBooleanRef)value);
+  if (value) CFRelease(value);
+  return enabled;
 #else
   const char *env = getenv("DKC1_DIXIE");
   return env && env[0] && env[0] != '0';
@@ -279,6 +295,13 @@ void Dkc1DixieSetEnabled(int enabled) {
   RegWriteInt(L"Dixie", enabled != 0);
   /* The mod ROM is synthesized now; drop any legacy saved path. */
   RegWritePath(L"DixieRom", NULL);
+#elif defined(__APPLE__)
+  CFPreferencesSetAppValue(
+      CFSTR("DixieKongCountryEnabled"),
+      enabled ? kCFBooleanTrue : kCFBooleanFalse,
+      CFSTR("com.flat2vr.dkc1recomp.hdexperiment"));
+  CFPreferencesAppSynchronize(
+      CFSTR("com.flat2vr.dkc1recomp.hdexperiment"));
 #else
   (void)enabled;
 #endif
@@ -331,6 +354,42 @@ static void QuoteTail(char *out, size_t out_size, int argc, char **argv,
 }
 #endif /* _WIN32 */
 
+#if defined(__APPLE__)
+/* Both Mac runtimes live in the same app bundle's Contents/MacOS directory.
+ * Launching by absolute executable path keeps one distributable app while
+ * retaining fully isolated recompilation globals in separate processes. */
+static int SpawnMacSibling(const char *exe, const char *rom) {
+  uint32_t size = 0;
+  (void)_NSGetExecutablePath(NULL, &size);
+  char *self = (char *)malloc(size ? size : 1u);
+  if (!self || _NSGetExecutablePath(self, &size) != 0) {
+    free(self);
+    return 0;
+  }
+  char *slash = strrchr(self, '/');
+  if (!slash) {
+    free(self);
+    return 0;
+  }
+  slash[1] = '\0';
+  size_t target_size = strlen(self) + strlen(exe) + 1u;
+  char *target = (char *)malloc(target_size);
+  if (!target) {
+    free(self);
+    return 0;
+  }
+  snprintf(target, target_size, "%s%s", self, exe);
+  free(self);
+  char *const child_argv[] = {target, (char *)(rom ? rom : ""), NULL};
+  pid_t child = 0;
+  int result = access(target, X_OK) == 0
+                   ? posix_spawn(&child, target, NULL, NULL, child_argv, environ)
+                   : -1;
+  free(target);
+  return result == 0 && child > 0;
+}
+#endif
+
 int Dkc1DixieHandoffCheck(int argc, char **argv, const char *variant_exe,
                           char *note, size_t note_size) {
   if (note && note_size) note[0] = '\0';
@@ -360,6 +419,27 @@ int Dkc1DixieHandoffCheck(int argc, char **argv, const char *variant_exe,
     return 0;
   }
   return 1; /* caller must exit; the sibling owns the session now */
+#elif defined(__APPLE__)
+  if (Dkc1DixieIsVariant()) return 0;
+  const char *env = getenv("DKC1_DIXIE");
+  if (env && env[0] == '0' && env[1] == '\0') return 0;
+  if (!Dkc1DixieSavedEnabled()) return 0;
+  const char *rom = getenv("DKC1_DIXIE_ROM");
+  if (!rom || !*rom) rom = s_rom_path;
+  if (!*rom) return 0;
+  setenv("DKC1_DIXIE", "1", 1);
+  unsetenv("DKC1_USER_DIR");
+  unsetenv("DKC1_SAVESTATE_INPUT");
+  unsetenv("DKC1_PAUSE_AFTER_FRAME");
+  if (!SpawnMacSibling(variant_exe, rom)) {
+    Dkc1DixieSetEnabled(0);
+    if (note && note_size)
+      snprintf(note, note_size,
+               "Dixie Kong Country disabled: %s is missing from the app",
+               variant_exe);
+    return 0;
+  }
+  return 1;
 #else
   (void)argc; (void)argv; (void)variant_exe;
   if (note && note_size) note[0] = '\0';
@@ -391,6 +471,24 @@ void Dkc1DixieSwitchAndRelaunch(int enabled, const char *variant_exe,
   _putenv_s("DKC1_DIXIE", saved_env ? saved_env : "");
   free(saved_env);
   Dkc1DixieSetEnabled(previous); /* roll back */
+  if (note && note_size)
+    snprintf(note, note_size, "could not start %s", target);
+#elif defined(__APPLE__)
+  if (!s_rom_path[0]) {
+    if (note && note_size)
+      snprintf(note, note_size, "select a ROM before switching Dixie");
+    return;
+  }
+  const int previous = Dkc1DixieSavedEnabled();
+  Dkc1DixieSetEnabled(enabled);
+  setenv("DKC1_DIXIE", enabled ? "1" : "0", 1);
+  unsetenv("DKC1_USER_DIR");
+  unsetenv("DKC1_SAVESTATE_INPUT");
+  unsetenv("DKC1_PAUSE_AFTER_FRAME");
+  const char *target = enabled ? variant_exe : stock_exe;
+  if (SpawnMacSibling(target, s_rom_path))
+    exit(0);
+  Dkc1DixieSetEnabled(previous);
   if (note && note_size)
     snprintf(note, note_size, "could not start %s", target);
 #else

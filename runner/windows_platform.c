@@ -70,6 +70,10 @@ static void WriteInt(const wchar_t *section,const char *name,int value){
 }
 int Dkc1WindowsSavedHaptics(void){return ReadInt(L"Host","Haptics",1)!=0;}
 void Dkc1WindowsSetHaptics(int enabled){WriteInt(L"Host","Haptics",enabled!=0);}
+int Dkc1WindowsSavedFrameGen(void){return ReadInt(L"Host","FrameGen",0)!=0;}
+void Dkc1WindowsSetFrameGen(int enabled){WriteInt(L"Host","FrameGen",enabled!=0);}
+int Dkc1WindowsSavedSquarePixels(void){return ReadInt(L"Host","SquarePixels",0)!=0;}
+void Dkc1WindowsSetSquarePixels(int enabled){WriteInt(L"Host","SquarePixels",enabled!=0);}
 static char *ReadPath(const wchar_t *key){
  ConfigPath();wchar_t path[4096];GetPrivateProfileStringW(L"Paths",key,L"",path,4096,s_config);
  if(!path[0])return NULL;char *out=malloc(16384);if(out)WideCharToMultiByte(CP_UTF8,0,path,-1,out,16384,NULL,NULL);return out;
@@ -89,7 +93,7 @@ void Dkc1MacLoadGraphics(Dkc1GraphicsSettings *s){
  const char *names[]={"nearest","bilinear","reconstruct","sharp-bilinear"};v=getenv("DKC1_UPSCALER");if(v)for(int i=0;i<4;i++)if(!strcmp(v,names[i]))s->upscaler=i;
  const char *colors[]={"raw","crt","composite","trinitron"};v=getenv("DKC1_SCREEN");if(v)for(int i=0;i<4;i++)if(!strcmp(v,colors[i]))s->screen=i;
  const char *keys[]={"DKC1_RECONSTRUCT_MODE","DKC1_RECONSTRUCT_STRENGTH","DKC1_RECONSTRUCT_SOFTNESS","DKC1_RECONSTRUCT_SHADING"};
- int *values[]={&s->reconstruct_mode,&s->strength,&s->softness,&s->shading};for(int i=0;i<4;i++)if((v=getenv(keys[i])))*values[i]=atoi(v);
+ int *values[]={&s->reconstruct_mode,&s->strength,&s->softness,&s->shading};for(int i=0;i<4;i++){v=getenv(keys[i]);if(v)*values[i]=atoi(v);}
  Dkc1GraphicsClamp(s);
  const char *flags[]={"DKC1_WS_PIXEL_BOUNDARIES","DKC1_WS_LIVE_SCROLL","DKC1_WS_SCROLL_REBASE","DKC1_WS_WALL_ADJACENCY","DKC1_WS_WALL_SEAMS"};
  for(int i=0;i<5;i++)if(!getenv(flags[i]))_putenv_s(flags[i],s->aquatic_fixes?"1":"0");
@@ -122,22 +126,22 @@ static char *Pick(const wchar_t *title,const wchar_t *filter){
  of.lpstrFilter=filter;of.lpstrFile=path;of.nMaxFile=4096;of.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR;
  if(!GetOpenFileNameW(&of))return NULL;char *out=malloc(16384);if(out)WideCharToMultiByte(CP_UTF8,0,path,-1,out,16384,NULL,NULL);return out;
 }
-char *Dkc1MacChooseRom(void){
- char error[192];size_t size;char *saved=ReadPath(L"DKC1");
- if(saved){uint8_t *rom=Dkc1ReadVerifiedRom(saved,&size,error,sizeof error);
-  if(rom){free(rom);return saved;}free(saved);WritePath(L"DKC1",NULL);}
+char *Dkc1WindowsPickRom(void){
+ char error[192];size_t size;
  for(;;){char *path=Pick(L"Choose your DKC1 USA v1.0 ROM",L"SNES ROM\0*.sfc;*.smc\0All files\0*.*\0");
   if(!path)return NULL;uint8_t *rom=Dkc1ReadVerifiedRom(path,&size,error,sizeof error);
   if(rom){free(rom);WritePath(L"DKC1",path);return path;}
   free(path);SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Unsupported ROM",error,s_sdl);
  }
 }
+char *Dkc1MacChooseRom(void){
+ char error[192];size_t size;char *saved=ReadPath(L"DKC1");
+ if(saved){uint8_t *rom=Dkc1ReadVerifiedRom(saved,&size,error,sizeof error);
+  if(rom){free(rom);return saved;}free(saved);WritePath(L"DKC1",NULL);}
+ return Dkc1WindowsPickRom();
+}
 
 
-char *Dkc1MacSavedBabyKongRom(void){return ReadPath(L"DKC3");}
-void Dkc1MacSetBabyKongRom(const char *p){WritePath(L"DKC3",p);}
-int Dkc1MacSavedBabyKongEnabled(void){return ReadInt(L"Mods","BabyKong",0);}
-void Dkc1MacSetBabyKongEnabled(int enabled){WriteInt(L"Mods","BabyKong",enabled!=0);}
 char *Dkc1MacSavedMsu1(void){return ReadPath(L"MSU1");}
 void Dkc1MacClearMsu1(void){WritePath(L"MSU1",NULL);}
 char *Dkc1MacChooseMsu1(void){
@@ -196,11 +200,14 @@ static HMENU Sub(HMENU parent,const wchar_t *text){HMENU menu=CreatePopupMenu();
 void Dkc1MacInstallMenu(void){
  s_menu=CreateMenu();HMENU game=Sub(s_menu,L"&Game"),view=Sub(s_menu,L"&View"),mods=Sub(s_menu,L"&Mods"),music=Sub(s_menu,L"&Music");
  Add(game,kDkc1MacMenuPauseMenu,L"&Pause / Settings\tEsc");Add(game,kDkc1MacMenuControls,L"&Controls and Assist...");
+ Add(game,kDkc1MacMenuChangeRom,L"Change &ROM...");
  Add(game,kDkc1MacMenuToggleHaptics,L"Controller &rumble (enemy stomps)");
  Add(game,kDkc1MacMenuTestHaptics,L"&Test controller rumble");
  Add(game,kDkc1MacMenuPause,L"Pause / Resume\tF7");Add(game,kDkc1MacMenuStep,L"Step one frame\tF8");
  Add(game,kDkc1MacMenuQuickSave,L"Quick &Save\tF11");Add(game,kDkc1MacMenuQuickLoad,L"Quick &Load\tF12");Add(game,kDkc1MacMenuExportRepro,L"Export repro bundle\tF9");Add(game,kDkc1MacMenuQuit,L"&Quit\tAlt+F4");
  Add(view,kDkc1MacMenuGraphics,L"&Graphics Settings...");Add(view,kDkc1MacMenuFullscreen,L"&Fullscreen\tAlt+Enter");
+ Add(view,kDkc1MacMenuFrameGen,L"Smooth &animation / frame generation\tF10");
+ HMENU pixels=Sub(view,L"Pixel as&pect");Add(pixels,kDkc1MacMenuPixelAspectSnes,L"SNES 7:6 (authentic CRT)");Add(pixels,kDkc1MacMenuPixelAspectSquare,L"Square pixels");
  HMENU aspect=Sub(view,L"&Aspect ratio");Add(aspect,kDkc1MacMenuAspectNative,L"4:3 (Native)");Add(aspect,kDkc1MacMenuAspect16x10,L"16:10 (308x224)");Add(aspect,kDkc1MacMenuAspect16x9,L"16:9 (342x224)");
  HMENU scaler=Sub(view,L"&Upscaler");Add(scaler,kDkc1MacMenuFullscreenPixelSharp,L"Nearest");Add(scaler,kDkc1MacMenuFullscreenSmooth,L"Bilinear");Add(scaler,kDkc1MacMenuUpscalerReconstruct,L"Reconstruct");Add(scaler,kDkc1MacMenuFullscreenSharpBilinear,L"Sharp Bilinear");
  HMENU display=Sub(view,L"&Display");Add(display,kDkc1MacMenuDisplayFlat,L"Flat");Add(display,kDkc1MacMenuDisplayCrt,L"CRT television");
@@ -217,13 +224,18 @@ void Dkc1WindowsUpdateHapticsMenu(int enabled){
  Check(kDkc1MacMenuToggleHaptics,enabled);
  EnableMenuItem(s_menu,kDkc1MacMenuTestHaptics,MF_BYCOMMAND|(enabled?MF_ENABLED:MF_GRAYED));
 }
+void Dkc1WindowsUpdateHostMenu(int framegen_enabled,int square_pixels){
+ if(!s_menu)return;
+ Check(kDkc1MacMenuFrameGen,framegen_enabled);
+ Check(kDkc1MacMenuPixelAspectSnes,!square_pixels);Check(kDkc1MacMenuPixelAspectSquare,square_pixels);
+}
 void Dkc1MacUpdateGraphicsMenuState(int display,int upscaler,int screen){
  Check(kDkc1MacMenuDisplayFlat,!display);Check(kDkc1MacMenuDisplayCrt,display);
  int scalers[]={kDkc1MacMenuFullscreenPixelSharp,kDkc1MacMenuFullscreenSmooth,kDkc1MacMenuUpscalerReconstruct,kDkc1MacMenuFullscreenSharpBilinear};
  for(int i=0;i<4;i++){Check(scalers[i],i==upscaler);Check(kDkc1MacMenuScreenRaw+i,i==screen);}
 }
-void Dkc1MacUpdateMenuState(int paused,int fullscreen,Dkc1MacFullscreenScaling scaling,Dkc1VideoAspect aspect,Dkc1EdgePolicy edge,unsigned char layers,int provenance,int music,int baby,int ready,int dixie){
- (void)scaling;(void)ready;Check(kDkc1MacMenuPause,paused);Check(kDkc1MacMenuFullscreen,fullscreen);(void)baby;Check(kDkc1MacMenuChooseMusicPack,music);Check(kDkc1MacMenuProvenance,provenance);Check(kDkc1MacMenuToggleDixie,dixie);
+void Dkc1MacUpdateMenuState(int paused,int fullscreen,Dkc1MacFullscreenScaling scaling,Dkc1VideoAspect aspect,Dkc1EdgePolicy edge,unsigned char layers,int provenance,int music,int dixie,int hd_textures){
+ (void)scaling;(void)hd_textures;Check(kDkc1MacMenuPause,paused);Check(kDkc1MacMenuFullscreen,fullscreen);Check(kDkc1MacMenuChooseMusicPack,music);Check(kDkc1MacMenuProvenance,provenance);Check(kDkc1MacMenuToggleDixie,dixie);
  for(int i=0;i<3;i++)Check(kDkc1MacMenuAspectNative+i,aspect==i);for(int i=0;i<4;i++)Check(kDkc1MacMenuEdgeReflect+i,edge==i);
  int masks[]={255,1,2,4,16};for(int i=0;i<5;i++)Check(kDkc1MacMenuLayerComposite+i,layers==masks[i]);
 }
@@ -386,18 +398,28 @@ int Dkc1WindowsPlatformTest(const char *directory){
   if(!(GetMenuState(s_menu,kDkc1MacMenuScreenRaw+selected,MF_BYCOMMAND)&MF_CHECKED))return 8;
  }
  for(int selected=0;selected<3;selected++){
-  Dkc1MacUpdateMenuState(0,0,1,selected,3,255,0,0,0,0,selected&1);
+  Dkc1MacUpdateMenuState(0,0,1,selected,3,255,0,0,selected&1,0);
   for(int i=0;i<3;i++)if(!!(GetMenuState(s_menu,kDkc1MacMenuAspectNative+i,MF_BYCOMMAND)&MF_CHECKED)!=(i==selected))return 9;
   if(!!(GetMenuState(s_menu,kDkc1MacMenuToggleDixie,MF_BYCOMMAND)&MF_CHECKED)!=(selected&1))return 14;
+ }
+ for(int framegen=0;framegen<2;framegen++)for(int square=0;square<2;square++){
+  Dkc1WindowsUpdateHostMenu(framegen,square);
+  if(!!(GetMenuState(s_menu,kDkc1MacMenuFrameGen,MF_BYCOMMAND)&MF_CHECKED)!=framegen)return 19;
+  if(!!(GetMenuState(s_menu,kDkc1MacMenuPixelAspectSquare,MF_BYCOMMAND)&MF_CHECKED)!=square)return 20;
+  if(!!(GetMenuState(s_menu,kDkc1MacMenuPixelAspectSnes,MF_BYCOMMAND)&MF_CHECKED)==square)return 21;
+ }
+ for(int enabled=0;enabled<2;enabled++){
+  Dkc1WindowsSetFrameGen(enabled);if(Dkc1WindowsSavedFrameGen()!=enabled)return 22;
+  Dkc1WindowsSetSquarePixels(enabled);if(Dkc1WindowsSavedSquarePixels()!=enabled)return 23;
  }
  /* Fullscreen must detach the bar without losing the menu or its state. */
  if(!Dkc1WindowsMenuBarVisible())return 10;
  Dkc1WindowsShowMenuBar(0);if(Dkc1WindowsMenuBarVisible()||GetMenu(s_window))return 11;
- Dkc1MacUpdateMenuState(0,1,1,2,3,255,0,0,0,0,0);
+ Dkc1MacUpdateMenuState(0,1,1,2,3,255,0,0,0,0);
  Dkc1WindowsShowMenuBar(1);if(!Dkc1WindowsMenuBarVisible()||GetMenu(s_window)!=s_menu)return 12;
  if(!(GetMenuState(s_menu,kDkc1MacMenuFullscreen,MF_BYCOMMAND)&MF_CHECKED)||!(GetMenuState(s_menu,kDkc1MacMenuAspect16x9,MF_BYCOMMAND)&MF_CHECKED))return 13;
  Dkc1WindowsDetach();SDL_DestroyWindow(window);
- puts("WINDOWS_PLATFORM_PASS: 23 graphics fields at min/mid/max, controls roundtrip, four dark menus, scaler/color/aspect checkmarks, fullscreen menu bar detach/restore");return 0;
+ puts("WINDOWS_PLATFORM_PASS: 23 graphics fields at min/mid/max, controls roundtrip, four dark menus, scaler/color/aspect/frame-generation/pixel-aspect checkmarks, host preference roundtrips, fullscreen menu bar detach/restore");return 0;
 }
 
 /* Mac display-link entry points are not selected on Windows. */
@@ -412,3 +434,14 @@ void Dkc1MacMetalPresenterSetActive(int a){(void)a;}
 void Dkc1MacMetalPresenterFlush(void){}
 void Dkc1MacMetalPresenterStop(void){}
 void Dkc1MacMetalPresenterSetGraphics(const Dkc1GraphicsSettings*s){(void)s;}
+
+/* The HD texture experiment ships only in the Mac bundle; Windows keeps its
+ * menu state, presenter hooks and persistence inert. */
+void Dkc1MacConfigureHdExperiment(void){}
+int Dkc1MacSavedHdTexturesEnabled(void){return 0;}
+void Dkc1MacSetHdTexturesEnabled(int enabled){(void)enabled;}
+void Dkc1HdMetalSetPolish(int strength){(void)strength;}
+void Dkc1HdMetalSetFinish(int strength){(void)strength;}
+int Dkc1MacMetalPresenterQueueHdFrame(const uint32_t *native,int width,int height,int presentation_width,const Dkc1MacPresentationFrameInfo *info){
+ (void)native;(void)width;(void)height;(void)presentation_width;(void)info;return 0;
+}

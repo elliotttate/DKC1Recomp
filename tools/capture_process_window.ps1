@@ -25,8 +25,17 @@ public static class Dkc1WindowCapture
     [DllImport("user32.dll")]
     private static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+
     public static void Save(IntPtr window, string path)
     {
+        // GetWindowRect must use physical coordinates for a per-monitor-aware
+        // target. Otherwise PrintWindow is cropped to a DPI-virtualized bitmap.
+        IntPtr oldContext = IntPtr.Zero;
+        try { oldContext = SetThreadDpiAwarenessContext(new IntPtr(-4)); }
+        catch (EntryPointNotFoundException) { }
+        try {
         Rect rect;
         if (!GetWindowRect(window, out rect))
             throw new InvalidOperationException("GetWindowRect failed");
@@ -43,6 +52,9 @@ public static class Dkc1WindowCapture
             }
             finally { graphics.ReleaseHdc(dc); }
             bitmap.Save(path, ImageFormat.Png);
+        }
+        } finally {
+            if (oldContext != IntPtr.Zero) SetThreadDpiAwarenessContext(oldContext);
         }
     }
 }

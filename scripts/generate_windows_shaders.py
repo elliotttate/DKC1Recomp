@@ -10,6 +10,9 @@ from pathlib import Path
 
 def translate(source):
     source=source[source.index('fragment float4 dkc1_flat'):]
+    # The HD-only finish pass (integer hashing) belongs to the Mac GPU
+    # compositor; the OpenGL fallback presents the seven game passes.
+    source=source[:source.index('float finish_luma(')]+source[source.index('float3 tx('):]
     signature=r'fragment float4 (dkc1_\w+)\([^\n]+\) \{'
     names=re.findall(signature,source)
     if names != ['dkc1_flat','dkc1_reconstruct','dkc1_lines','dkc1_beam','dkc1_down','dkc1_blur','dkc1_compose']:

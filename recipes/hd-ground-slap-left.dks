@@ -1,0 +1,8 @@
+# Move clear of the banana-hoard entrance, turn left, slap and recover.
+000 * 30
+080 * 40
+000 * 20
+040 * 16
+000 * 30
+022 * 180
+000 * 120

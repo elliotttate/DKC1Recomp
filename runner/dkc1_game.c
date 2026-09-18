@@ -1,5 +1,7 @@
+#include "dkc1_hd_sprites.h"
+#include "dkc1_hd_scene.h"
 #include "dkc1_game.h"
-#include "dkc1_baby_kong.h"
+#include "dkc1_framegen.h"
 #include "dkc1_video.h"
 #include "dkc1_terrain.h"
 #include "dkc1_wall_seams.h"
@@ -9,6 +11,7 @@
 #include "common_cpu_infra.h"
 #include "common_rtl.h"
 #include "cpu_state.h"
+#include "snes/cart.h"
 #include "snes/dma.h"
 #include "snes/cart.h"
 #include "snes/interp_bridge.h"
@@ -65,16 +68,10 @@ static void Dkc1InterpreterInitialColumnCount(CpuState *cpu,
 
 static void Dkc1Initialize(void) {
 #ifdef DKC1_DIXIE_VARIANT
-  /* The pinned Dixie image adds pose/layout/graphics data in banks $40-$41.
-   * For example pose-table entry $BB:F8A8 points to $41:6000, file $416000.
-   * Folding that to $01:6000 reads unrelated tiles as an OAM layout. Keep
-   * the existing $C0-$FF stock aliases and enable only the added data banks.
-   * This is set before reset and remains host configuration across loads. */
+  /* Dixie stores expanded pose and graphics data in linear banks $40-$41.
+   * This variant-only mapper keeps stock HiROM aliases unchanged. */
   cart_set_hirom_linear_data_banks(g_snes->cart, true);
 #endif
-  /* Baby Kong (Kiddy) was removed from the Mods menu and cannot be enabled:
-   * its env initializer is intentionally not called, so DKC1_BABY_KONG* has
-   * no effect even if set. The compiled hooks remain inert. */
   /* The main engine can reach both initializers while executing through the
    * bank-$00 HiROM interpreter mirror. Generated-C adapters alone therefore
    * miss those entries. Mirror the same two constant substitutions at the
@@ -145,8 +142,6 @@ static void Dkc1RunOneFrame(void) {
     s_last_lle_result =
         interp_bridge_run_until_quiescent(&g_cpu, s_resume_pc);
   }
-
-  Dkc1BabyKongApplyMoves(g_ram);
 
   interp_bridge_set_master_deadline(0);
   s_resume_pc = interp_bridge_lle_resume_pc();
@@ -1772,15 +1767,12 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
   }
 
   WsShadowFrame(g_ppu);
-  if (rebase || (allow_rebase && (cartridge_ppu_y & 7u) == 7u)) {
+  if (rebase) {
     /* The water HDMA can move VOFS by one pixel during the visible frame.
      * At fine Y=7 its final line reaches the row after the generic 29-row
      * capture. Preserve the cartridge's native columns on that guard row,
      * including their partially visible edge tiles. These are live VRAM
-     * entries, not extrapolated ROM art; normal margin prefill follows.
-     * This is needed on ordinary fine-scroll crossings too, not only when
-     * the cache rebases. Otherwise the last line can miss its edge tile
-     * for one frame while every ROM-prefilled margin column is present. */
+     * entries, not extrapolated ROM art; normal margin prefill follows. */
     const uint32_t guard_ty = (cartridge_ppu_y >> 3) + 29u;
     const uint32_t first_tx = cartridge_ppu_x >> 3;
     const uint32_t last_tx = (cartridge_ppu_x + 255u) >> 3;
@@ -1904,10 +1896,6 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
       Dkc1WallSeamSourceMatches(Dkc1TerrainReadCell, &terrain_context);
   const bool east_wall_seam = wall_seam_source &&
       Dkc1EastWallSeamSourceMatches(Dkc1TerrainReadCell, &terrain_context);
-  const bool cove_wall_seam = wall_seam_source &&
-      Dkc1CoveWallSourceMatches(Dkc1TerrainReadCell, &terrain_context);
-  const bool cove_shaft_seam = wall_seam_source &&
-      Dkc1CoveShaftSourceMatches(Dkc1TerrainReadCell, &terrain_context);
   Dkc1TerrainAdjacency adjacency;
   memset(&adjacency, 0, sizeof adjacency);
   bool adjacency_attempted = false;
@@ -2022,30 +2010,18 @@ static bool Dkc1PrepareWidescreenShadow(uint8_t layer_mask,
               trace->boundary_continuation_tiles++;
           }
         }
-        if ((side == 0 ? wall_seam :
-                (east_wall_seam || cove_wall_seam || cove_shaft_seam)) &&
-            beyond_native_edge &&
+        if ((side == 0 ? wall_seam : east_wall_seam) && beyond_native_edge &&
             signed_decode_wtx >= 0 && signed_decode_wty >= 0 &&
             signed_decode_edge_wtx >= 0) {
           uint32_t donor_x = 28u, donor_y;
-          bool found = side == 0 ? Dkc1WallSeamDonorRow(
+          const bool found = side == 0 ? Dkc1WallSeamDonorRow(
                   (uint32_t)signed_decode_wtx >> 2,
                   (uint32_t)signed_decode_wty >> 2,
                   (uint32_t)signed_decode_edge_wtx >> 2, &donor_y)
-              : east_wall_seam && Dkc1EastWallSeamDonor(
+              : Dkc1EastWallSeamDonor(
                   (uint32_t)signed_decode_wtx >> 2,
                   (uint32_t)signed_decode_wty >> 2,
                   (uint32_t)signed_decode_edge_wtx >> 2, &donor_x, &donor_y);
-          if (!found && side == 1 && cove_wall_seam)
-            found = Dkc1CoveWallDonorCell(
-                (uint32_t)signed_decode_wtx >> 2,
-                (uint32_t)signed_decode_wty >> 2,
-                (uint32_t)signed_decode_edge_wtx >> 2, &donor_x, &donor_y);
-          if (!found && side == 1 && cove_shaft_seam)
-            found = Dkc1CoveShaftDonorCell(
-                (uint32_t)signed_decode_wtx >> 2,
-                (uint32_t)signed_decode_wty >> 2,
-                (uint32_t)signed_decode_edge_wtx >> 2, &donor_x, &donor_y);
           if (found) {
             uint16_t donor;
             if (Dkc1TerrainReadCell(&terrain_context, donor_x, donor_y, &donor) &&
@@ -2083,7 +2059,32 @@ static bool Dkc1DebugForceWidescreenFallback(void) {
          requested == snes_frame_counter;
 }
 
+/* Host-only in-between frame support (dkc1_framegen.h). The real render
+ * records the PPU register state it started from and the presentation
+ * decisions it applied; Dkc1DrawInterpolatedFrame replays the same scanline
+ * loop from that snapshot with the framegen plan's scroll and OAM offsets. */
+/* Frame-start register/memory snapshots for frames N and N-1. The N-1
+ * snapshot supplies VRAM/CGRAM for the animation-cell dissolve. */
+static Ppu s_fg_ppu_snapshots[2];
+static Ppu *s_fg_ppu_start = &s_fg_ppu_snapshots[0];
+static Ppu *s_fg_ppu_prev;
+static Ppu s_fg_ppu_backup;
+static bool s_fg_frame_ready;
+static uint8_t s_fg_scratch[kDkc1VideoWidescreenWidth * kDkc1VideoHeight *
+                            kDkc1VideoBytesPerPixel];
+static uint8_t s_fg_scratch_cur[kDkc1VideoWidescreenWidth * kDkc1VideoHeight *
+                                kDkc1VideoBytesPerPixel];
+static uint8_t s_fg_mask[kDkc1VideoWidescreenWidth * kDkc1VideoHeight];
+static int s_fg_bias;
+static bool s_fg_centered;
+static size_t s_fg_blank_left_bytes;
+static size_t s_fg_blank_right_bytes;
+static size_t s_fg_blank_right_offset;
+static unsigned s_fg_ws_policy;
+
 void Dkc1DrawPpuFrame(void) {
+  /* Optional animation-cadence evidence (no-op unless armed). */
+  Dkc1AnimCadenceLogFrame(g_ram, snes_frame_counter);
   /* Aspect changes are presentation-only, but retained shadow coordinates
    * are sized around the active side extent. A 16:9 <-> 16:10 switch must
    * cold-start that host history before the next emulated frame; cartridge
@@ -2158,7 +2159,13 @@ void Dkc1DrawPpuFrame(void) {
                                   &stream_bootstrap_rejected, &cache_rebased,
                                   trace_enabled ? &trace : NULL);
   Dkc1VideoGetStreamCoverageStats(&trace.stream_coverage);
-  const bool extend_world = shadow_world_ready;
+  /* Banana Hoard camera bounds are a single point, so the rolling-map
+   * shadow correctly refuses calibration. Its BG1/BG3 tilemaps are already
+   * 64 columns of authored cave. Show those host pixels only; do not mark
+   * terrain-ready or rewrite cartridge streaming. */
+  const bool hoard_fixed_wide =
+      Dkc1VideoIsWidescreen() && Dkc1HdHoardSceneEligible(g_ram);
+  const bool extend_world = shadow_world_ready || hoard_fixed_wide;
   trace.cartridge_stream_ready = cartridge_stream_ready;
   if (trace_enabled) {
     trace.selected_layout = s_ws_layout;
@@ -2190,6 +2197,8 @@ void Dkc1DrawPpuFrame(void) {
                                  g_ppu->screenEnabled[1]) & 0x07u);
     uint8_t repeat_mask = 0;
     uint8_t physical_wide_mask = 0;
+    const bool hoard_mirror =
+        hoard_fixed_wide && !shadow_world_ready;
     for (int layer = 0; layer < 3; layer++) {
       const uint8_t bit = (uint8_t)(1u << layer);
       if (!(enabled & bit))
@@ -2200,7 +2209,12 @@ void Dkc1DrawPpuFrame(void) {
        * repeat there, as a bounded plane would. */
       const bool raw_past_wall =
           layer == 2 && edge.beyond_extent && edge_policy != kDkc1EdgeShift;
-      if (PPU_bgTilemapWider(g_ppu, layer) != 0 && !raw_past_wall)
+      /* Banana Hoard: the 64-column ring is a different cave stretch, not
+       * the neighbor of this locked 256. Draw the wide line so the mirror
+       * has a buffer, then replace both margins from the 4:3 tiles. */
+      if (hoard_mirror)
+        physical_wide_mask = (uint8_t)(physical_wide_mask | bit);
+      else if (PPU_bgTilemapWider(g_ppu, layer) != 0 && !raw_past_wall)
         physical_wide_mask = (uint8_t)(physical_wide_mask | bit);
       else
         repeat_mask = (uint8_t)(repeat_mask | bit);
@@ -2219,7 +2233,21 @@ void Dkc1DrawPpuFrame(void) {
      * columns mirrored about the wall's screen position. Only the terrain
      * layer scrolls with the camera; a parallax plane keeps its periodic
      * continuation, and a bounded plane its hardware wrap. */
-    if (edge_policy == kDkc1EdgeReflect && edge.beyond_extent) {
+    if (hoard_mirror) {
+      PpuSetWidescreenLayerRepeat(g_ppu, 0);
+      repeat_mask = 0;
+      const int left_axis = Dkc1LockedInteriorLeftAxis();
+      for (int layer = 0; layer < 3; layer++) {
+        if (!(enabled & (uint8_t)(1u << layer)))
+          continue;
+        /* Left wall: Jungle inset reflection of the authored 256. Right
+         * opening: continue the last 4:3 column; flipping it draws a seam
+         * through the cave mouth. */
+        PpuSetWidescreenLayerMirrorAxis(g_ppu, (uint8_t)layer, left_axis,
+                                        kDkc1EdgeAxisOffRight);
+        PpuSetWidescreenLayerRightEdgeClamp(g_ppu, (uint8_t)layer, true);
+      }
+    } else if (edge_policy == kDkc1EdgeReflect && edge.beyond_extent) {
       const int terrain_layer = Dkc1VideoTerrainLayer(
           wide_layer_mask, g_ppu->bgXsc, Dkc1ReadWram16(0x1b13));
       if (terrain_layer >= 0)
@@ -2231,7 +2259,9 @@ void Dkc1DrawPpuFrame(void) {
     trace.edge_extension = true;
     /* Preserve the cartridge adapter's previous one-frame fallback gate.
      * Rescuing host pixels must not silently widen activation on this frame. */
-    Dkc1VideoSetTerrainReady(!cache_rebased);
+    Dkc1VideoSetTerrainReady(hoard_fixed_wide && !shadow_world_ready
+                                 ? false
+                                 : !cache_rebased);
   } else if (Dkc1VideoIsWidescreen()) {
     trace.centered_fallback = true;
     Dkc1RejectWidescreenShadow();
@@ -2257,7 +2287,24 @@ void Dkc1DrawPpuFrame(void) {
     PpuSetWidescreenPresentationXBias(g_ppu, 0);
   }
 
-  Dkc1BabyKongPrepareFrame(g_ppu, g_ram, presentation_bias);
+  Dkc1HdPrepare(g_ppu, g_ram, presentation_bias);
+
+  /* Frame-start register state for the optional in-between render: HDMA
+   * replay below rewrites scroll, palette and window registers line by line,
+   * so a second pass must begin from the same registers this one does. */
+  const bool framegen = Dkc1FrameGenEnabled();
+  const bool had_previous = s_fg_frame_ready;
+  s_fg_frame_ready = false;
+  if (framegen) {
+    Dkc1PoseGenBegin();
+    Ppu *next = s_fg_ppu_start == &s_fg_ppu_snapshots[0]
+                    ? &s_fg_ppu_snapshots[1] : &s_fg_ppu_snapshots[0];
+    memcpy(next, g_ppu, sizeof *next);
+    s_fg_ppu_prev = had_previous ? s_fg_ppu_start : NULL;
+    s_fg_ppu_start = next;
+  } else {
+    s_fg_ppu_prev = NULL;
+  }
 
   dma_startDma(g_dma, g_snesrecomp_last_hdmaen, true);
   WsShadowDebugBeginFrame();
@@ -2268,12 +2315,16 @@ void Dkc1DrawPpuFrame(void) {
   }
 
   for (int line = 0; line <= 224; line++) {
+    if (framegen)
+      Dkc1FrameGenCaptureLine(g_ppu, line);
     if (extend_world && presentation_bias != 0) {
       for (int layer = 0; layer < 4; layer++)
         g_ppu->hScroll[layer] =
             (uint16_t)(g_ppu->hScroll[layer] + presentation_bias);
     }
     ppu_runLine(g_ppu, line);
+    if (framegen) Dkc1PoseGenCaptureLine(g_ppu, line, 0);
+    Dkc1HdCaptureLine(g_ppu, line);
     if (extend_world && presentation_bias != 0) {
       for (int layer = 0; layer < 4; layer++)
         g_ppu->hScroll[layer] =
@@ -2303,7 +2354,38 @@ void Dkc1DrawPpuFrame(void) {
     }
   }
 
-  Dkc1BabyKongDrawFrame(g_ppu);
+  /* Record what this render consumed so the host may present one
+   * in-between image before the next frame. Reads only. */
+  if (framegen) {
+    const int extra = Dkc1VideoExtra();
+    s_fg_bias = extend_world ? presentation_bias : 0;
+    s_fg_centered = !extend_world && Dkc1VideoIsWidescreen();
+    s_fg_blank_left_bytes = 0;
+    s_fg_blank_right_bytes = 0;
+    s_fg_blank_right_offset = 0;
+    if (extend_world && (edge.left < extra || edge.right < extra)) {
+      s_fg_blank_left_bytes =
+          (size_t)(extra - edge.left) * kDkc1VideoBytesPerPixel;
+      s_fg_blank_right_bytes =
+          (size_t)(extra - edge.right) * kDkc1VideoBytesPerPixel;
+      s_fg_blank_right_offset =
+          (size_t)(extra + kDkc1VideoNativeWidth + edge.right) *
+          kDkc1VideoBytesPerPixel;
+    }
+    s_fg_ws_policy = trace.presentation_features;
+    Dkc1FrameGenCaptureFrame(s_fg_ppu_start, g_ram, snes_frame_counter,
+                             Dkc1VideoWidth(), Dkc1VideoTerrainLayer(
+                                 Dkc1VideoPpuWideLayerMask(
+                                     s_fg_ppu_start->bgmode,
+                                     s_fg_ppu_start->bgXsc,
+                                     s_fg_ppu_start->screenEnabled[0],
+                                     s_fg_ppu_start->screenEnabled[1]),
+                                 s_fg_ppu_start->bgXsc,
+                                 Dkc1ReadWram16(0x1b13)));
+    s_fg_frame_ready = true;
+  }
+
+  Dkc1HdFinish(g_ppu);
 
   /* Model the VBlank boundary after the visible lines so the PPU reloads its
    * internal OAM port from OAMADD before the next frame's OAM DMA. */
@@ -2318,6 +2400,226 @@ void Dkc1DrawPpuFrame(void) {
     Dkc1WsTraceEmit(&trace);
   }
   Dkc1ApplyProvenanceOverlay(wide_layer_mask);
+}
+
+/* One in-between render pass over a scratch PPU. `base` supplies every
+ * register and policy of frame N; `memory` (optional) substitutes another
+ * frame's VRAM and CGRAM; the OAM tables replace the sprites. */
+static int s_fg_capture_kind = -1;
+static void Dkc1FrameGenRenderPass(const Ppu *base, const Ppu *memory,
+                                   const uint16_t *oam,
+                                   const uint8_t *high_oam,
+                                   const uint8_t *right_hint,
+                                   const Dkc1FrameGenPlan *plan,
+                                   uint8_t *pixels, size_t pitch) {
+  memcpy(g_ppu, base, sizeof *g_ppu);
+  if (s_fg_capture_kind == 1 || s_fg_capture_kind == 3) {
+    /* Existing overlay extraction exposes each native priority/index plane
+     * during our scratch BG pass. Nothing is removed from the composition. */
+    static uint32_t sink[kDkc1VideoWidescreenWidth * kDkc1VideoHeight];
+    PpuClearOverlayBindings(g_ppu);
+    for (int layer = 0; layer < 3; layer++) {
+      PpuBindOverlaySurface(g_ppu, (PpuOverlaySource)layer,
+                            (uint8_t *)sink, Dkc1VideoWidth() * 4);
+      PpuSetOverlayCapture(g_ppu, (PpuOverlaySource)layer,
+                           -g_ppu->extraLeftRight, 0, Dkc1VideoWidth(), 224, 0);
+    }
+  }
+  if (memory) {
+    memcpy(g_ppu->vram, memory->vram, sizeof g_ppu->vram);
+    memcpy(g_ppu->cgram, memory->cgram, sizeof g_ppu->cgram);
+  }
+  PpuBeginDrawing(g_ppu, pixels, pitch,
+                  kPpuRenderFlags_NewRenderer |
+                      kPpuRenderFlags_WidescreenSpriteBudget);
+  memcpy(g_ppu->oam, oam, sizeof g_ppu->oam);
+  memcpy(g_ppu->highOam, high_oam, sizeof g_ppu->highOam);
+  memcpy(g_ppu->wsOamRightHint, right_hint, sizeof g_ppu->wsOamRightHint);
+  if (s_fg_centered) {
+    const size_t row_bytes =
+        (size_t)Dkc1VideoWidth() * kDkc1VideoBytesPerPixel;
+    for (int y = 0; y < kDkc1VideoHeight; y++)
+      memset(pixels + (size_t)y * pitch, 0, row_bytes);
+  }
+
+  SimpleHdma channels[8];
+  bool active[8] = {false};
+  for (int channel = 0; channel < 8; channel++) {
+    active[channel] = g_dma->channel[channel].hdmaActive;
+    if (active[channel])
+      SimpleHdma_Init(&channels[channel], &g_dma->channel[channel]);
+  }
+  for (int line = 0; line <= 224; line++) {
+    uint16_t saved_h[4], saved_v[4];
+    for (int layer = 0; layer < 4; layer++) {
+      saved_h[layer] = g_ppu->hScroll[layer];
+      saved_v[layer] = g_ppu->vScroll[layer];
+      g_ppu->hScroll[layer] = (uint16_t)(saved_h[layer] + s_fg_bias +
+                                         plan->h_shift[layer][line]);
+      g_ppu->vScroll[layer] =
+          (uint16_t)(saved_v[layer] + plan->v_shift[layer][line]);
+    }
+    ppu_runLine(g_ppu, line);
+    if (s_fg_capture_kind >= 0)
+      Dkc1PoseGenCaptureLine(g_ppu, line, s_fg_capture_kind);
+    for (int layer = 0; layer < 4; layer++) {
+      g_ppu->hScroll[layer] = saved_h[layer];
+      g_ppu->vScroll[layer] = saved_v[layer];
+    }
+    for (int channel = 0; channel < 8; channel++) {
+      if (active[channel]) SimpleHdma_DoLine(&channels[channel]);
+    }
+  }
+  if (s_fg_blank_left_bytes || s_fg_blank_right_bytes) {
+    for (int y = 0; y < kDkc1VideoHeight; y++) {
+      uint8_t *row = pixels + (size_t)y * pitch;
+      if (s_fg_blank_left_bytes) memset(row, 0, s_fg_blank_left_bytes);
+      if (s_fg_blank_right_bytes)
+        memset(row + s_fg_blank_right_offset, 0, s_fg_blank_right_bytes);
+    }
+  }
+}
+
+/* Dissolve the second render into the first inside the plan's rectangles.
+ * Rectangles are in decoded OAM screen space; the renderer places a sprite
+ * at (x - presentation bias) and the framebuffer centers screen x = 0 at
+ * the left centering budget. Each pixel blends once even where rectangles
+ * overlap. Returns the number of blended pixels. */
+static unsigned Dkc1FrameGenDissolve(uint8_t *pixels, size_t pitch,
+                                     const uint8_t *other, size_t other_pitch,
+                                     const Dkc1FrameGenPlan *plan,
+                                     int width, int bias, int extra_left) {
+  const size_t mask_bytes = (size_t)width * kDkc1VideoHeight;
+  memset(s_fg_mask, 0, mask_bytes);
+  unsigned blended = 0;
+  for (unsigned i = 0; i < plan->tween_count; i++) {
+    const Dkc1FrameGenRect *r = &plan->tween[i];
+    int x0 = r->x - bias + extra_left, y0 = r->y;
+    int x1 = x0 + r->w, y1 = y0 + r->h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > width) x1 = width;
+    if (y1 > kDkc1VideoHeight) y1 = kDkc1VideoHeight;
+    for (int y = y0; y < y1; y++) {
+      uint8_t *mask = s_fg_mask + (size_t)y * width;
+      uint8_t *dst = pixels + (size_t)y * pitch;
+      const uint8_t *src = other + (size_t)y * other_pitch;
+      for (int x = x0; x < x1; x++) {
+        if (mask[x]) continue;
+        mask[x] = 1;
+        uint8_t *d = dst + (size_t)x * kDkc1VideoBytesPerPixel;
+        const uint8_t *s = src + (size_t)x * kDkc1VideoBytesPerPixel;
+        d[0] = (uint8_t)((d[0] + s[0] + 1) >> 1);
+        d[1] = (uint8_t)((d[1] + s[1] + 1) >> 1);
+        d[2] = (uint8_t)((d[2] + s[2] + 1) >> 1);
+        blended++;
+      }
+    }
+  }
+  return blended;
+}
+
+bool Dkc1DrawInterpolatedFrame(uint8_t *pixels, size_t pitch,
+                               Dkc1FrameGenStats *stats) {
+  static Dkc1FrameGenPlan plan;
+  static int tween_enabled = -1;
+  static int live_scroll = -1;
+  if (stats)
+    memset(stats, 0, sizeof *stats);
+  if (!pixels || !Dkc1FrameGenEnabled() || !s_fg_frame_ready)
+    return false;
+  const bool usable = Dkc1FrameGenBuildPlan(&plan);
+  if (stats)
+    *stats = plan.stats;
+  if (!usable)
+    return false;
+  if (tween_enabled < 0) {
+    const char *knob = getenv("DKC1_FRAMEGEN_TWEEN");
+    tween_enabled = !knob || !*knob ? 0 : (*knob == '0' ? 0 : *knob == '2' ? 2 : 1);
+  }
+  if (live_scroll < 0) {
+    const char *knob = getenv("DKC1_FRAMEGEN_LIVE_SCROLL");
+    live_scroll = !(knob && *knob == '0');
+  }
+
+  /* Everything below runs on scratch copies of the frame-start PPU state.
+   * The live PPU (registers, VRAM, CGRAM, OAM, latches) is restored byte
+   * for byte before returning, and WRAM is never written. The margin shadow
+   * keys its history lookups, wall extent and fold decisions on the frame's
+   * captured camera unless live scroll is on; the in-between pass moves the
+   * scroll registers, so the shadow follows them here and the policy is
+   * restored afterwards. DKC1_FRAMEGEN_LIVE_SCROLL=0 is an A/B knob. */
+  memcpy(&s_fg_ppu_backup, g_ppu, sizeof s_fg_ppu_backup);
+  WsShadowSetPresentationPolicy(
+      live_scroll ? (s_fg_ws_policy | kWsShadowLiveScroll) : s_fg_ws_policy);
+
+  s_fg_capture_kind = 2;
+  Dkc1FrameGenRenderPass(s_fg_ppu_start, NULL, plan.oam, plan.high_oam,
+                         plan.right_hint, &plan, pixels, pitch);
+  s_fg_capture_kind = -1;
+
+  /* Animation cells: render frame N-1's sprites (with frame N-1's tiles and
+   * palette) at the same in-between positions, then synthesize an in-between
+   * cell wherever a cell changed: DKC1_FRAMEGEN_TWEEN=1 finds how
+   * each patch moved between the two cells and draws it halfway, from one
+   * source only; =2 is a plain 50/50 dissolve for comparison; =0 keeps the
+   * crisp frame N cell (the default; buffered pose smoothing follows). */
+  if (tween_enabled && plan.tween_count && s_fg_ppu_prev) {
+    const int width = Dkc1VideoWidth();
+    const size_t scratch_pitch = (size_t)width * kDkc1VideoBytesPerPixel;
+    Dkc1FrameGenRenderPass(s_fg_ppu_start, s_fg_ppu_prev, plan.oam_prev,
+                           plan.high_oam_prev, plan.right_hint_prev, &plan,
+                           s_fg_scratch, scratch_pitch);
+    if (tween_enabled == 2) {
+      Dkc1FrameGenDissolve(pixels, pitch, s_fg_scratch, scratch_pitch, &plan,
+                           width, s_fg_ppu_start->wsPresentationXBias,
+                           s_fg_ppu_start->extraLeftRight);
+    } else {
+      for (int y = 0; y < kDkc1VideoHeight; y++)
+        memcpy(s_fg_scratch_cur + (size_t)y * scratch_pitch,
+               pixels + (size_t)y * pitch, scratch_pitch);
+      Dkc1FrameGenSynthesize(pixels, pitch, s_fg_scratch_cur, scratch_pitch,
+                             s_fg_scratch, scratch_pitch, width,
+                             kDkc1VideoHeight, &plan,
+                             s_fg_ppu_start->wsPresentationXBias,
+                             s_fg_ppu_start->extraLeftRight, stats);
+    }
+  } else if (stats) {
+    stats->tween_rects = 0;
+  }
+
+  WsShadowSetPresentationPolicy(s_fg_ws_policy);
+  memcpy(g_ppu, &s_fg_ppu_backup, sizeof *g_ppu);
+  return true;
+}
+
+void Dkc1DrawSmoothedFrames(const uint8_t *real, uint8_t *display,
+                           uint8_t *mid, bool have_mid,
+                           Dkc1FrameGenStats *stats) {
+  static Dkc1FrameGenPlan bgplan;
+  static uint8_t result_mid[sizeof s_fg_scratch];
+  const size_t pitch=(size_t)Dkc1VideoWidth()*4;
+  if(!Dkc1FrameGenEnabled() || !s_fg_frame_ready)return;
+  memcpy(&s_fg_ppu_backup,g_ppu,sizeof s_fg_ppu_backup);
+  const uint8_t mask=g_snes_ppu_dbg_layer_mask;
+  g_snes_ppu_dbg_layer_mask=mask&0x0f;
+  WsShadowSetPresentationPolicy(s_fg_ws_policy|kWsShadowLiveScroll);
+  memset(&bgplan,0,sizeof bgplan);
+  s_fg_capture_kind=1;
+  Dkc1FrameGenRenderPass(s_fg_ppu_start,NULL,s_fg_ppu_start->oam,
+    s_fg_ppu_start->highOam,s_fg_ppu_start->wsOamRightHint,&bgplan,
+    s_fg_scratch,pitch);
+  if(have_mid && Dkc1FrameGenBuildPlan(&bgplan)) {
+    s_fg_capture_kind=3;
+    Dkc1FrameGenRenderPass(s_fg_ppu_start,NULL,bgplan.oam,bgplan.high_oam,
+      bgplan.right_hint,&bgplan,s_fg_scratch,pitch);
+  }
+  s_fg_capture_kind=-1;
+  g_snes_ppu_dbg_layer_mask=mask;
+  WsShadowSetPresentationPolicy(s_fg_ws_policy);
+  memcpy(g_ppu,&s_fg_ppu_backup,sizeof *g_ppu);
+  Dkc1PoseGenPresent(real,mid,have_mid,display,result_mid,stats);
+  memcpy(mid,result_mid,pitch*kDkc1VideoHeight);
 }
 
 uint32_t Dkc1ResumePc(void) {

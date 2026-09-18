@@ -18,10 +18,8 @@ enum Dkc1MacMenuCommand {
   kDkc1MacMenuQuickSave,
   kDkc1MacMenuQuickLoad,
   kDkc1MacMenuExportRepro,
-  kDkc1MacMenuToggleBabyKong,
-  kDkc1MacMenuChooseBabyKongRom,
   kDkc1MacMenuToggleDixie,
-  kDkc1MacMenuChooseDixieRom,
+  kDkc1MacMenuToggleHdTextures,
   kDkc1MacMenuChooseMusicPack,
   kDkc1MacMenuDisableMusicPack,
   kDkc1MacMenuFullscreen,
@@ -52,18 +50,22 @@ enum Dkc1MacMenuCommand {
   kDkc1MacMenuScreenTrinitron,
   kDkc1MacMenuToggleHaptics,
   kDkc1MacMenuTestHaptics,
+  /* Windows host presentation commands; the Mac menu does not list them. */
+  kDkc1MacMenuFrameGen,
+  kDkc1MacMenuPixelAspectSnes,
+  kDkc1MacMenuPixelAspectSquare,
+  kDkc1MacMenuChangeRom,
   kDkc1MacMenuCommandCount
 };
 
 /* Returns a malloc-owned UTF-8 path, or NULL when the panel is cancelled. */
 char *Dkc1MacChooseRom(void);
-
-/* Baby Kong (Kiddy) was removed from the Mods menu; its persistence helpers
- * remain for old settings files but nothing activates the mod anymore. */
-char *Dkc1MacSavedBabyKongRom(void);
-void Dkc1MacSetBabyKongRom(const char *path);
-int Dkc1MacSavedBabyKongEnabled(void);
-void Dkc1MacSetBabyKongEnabled(int enabled);
+/* Dedicated local HD bundle only; absent private resources leave it inert. */
+void Dkc1MacConfigureHdExperiment(void);
+/* The incomplete HD texture preview is opt-in and persists as a host-only
+ * preference. DKC1_HD_SPRITES remains an explicit automation override. */
+int Dkc1MacSavedHdTexturesEnabled(void);
+void Dkc1MacSetHdTexturesEnabled(int enabled);
 
 /* Dixie Kong Country is built in: no ROM to pick, nothing to persist beyond
  * the on/off setting (dkc1_dixie_mod.h). Toggling restarts into the variant
@@ -94,8 +96,8 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
                             Dkc1MacFullscreenScaling fullscreen_scaling,
                             Dkc1VideoAspect aspect, Dkc1EdgePolicy edge,
                             unsigned char layer_mask, int provenance,
-                            int replacement_music, int baby_kong_enabled,
-                            int baby_kong_ready, int dixie_enabled);
+                            int replacement_music, int dixie_enabled,
+                            int hd_textures_enabled);
 void Dkc1MacMenuCommand(int command);
 
 /* Runs a display-linked cadence source on a private run loop. The SDL host

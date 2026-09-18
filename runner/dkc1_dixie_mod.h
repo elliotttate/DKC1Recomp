@@ -6,11 +6,10 @@
 
 /* Optional "Dixie Kong Country" mod switch, in the same spirit as the other
  * Mods-menu settings: a persisted toggle that decides which executable
- * starts. Unlike Baby Kong, the mod needs no external ROM file: the variant
- * build synthesizes the modded 6 MiB image in memory from the user's
- * verified clean DKC1 ROM plus the embedded IPS patch, and refuses to run
- * unless the synthesized image matches the pinned mod identity. See
- * docs/DIXIE_MOD.md.
+ * starts. The mod needs no external ROM file: the variant build synthesizes
+ * the modded 6 MiB image in memory from the user's verified clean DKC1 ROM
+ * plus the embedded IPS patch, and refuses to run unless the synthesized
+ * image matches the pinned mod identity. See docs/DIXIE_HD_MAC.md.
  *
  * Hosts call Dkc1DixieHandoffCheck() at the top of main(); when it returns
  * nonzero the process must exit immediately (the sibling has been spawned).

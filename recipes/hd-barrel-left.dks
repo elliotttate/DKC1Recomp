@@ -1,0 +1,13 @@
+# Clean private Jungle Hijinxs entry.state. Walk past the DK barrel,
+# roll back left to pick it up, carry both ways, then throw right.
+000 * 30
+082 * 75
+083 * 25
+082 * 50
+080 * 110
+000 * 10
+042 * 120
+002 * 150
+082 * 50
+002 * 100
+000 * 120

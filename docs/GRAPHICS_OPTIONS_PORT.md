@@ -7,7 +7,7 @@ DKC1's Mac app now exposes DKC2's Reconstruct, CRT television, and phosphor-colo
 - **Upscaler:** Nearest, Bilinear, Reconstruct, and the existing Sharp Bilinear option. Reconstruct includes all five donor modes (sharp pixels, dither decoding, diagonal edges, level-2 slopes, level-3 slopes), edge strength, softness, and smooth shading.
 - **CRT television:** Living room, Studio monitor, Soft, and Custom; scanlines, sharpness, no/fine/coarse/slot phosphor mask, mask strength, glow, halation, and curvature. CRT uses its own beam pipeline and disables the flat upscaler controls. The donor's small-window mask/beam fade and brightness compensation are retained.
 - **Phosphor colors:** Raw, CRT, Composite, and Trinitron, independently selectable with either display. The shared engine's existing color LUT runs on a separate presentation copy; raw pixels and machine memories remain unchanged.
-- **Escape menu:** Game, Graphics, Settings, Controls, Assist, Mods, and Credits tabs. It offers immediate paused previews, window scale/fullscreen, aspect and level-edge policies, audio mute/volume, replacement music, existing two-player bindings, rewind/fast-forward, five save slots, and DKC1's existing Baby Kong controls. Slot 1 retains `quicksave.state`; slots 2–5 use `slot2.state` through `slot5.state`.
+- **Escape menu:** Game, Graphics, Settings, Controls, Assist, Mods, and Credits tabs. It offers immediate paused previews, window scale/fullscreen, aspect and level-edge policies, audio mute/volume, replacement music, existing two-player bindings, rewind/fast-forward, five save slots, and the Dixie runtime switch. Slot 1 retains `quicksave.state`; slots 2–5 use `slot2.state` through `slot5.state`.
 - **Native menus:** View → Graphics Settings, Upscaler, Display, and Phosphor Colors; Game → Pause Menu. Escape exits fullscreen first, then opens the panel when windowed. Guide or Start + Back opens the panel. Escape/B closes it and preserves an existing debugger pause; Resume Game explicitly runs the game.
 
 The panel uses logical AppKit window coordinates, is draggable/resizable and scrollable, and is clamped to the current screen. Simulation and audio pause at a completed frame during menu interaction. Closing it clears menu input, reanchors pacing, and resets the audio timeline. Graphics selections persist in the app's `NSUserDefaults` dictionary `GraphicsV1`; controls retain their existing preferences. The normal app needs no diagnostic environment variables.
@@ -48,13 +48,3 @@ git diff --check
 ```
 
 The normal `build/macos/DKC1Recomp.app` was rebuilt, bundled with SDL, ad-hoc signed, verified, and launched. Its per-bundle environment retains the four earlier aquatic opt-ins and the private verified ROM path, with no forced snapshot, pause, input schedule, or graphics override. The final normal app was left running for the user; graphics begin with the normal app’s saved/default choices. Source remains uncommitted.
-
-## v0.0.9 release controls
-
-Escape → Settings now includes **Aquatic widescreen fixes**, saved under
-`GraphicsV1.aquatic_fixes`. It defaults to off and applies on the next app
-launch. Enabling it selects the five existing presentation flags; explicitly
-set individual environment overrides retain priority for A/B tools. The
-release bundle contains no per-user ROM, snapshot, or environment settings.
-The diagnostic and guest-state contracts are unchanged. The native menu
-explains the restart and experimental status beside the option.

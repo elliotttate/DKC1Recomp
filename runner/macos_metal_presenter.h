@@ -24,6 +24,9 @@ int Dkc1MacMetalPresenterStart(void *native_window, double preferred_hz,
 void Dkc1MacMetalPresenterQueueFrame(
     const uint32_t *pixels, int width, int height, int presentation_width,
     const Dkc1MacPresentationFrameInfo *info);
+/* Returns zero to retain the established CPU path for unavailable/unsupported frames. */
+int Dkc1MacMetalPresenterQueueHdFrame(const uint32_t *native,int width,int height,
+    int presentation_width,const Dkc1MacPresentationFrameInfo *info);
 void Dkc1MacMetalPresenterSetGeometry(int presentation_width, int fullscreen);
 void Dkc1MacMetalPresenterSetScaling(Dkc1MacFullscreenScaling scaling);
 void Dkc1MacMetalPresenterSetActive(int active);
