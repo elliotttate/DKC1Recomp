@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 import time
 from analyze_pacing import analyze, load_log
+from live_test_guard import LiveTestGuard
 ROOT=Path(__file__).resolve().parents[1]
 ROM_SHA='fa8cacf5bbfc39ee6bbaa557adf89133d60d42f6cf9e1db30d5a36a469f74d15'
 def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -21,6 +22,10 @@ def signature(folder,suffix):
     files=sorted(folder.glob('frame*_'+suffix+'.ppm'))
     return hashlib.sha256(b''.join(bytes.fromhex(sha(p)) for p in files)).hexdigest(),len(files)
 def run(exe,rom,state,output,mode,script,frames,dump,wide=1,overrides=None,capture_window=False):
+    with LiveTestGuard(output) as guard:
+        return _run(exe,rom,state,output,mode,script,frames,dump,wide,overrides,capture_window,guard)
+
+def _run(exe,rom,state,output,mode,script,frames,dump,wide,overrides,capture_window,guard):
     if capture_window and not dump:raise ValueError('window capture is excluded from undumped timing runs')
     output.mkdir(parents=True,exist_ok=False)
     route=output/'input.dks'
@@ -43,6 +48,9 @@ def run(exe,rom,state,output,mode,script,frames,dump,wide=1,overrides=None,captu
           DKC1_WRAM_DUMP=f'1-{frames}',DKC1_WRAM_DUMP_PATH=str(output/'wram.bin'))
     with (output/'stdout.log').open('wb') as stdout,(output/'stderr.log').open('wb') as stderr:
         process=subprocess.Popen([str(exe),str(rom)],cwd=output,env=env,stdout=stdout,stderr=stderr)
+        guard.track(process.pid)
+        (output/'process.json').write_text(json.dumps({'pid':process.pid,'exe_sha256':sha(exe),
+            'state_sha256':sha(state),'input_sha256':sha(route)},indent=2))
         if capture_window:
             time.sleep(4)
             if process.poll() is None:
@@ -72,11 +80,11 @@ def run(exe,rom,state,output,mode,script,frames,dump,wide=1,overrides=None,captu
         data['frames_with_generated_poses']=sum(x.get('pose_actors',0)>0 for x in meta)
         data['frames_with_generated_pixels']=sum(x.get('pose_pixels',0)>0 for x in meta)
         data['generated_pixels']=sum(x.get('pose_pixels',0) for x in meta)
-    else:
-        rows=[json.loads(l) for l in (output/'pacing.jsonl').read_text().splitlines()]
-        data['timing_header']=rows[0]
-        before=next(x for x in rows[1:] if x['frame']==59)
-        rows=[x for x in rows[1:] if 60<=x['frame']<=frames]
+    elif env.get('DKC1_PACING_LOG'):
+        header,all_rows=load_log(output/'pacing.jsonl')
+        data['timing_header']=header
+        before=next(x for x in all_rows if x['frame']==59)
+        rows=[x for x in all_rows if 60<=x['frame']<=frames]
         def pct(key,p):
             v=sorted(x[key] for x in rows);return v[min(len(v)-1,int((len(v)-1)*p))]
         data['timing']={key:{'p50':pct(key,.5),'p99':pct(key,.99),'max':pct(key,1)} for key in ['submit_interval_ms','work_ms','interp_ms','real_to_mid_ms','mid_to_real_ms'] if key in rows[0]}
@@ -84,8 +92,9 @@ def run(exe,rom,state,output,mode,script,frames,dump,wide=1,overrides=None,captu
         data['timing']['frames']=len(rows)
         for key in ['overruns','mid_skips','audio_starvations','audio_drops','audio_internal_underflows']:
             data['timing'][key]=rows[-1][key]-before[key]
-        header,all_rows=load_log(output/'pacing.jsonl')
         data['timing_analysis']=analyze(header,[r for r in all_rows if r['frame']<=frames],59)
+    else:
+        data['timing_log_disabled']=True
     print(output.name,json.dumps({k:v for k,v in data.items() if k in ['raw_count','frames_with_generated_poses','composition_mismatches','timing']}),flush=True)
     return data
 if __name__=='__main__':

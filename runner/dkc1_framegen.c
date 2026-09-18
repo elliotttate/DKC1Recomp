@@ -55,6 +55,7 @@ typedef struct Frame {
   bool valid;
   int frame_counter;
   int width;
+  int terrain_layer;
   uint16_t hscroll[kDkc1FrameGenLayers][kDkc1FrameGenLines];
   uint16_t vscroll[kDkc1FrameGenLayers][kDkc1FrameGenLines];
   /* Register signature: a change means a different scene layout. */
@@ -182,7 +183,8 @@ static int FindPiece(const Frame *f, uint16_t attr, uint8_t size,
 }
 
 void Dkc1FrameGenCaptureFrame(const Ppu *ppu, const uint8_t *wram,
-                              int frame_counter, int presentation_width) {
+                              int frame_counter, int presentation_width,
+                              int terrain_layer) {
   if (!s_enabled || !ppu || !wram)
     return;
   const int next = (s_head + 1) % kHistory;
@@ -191,6 +193,7 @@ void Dkc1FrameGenCaptureFrame(const Ppu *ppu, const uint8_t *wram,
   memcpy(f->vscroll, s_line_vscroll, sizeof f->vscroll);
   f->frame_counter = frame_counter;
   f->width = presentation_width;
+  f->terrain_layer = terrain_layer;
   f->bgmode = ppu->bgmode;
   f->obsel = ppu->obsel;
   f->inidisp = ppu->inidisp;

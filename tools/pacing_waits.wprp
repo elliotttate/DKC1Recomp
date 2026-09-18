@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bounded wait/scheduling trace. DXGI events align stacks to host QPC;
+     scanout is graded separately. Stop promptly to retain circular history. -->
+<WindowsPerformanceRecorder Version="1.0" Author="DKC1Recomp">
+  <Profiles>
+    <SystemCollector Id="WaitCollector" Name="DKC1 Wait Collector">
+      <BufferSize Value="1024"/>
+      <Buffers Value="128"/>
+    </SystemCollector>
+    <EventCollector Id="DxgiCollector" Name="DKC1 DXGI Events">
+      <BufferSize Value="64"/>
+      <Buffers Value="64"/>
+    </EventCollector>
+    <SystemProvider Id="WaitProvider">
+      <Keywords>
+        <Keyword Value="ProcessThread"/>
+        <Keyword Value="Loader"/>
+        <Keyword Value="CSwitch"/>
+        <Keyword Value="ReadyThread"/>
+        <Keyword Value="DPC"/>
+        <Keyword Value="Interrupt"/>
+      </Keywords>
+      <Stacks>
+        <Stack Value="CSwitch"/>
+        <Stack Value="ReadyThread"/>
+      </Stacks>
+    </SystemProvider>
+    <EventProvider Id="DxgiProvider" Name="{ca11c036-0102-4a2d-a6ad-f03cfed5d3c9}" Level="5">
+      <Keywords><Keyword Value="0x2"/></Keywords>
+    </EventProvider>
+    <Profile Id="DKC1Waits.Verbose.Memory" Name="DKC1Waits"
+             Description="Bounded DKC1 scheduling and wait stacks"
+             DetailLevel="Verbose" LoggingMode="Memory">
+      <Collectors>
+        <SystemCollectorId Value="WaitCollector">
+          <SystemProviderId Value="WaitProvider"/>
+        </SystemCollectorId>
+        <EventCollectorId Value="DxgiCollector">
+          <EventProviders><EventProviderId Value="DxgiProvider"/></EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

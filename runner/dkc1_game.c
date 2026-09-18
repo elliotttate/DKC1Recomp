@@ -2373,7 +2373,14 @@ void Dkc1DrawPpuFrame(void) {
     }
     s_fg_ws_policy = trace.presentation_features;
     Dkc1FrameGenCaptureFrame(s_fg_ppu_start, g_ram, snes_frame_counter,
-                             Dkc1VideoWidth());
+                             Dkc1VideoWidth(), Dkc1VideoTerrainLayer(
+                                 Dkc1VideoPpuWideLayerMask(
+                                     s_fg_ppu_start->bgmode,
+                                     s_fg_ppu_start->bgXsc,
+                                     s_fg_ppu_start->screenEnabled[0],
+                                     s_fg_ppu_start->screenEnabled[1]),
+                                 s_fg_ppu_start->bgXsc,
+                                 Dkc1ReadWram16(0x1b13)));
     s_fg_frame_ready = true;
   }
 

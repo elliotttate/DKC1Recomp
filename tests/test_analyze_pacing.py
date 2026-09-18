@@ -147,6 +147,24 @@ class AnalyzePacingTests(unittest.TestCase):
             self.assertEqual(header["schema"], "dkc1.pacing.v2")
             self.assertEqual(len(frames), 1)
 
+    def test_async_log_requires_complete_sidecar(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'pacing.jsonl'
+            path.write_text(json.dumps({'schema':'dkc1.pacing.v5', 'refresh_hz':60,
+                                        'log_mode':'async'})+'\n'+json.dumps(frame(1,16.7)))
+            status = Path(str(path)+'.status.json')
+            with self.assertRaisesRegex(ValueError, 'not closed cleanly'):
+                MODULE.load_log(path)
+            status.write_text(json.dumps({'schema':'dkc1.pacing-log-status.v1',
+                                         'records':2,'dropped':0,'io_errors':0}))
+            self.assertEqual(len(MODULE.load_log(path)[1]),1)
+            for bad in ({'records':2,'dropped':1,'io_errors':0},
+                        {'records':2,'dropped':0,'io_errors':1},
+                        {'records':1,'dropped':0,'io_errors':0}, {'records':2}):
+                status.write_text(json.dumps({'schema':'dkc1.pacing-log-status.v1',**bad}))
+                with self.assertRaisesRegex(ValueError, 'incomplete'):
+                    MODULE.load_log(path)
+
     def test_warmup_must_leave_samples(self):
         with self.assertRaisesRegex(ValueError, "leaves no frames"):
             MODULE.analyze(

@@ -948,6 +948,14 @@ floor remains unpassed because 36 required clean anchors are unavailable.
 
 ## September 18 Windows pose and frame generation audit
 
+Windows release packaging: after committing and running `build_host.bat`,
+`python scripts/package_windows.py --output build/release-VERSION` packages
+the native host, player instructions, release notes and license notices.
+The clean embedded commit must match HEAD. `BUILD.json` and the ZIP SHA-256
+sidecar bind the exact files; extraction and a real launch are separate
+release verification steps. The package file list never includes ROMs,
+private states, generated game sources or diagnostic captures.
+
 The default-off Windows smoother now buffers four frames to interpolate held
 OAM artwork at 60 Hz and fractional pose/motion phases at 120 Hz. A separate
 immutable-image midpoint presenter leaves the producer a full 16.67 ms budget.
@@ -989,6 +997,21 @@ to dumped runs; its helper uses per-monitor DPI coordinates. The harness now
 distinguishes `frames_with_generated_poses` (nonzero actor count) from
 `frames_with_generated_pixels` (any modified pixels, including backgrounds).
 Undumped 60 Hz DXGI timing remains independent of this spatial proof.
+
+Windows pacing follow-up: `tools/verify_pacing_soak.py` runs serial continuous
+routes (default: two 108,300-frame repeats in each of windowed/fullscreen).
+Use `--exe`, `--rom`, `--state`, `--input`, and a new `--output` directory;
+`--queue 1|2` selects `DKC1_MAX_FRAME_LATENCY`. With `--trace-directory`, the
+trace-only elevated `tools/pacing_trace_helper.ps1 -EvidenceDirectory DIR`
+must already be ready and `DIR/PresentMon.exe` must be provisioned. PresentMon
+API-only timestamps are correlated per PID/frame by `analyze_presentmon.py`;
+they do not substitute for DXGI scanout counts. Missing data fails closed.
+`--kernel --kernel-phase audio_ms --kernel-trigger-ms 10` is a diagnostic
+capture: stop bounded WPR history at the first qualifying steady hitch, while
+the game finishes its route normally. This path remains unvalidated: the
+September 18 WPR stop failed with `0xc5580612`. It is never an acceptance run. Logs use
+a bounded asynchronous writer and require a clean `.status.json` sidecar.
+See [the pacing investigation](PACING_HARDENING_REVIEW.md) for trace limitations.
 
 ## Mac graphics and pause-menu diagnostics (September 6, 2026)
 

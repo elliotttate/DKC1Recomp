@@ -9,6 +9,7 @@ static void fixture(int n, int changed) {
   Dkc1PoseGenBegin();
   PgFrame *f = &pg_frames[pg_head];
   f->width = 256;
+  f->terrain_layer = 0;
   f->layout = 0;
   f->extra = 0;
   f->valid = true;
@@ -192,6 +193,13 @@ static void vram_identity_and_scene_cut(void) {
   frame.frame_counter = 100;
   PoseGenActors(&frame, &p);
   assert(pg_count == 0);
+  pg_count = 1;
+  pg_frames[pg_head].queued = true;
+  Dkc1PoseGenBegin();
+  frame.frame_counter++;
+  frame.terrain_layer = -1;
+  PoseGenActors(&frame, &p);
+  assert(pg_count == 0);
 }
 static double bg_centroid(const uint32_t *pixels, int row, int channel) {
   double sum = 0, mass = 0;
@@ -305,6 +313,81 @@ static void background_priority_boundary(void) {
   PgCompose(f,PgAt(9),true,mid_out);
   assert(memcmp(mid_out+y*256,s->raw+y*256,256*4)==0);
 }
+static double channel_center(const uint32_t *pixels, int channel, int axis) {
+  double mass = 0, sum = 0;
+  for (int y = 20; y < 190; y++)
+    for (int x = 20; x < 230; x++) {
+      double value = (pixels[y*256+x] >> (16-channel*8)) & 255;
+      mass += value;
+      sum += value * (axis ? y : x);
+    }
+  assert(mass > 0);
+  return sum / mass;
+}
+/* Fixed pickup and a fine terrain pattern share a camera that accelerates,
+ * stops, reverses, moves vertically and crosses the 10-bit scroll wrap.
+ * The display must preserve their separation at real AND midpoint phases. */
+static void terrain_object_registration(void) {
+  static const int camera[] = {0,0,0,1,3,6,10,15,20,24,27,29,30,30,30,29,27,24,20,15,10,6,3,1,0,0};
+  for (int terrain = -1; terrain < 2; terrain++) {
+    PoseGenReset();
+    for (int n = 1; n <= (int)(sizeof camera/sizeof *camera); n++) {
+      fixture(n, 0);
+      PgFrame *f = &pg_frames[pg_head];
+      f->terrain_layer = terrain;
+      int layer = terrain < 0 ? 0 : terrain;
+      int cx = camera[n-1]-15, cy = camera[n-1]/2-7;
+      int bx = n > 1 ? camera[n-2]-15 : cx;
+      int by = n > 1 ? camera[n-2]/2-7 : cy;
+      PgActor *a = &f->actors[0];
+      a->x = 100-cx; a->y = 90-cy;
+      a->x0 = a->y0 = 44; a->x1 = a->y1 = 52;
+      memset(a->tex, 0, sizeof a->tex);
+      for (int y = 44; y < 52; y++)
+        for (int x = 44; x < 52; x++) a->tex[y*PG_SIDE+x] = 0xe681;
+      for (int half = 0; half < 2; half++) {
+        PgSurface *s = half ? &f->mid : &f->real;
+        memset(s, 0, sizeof *s); s->captured = true;
+        int hx = half ? cx-(cx-bx)/2 : cx;
+        int hy = half ? cy-(cy-by)/2 : cy;
+        int ax = half ? a->x-(a->x-(100-bx))/2 : a->x;
+        int ay = half ? a->y-(a->y-(90-by))/2 : a->y;
+        for (int y = 0; y < PG_H; y++) {
+          PgLine *l = &s->line[y];
+          l->supported = s->layers_valid[y] = true;
+          l->brightness = 15; l->main = l->sub = 23; l->right = 256;
+          l->palette[1] = 31; l->palette[129] = 31 << 5;
+          s->scroll[0][layer][y] = hx & 1023;
+          s->scroll[1][layer][y] = hy & 1023;
+          for (int x = 0; x < 256; x++) {
+            int at = y*256+x;
+            int tx = x+hx-96, ty = y+hy-126;
+            bool hatch = tx >= 0 && tx < 8 && ty >= 0 && ty < 8 && ((tx+ty)&1);
+            s->layer[layer][at] = hatch ? (uint16_t)((layer ? 0x7100 : 0x8000)|1) : 0;
+            s->bg[0][at] = s->bg[1][at] = hatch ? s->layer[layer][at] : 0x0500;
+            s->obj[at] = x >= ax-4 && x < ax+4 && y >= ay-4 && y < ay+4 ? 0xe681 : 0;
+            s->raw[at] = PgColor(s, 256, x, y, s->obj[at]);
+          }
+        }
+      }
+      Dkc1FrameGenStats stats = {0};
+      Dkc1PoseGenPresent((uint8_t *)f->real.raw, (uint8_t *)f->mid.raw, true,
+                         (uint8_t *)real_out, (uint8_t *)mid_out, &stats);
+      assert(stats.pose_mismatch == 0);
+      if (n < 6) continue;
+      PgFrame *display = PgAt(n-4);
+      /* Real camera endpoints must not soften or move either image. */
+      assert(memcmp(real_out, display->real.raw, 256*224*4) == 0);
+      for (int half = 0; half < 2; half++) {
+        const uint32_t *pixels = half ? mid_out : real_out;
+        for (int axis = 0; axis < 2; axis++) {
+          double separation = channel_center(pixels, 0, axis)-channel_center(pixels, 1, axis);
+          assert(fabs(separation-(axis ? 40 : 0)) < .01);
+        }
+      }
+    }
+  }
+}
 int main(void) {
   queue_and_poses();
   fractional_translation();
@@ -313,6 +396,7 @@ int main(void) {
   vram_identity_and_scene_cut();
   fractional_backgrounds();
   background_priority_boundary();
+  terrain_object_registration();
   printf("background digest: %08x\n", output_digest);
   puts(
       "framegen: PASS (held poses, fractional phases, reset, VRAM identity, "

@@ -1,4 +1,5 @@
 build/
+build-windows/
 generated/
 .DS_Store
 *.sfc

@@ -1,6 +1,6 @@
 # DKC1Recomp regression dashboard
 
-Generated 2026-09-18 14:40 UTC at commit `cb8c322-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
+Generated 2026-09-18 19:07 UTC at commit `9e8980a-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
 
 ## Contracts
 
@@ -46,5 +46,6 @@ _No sweep report; run `python tools/level_sweep.py`._
 | framegen-held-poses-and-half-period-budget | fixed | Opt-in Windows frame generation left held character poses unchanged at 60 Hz; synchronous midpoint scheduling also skipped 120 Hz images when pose rendering exceeded half a game period. Fixed within the verified Jungle scope. | `tools/verify_framegen.py; exact and fresh-entry schedules in docs/FRAMEGEN_REVIEW.md` |
 | framegen-background-scroll-quantization | fixed | Whole-pixel BG scroll caused uneven parallax steps in optional Windows frame generation. Fractional per-layer sampling fixes the measured Jungle running paths; other layouts are not certified. | `docs/BACKGROUND_PACING_REVIEW.md; cleared-run.dks from the preserved user root, with independent fresh-entry replay` |
 | win32-running-pacing-outliers | open | Additional Windows running samples contain occasional 33-50 ms real-submission gaps despite clean median and p99 pacing; overrun re-anchoring adds a long wait after late work. | `docs/BACKGROUND_PACING_REVIEW.md; fresh-running-timing-60 frame 421 and cleared-timing-0-60-3 frames 322/455` |
+| framegen-terrain-object-registration | fixed | Terrain camera filtering made fixed KONG letters drift against the ground and softened fine hatch texture. Corrected within the tested Jungle sequence. | `Cleared Jungle exact and independent fresh-entry roots, 570-frame left/right route; source 120 to 135 measures the relative drift.` |
 
 Issue lifecycle: edit `docs/KNOWN_ISSUES.json` (set status `fixed` with the fixing commit) and regenerate. A fixed issue regressing shows up here as its contract/sweep line failing.

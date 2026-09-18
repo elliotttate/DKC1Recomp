@@ -1113,6 +1113,15 @@ static unsigned long s_audio_ring_start_threshold = kAudioRingStartFrames;
 static int s_audio_log_stats;
 static unsigned long s_audio_ring_frames;
 static unsigned long long s_audio_internal_underflows;
+static double s_audio_mix_ms, s_audio_submit_ms;
+
+static double AudioTraceTick(void) {
+  LARGE_INTEGER tick, frequency;
+  if (!s_audio_log_stats) return 0.0;
+  QueryPerformanceCounter(&tick);
+  QueryPerformanceFrequency(&frequency);
+  return (double)tick.QuadPart * 1000.0 / (double)frequency.QuadPart;
+}
 
 /* Resize the windowed frame to fit the game view plus the optional panel. */
 static void AdjustWindowRectForHostDpi(RECT *rect) {
@@ -1616,6 +1625,7 @@ static void AudioResetTimeline(void) {
 }
 
 static void AudioPump(void) {
+  s_audio_mix_ms = s_audio_submit_ms = 0.0;
   if (!s_waveout) return;
   AudioTraceStats audio_stats;
   if (s_audio_waiting_for_ring || s_audio_log_stats) {
@@ -1651,15 +1661,19 @@ static void AudioPump(void) {
     return;  /* device is behind; drop this frame's audio */
   }
   int16_t *samples = (int16_t *)header->lpData;
+  const double mix_start = AudioTraceTick();
   memset(samples, 0, (size_t)frames * 4);
   RtlRenderAudio(samples, frames, 2);
+  s_audio_mix_ms = AudioTraceTick() - mix_start;
   if (s_audio_log_stats) {
     audio_trace_get_stats(&audio_stats);
     s_audio_ring_frames = audio_stats.occupancy_current;
     s_audio_internal_underflows = audio_stats.output_underflows;
   }
   header->dwBufferLength = (DWORD)frames * 4;
+  const double submit_start = AudioTraceTick();
   if (waveOutWrite(s_waveout, header, sizeof *header) != MMSYSERR_NOERROR) {
+    s_audio_submit_ms = AudioTraceTick() - submit_start;
     s_audio_drops++;
     return;
   }
@@ -1670,6 +1684,7 @@ static void AudioPump(void) {
     if (waveOutRestart(s_waveout) == MMSYSERR_NOERROR)
       s_audio_started = 1;
   }
+  s_audio_submit_ms = AudioTraceTick() - submit_start;
 }
 
 /* Frame pacer.
@@ -2197,7 +2212,8 @@ static void HostFramePacerPresented(HostFramePacer *pacer, long host_frame) {
             "\"submit_qpc_ms\":%.4f,\"present_end_qpc_ms\":%.4f,"
             "\"wait_start_qpc_ms\":%.4f,\"wake_qpc_ms\":%.4f,"
             "\"loop_start_qpc_ms\":%.4f,\"previous_log_ms\":%.4f,"
-            "\"log_dropped\":%u}\n",
+            "\"log_dropped\":%u,\"audio_mix_ms\":%.4f,"
+            "\"audio_submit_ms\":%.4f}\n",
             host_frame, pacer->pending_work_ms, pacer->pending_wait_ms,
             pacer->pending_late_ms, interval_ms,
             pacer->pending_submit_interval_ms,
@@ -2244,7 +2260,8 @@ static void HostFramePacerPresented(HostFramePacer *pacer, long host_frame) {
             pacer->overruns, pacer->pending_submit_tick / ticks_per_ms,
             present_tick / ticks_per_ms, pacer->wait_start_tick / ticks_per_ms,
             pacer->wake_tick / ticks_per_ms, pacer->loop_start_tick / ticks_per_ms,
-            pacer->pending_log_ms, pacer->async_log->dropped);
+            pacer->pending_log_ms, pacer->async_log->dropped,
+            s_audio_mix_ms, s_audio_submit_ms);
     pacer->pending_mid_submit_error_ms = 0.0;
     pacer->pending_mid_present_ms = 0.0;
     pacer->pending_mid_presented = 0;
@@ -3057,8 +3074,9 @@ int main(int argc, char **argv) {
 
   CloseMidPresenter();
   /* Flush the pacing evidence before any presenter teardown can fault. */
+  const int report_hotspots = pacer.log != NULL || EnvironmentEnabled("DKC1_INTERP_HOTSPOTS");
   HostFramePacerClose(&pacer);
-  if (pacer.log || EnvironmentEnabled("DKC1_INTERP_HOTSPOTS"))
+  if (report_hotspots)
     ReportInterpreterHotspots();
   HostD3DShutdown();
   HostSurfaceFree(&s_panel_surface);

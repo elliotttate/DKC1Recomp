@@ -30,12 +30,20 @@ static float PgBgPosition(PgFrame *f, PgFrame *before, bool half,
   float fallback = (float)reference;
   if (half && before)
     fallback -= .5f * PgScrollDelta(reference, before->real.scroll[axis][layer][y]);
+  /* Terrain and world-space OBJ use the same cartridge camera. Filtering
+   * only the terrain over eight ticks makes fixed pickups slide against it,
+   * and repeatedly blurs/sharpens fine patterns at native resolution. Keep
+   * real terrain endpoints exact, and use the same two-frame midpoint as
+   * OBJ. Only independently scrolling parallax planes need dequantization.
+   * Unknown terrain ownership retains endpoints for every plane. */
+  if (f->terrain_layer < 0 || f->terrain_layer == layer) return fallback;
   int first = f->sequence - 4, last = f->sequence + (half ? 3 : 4);
   int previous = 0;
   float sum = 0;
   for (int n = first; n <= last; n++) {
     PgFrame *p = PgAt(n);
     if (!p || p->layout != f->layout || p->width != f->width ||
+        p->terrain_layer != f->terrain_layer ||
         !p->real.layers_valid[y]) return fallback;
     int value = PgScrollDelta(p->real.scroll[axis][layer][y], reference);
     if (n != first) {

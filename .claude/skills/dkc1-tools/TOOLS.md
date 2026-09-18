@@ -9,6 +9,7 @@ paths are repo-relative. `<rom>` = headerless DKC1 USA v1.0.
 |---|---|
 | `build_host_tools.bat` | Isolated tool-session build (own obj dir/exe names, never contends with the primary session): `build/dkc1_headless_tools.exe`, `dkc1_desktop_tools.exe`, `dkc1_layer_capture.exe` |
 | `build_host.bat` | Primary build: `dkc1_snesrecomp_headless.exe`, `dkc1_desktop.exe` |
+| `scripts/package_windows.py --output DIR` | After a clean committed `build_host.bat`, creates the native Windows ZIP, embedded commit/file manifest and SHA-256 sidecar from a fixed allowlist. Rejects dirty or stale executable identity; never gathers private ROM/state/build directories. |
 | `build_macos.sh` | Builds and signs the stock HD app plus its bundled `DKC1Recomp-HD-Dixie` helper. When `generated/snesrecomp_dixie` is absent, pass a verified clean ROM so `scripts/generate_macos_dixie.py` can synthesize the pinned mod image and generate its private AOT sources. |
 | `build_host_noadapt.bat` | Builds from a generated tree WITHOUT the widescreen adapters (`build/gen_noadapt`) — the no-adapter oracle used to prove adapter inertness |
 | `build_phaseguard_headless.bat` | Prefetch-phase-guard instrumented headless |
@@ -130,6 +131,22 @@ RGB-rounding tolerance. It does not consume proposed runtime motion values.
 Ambiguous/insufficient layers remain ungraded, and surviving correspondences
 are carried between frames. The original exact-integer tracker remains the
 default for unsmoothed captures.
+
+`verify_pacing_soak.py --exe EXE --rom ROM --state ROOT --input ROUTE
+--output NEW_DIR [--trace-directory TRACE_DIR] [--queue 1|2]` performs serial
+continuous 60 Hz runs. Defaults: 190 x 570 frames, two repeats in windowed and
+fullscreen modes. The elevated trace-only `pacing_trace_helper.ps1
+-EvidenceDirectory TRACE_DIR` requires a separately provisioned PresentMon.exe.
+It accepts only named start/stop capture requests and exits when
+`TRACE_DIR/trace-helper-stop` exists. API-only ETW coverage is independently
+correlated to host QPC/PID by `analyze_presentmon.py`; DXGI counters remain the
+display oracle. `--kernel --kernel-phase audio_ms --kernel-trigger-ms 10`
+requests bounded wait stacks and stops at a hitch; this path is unvalidated
+(the September 18 WPR stop failed with `0xc5580612`) and is never an
+acceptance run. `--log-off` is an observer-effect control, with no host/DXGI
+acceptance claim. See `docs/PACING_HARDENING_REVIEW.md` for exact limitations.
+`live_test_guard.py` prevents concurrent game windows. Async pacing logs require
+their `.status.json` completion sidecar with zero drops/I/O errors.
 
 **Evidence taps:** `DKC1_PACING_LOG` (desktop-host frame work/wait/submit/
 present timing jsonl, per-frame frame-generation plan statistics, and on

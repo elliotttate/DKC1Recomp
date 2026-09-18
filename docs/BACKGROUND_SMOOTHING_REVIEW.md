@@ -1,5 +1,12 @@
 # Fractional background smoothing, September 18
 
+**Follow-up:** user-visible KONG-letter/terrain wobble exposed a registration
+gap in this initial acceptance. The terrain plane now retains native 60 Hz
+camera endpoints and uses the same two-frame midpoint as world objects;
+only parallax planes retain the eight-interval filter. See
+[terrain registration review](FRAMEGEN_TERRAIN_STABILITY_REVIEW.md) for the
+pixel evidence, revised tests and remaining limits.
+
 The user narrowed acceptance to the available **60 Hz display**. This review
 covers the cleared Jungle Hijinxs running route at native 256x224 and widescreen
 342x224, with smooth animation enabled. Physical 120 Hz is not certified.

@@ -44,6 +44,8 @@ def scanout_summary(header: dict, steady: list[dict]) -> dict:
         expected = None
     result = {
         "presents": 0,
+        "statistics_rows": len(rows),
+        "missing_statistics_rows": len(steady)-len(rows),
         "expected_refreshes_per_present": expected,
         "repeated_refreshes": 0,
         "early_refreshes": 0,
@@ -128,6 +130,15 @@ def load_log(path: Path) -> tuple[dict, list[dict]]:
         raise ValueError(f"{path}: pacing log is empty")
     if not frames:
         raise ValueError(f"{path}: pacing log contains no frames")
+    if header.get('log_mode') == 'async':
+        status_path = Path(str(path) + '.status.json')
+        if not status_path.exists():
+            raise ValueError(f'{path}: asynchronous log has not closed cleanly')
+        status = json.loads(status_path.read_text())
+        if (status.get('schema') != 'dkc1.pacing-log-status.v1'
+                or status.get('dropped') != 0 or status.get('io_errors') != 0
+                or status.get('records') != len(frames)+1):
+            raise ValueError(f'{path}: incomplete asynchronous log: {status}')
     return header, frames
 
 
@@ -211,6 +222,14 @@ def analyze(header: dict, frames: list[dict], warmup: int = 30) -> dict:
         if mid:
             for field in ("real_to_mid_ms", "mid_to_real_ms", "mid_submit_error_ms"):
                 summary[field] = metric([float(item[field]) for item in mid])
+        if all('pose_source_frame' in item for item in steady) and header.get('framegen'):
+            sources=[int(item['pose_source_frame']) for item in steady]
+            summary['frame_order']={
+                'host_sequence_errors':sum(b['frame']!=a['frame']+1 for a,b in zip(steady,steady[1:])),
+                'missing_source_identity':sum(s<=0 for s in sources),
+                'repeated_or_backward_sources':sum(b<=a for a,b in zip(sources,sources[1:])),
+                'skipped_sources':sum(b>a+1 for a,b in zip(sources,sources[1:])),
+            }
     if schema == "dkc1.pacing.v5":
         summary["pacing"] = header.get("pacing")
         summary["presenter"] = header.get("presenter")
@@ -229,7 +248,7 @@ def analyze(header: dict, frames: list[dict], warmup: int = 30) -> dict:
             summary["steady_tier_hits"] = sum(
                 int(item.get("tier_hits", 0)) for item in steady)
         if all("gap_ms" in item for item in steady):
-            for field in ("gap_ms", "pump_ms", "stats_ms"):
+            for field in ("gap_ms", "pump_ms", "stats_ms", "previous_log_ms"):
                 summary[field] = metric(
                     [float(item.get(field, 0.0)) for item in steady])
             slow = sorted(
@@ -240,6 +259,26 @@ def analyze(header: dict, frames: list[dict], warmup: int = 30) -> dict:
             summary["slow_messages"] = [
                 {"frame": frame, "message": message, "ms": ms}
                 for ms, frame, message in slow]
+        if (header.get('pacing') != 'timer' and not header.get('framegen_extra_refresh')
+                and all('submit_qpc_ms' in item for item in steady)):
+            summary['hitches'] = []
+            for index, item in enumerate(frames):
+                if index < warmup or item['submit_interval_ms'] < 25:
+                    continue
+                previous = frames[index-1] if index else {}
+                # For wait-first pacing this accounts for the entire interval,
+                # including previous-frame statistics and diagnostic logging.
+                accounted = (previous.get('present_ms', 0) + item.get('gap_ms', 0)
+                             + item['wait_ms'] + item['work_ms'])
+                summary['hitches'].append({
+                    **{key: item.get(key, 0) for key in (
+                        'frame', 'submit_qpc_ms', 'submit_interval_ms', 'work_ms',
+                        'wait_ms', 'gap_ms', 'pump_ms', 'slow_msg', 'slow_msg_ms',
+                        'emulation_ms', 'render_ms', 'interp_ms', 'audio_ms',
+                        'audio_mix_ms', 'audio_submit_ms')},
+                    'previous_stats_ms': previous.get('stats_ms', 0),
+                    'previous_log_ms': item.get('previous_log_ms', 0),
+                    'unaccounted_ms': item['submit_interval_ms']-accounted})
     return summary
 
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(dkc1_port
-    VERSION 0.0.15
+    VERSION 0.0.16
     DESCRIPTION "Native PC recompilation of Donkey Kong Country"
     LANGUAGES C)
 

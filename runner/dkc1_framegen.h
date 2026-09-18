@@ -84,9 +84,11 @@ void Dkc1FrameGenCaptureLine(const Ppu *ppu, int line);
 
 /* Called once after the real render loop with the PPU and WRAM that frame
  * consumed. `frame_counter` is the guest frame number and
- * `presentation_width` the host framebuffer width in pixels. */
+ * `presentation_width` the host framebuffer width in pixels. `terrain_layer`
+ * is the source-backed rolling terrain plane, or -1 when unproven. */
 void Dkc1FrameGenCaptureFrame(const Ppu *ppu, const uint8_t *wram,
-                              int frame_counter, int presentation_width);
+                              int frame_counter, int presentation_width,
+                              int terrain_layer);
 
 /* Forget history after a state load, rewind, or aspect change so the next
  * in-between frame is never built from an unrelated timeline. */

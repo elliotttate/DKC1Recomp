@@ -35,6 +35,7 @@ typedef struct PgSurface {
 } PgSurface;
 typedef struct PgFrame {
   int sequence, width, bias, extra, guest_frame, camera_x, camera_y;
+  int terrain_layer;
   uint32_t layout;
   bool valid, mid_valid, queued;
   PgActor actors[kActorCount];
@@ -141,6 +142,7 @@ static void PoseGenActors(const Frame *frame, const Ppu *p) {
   if (pg_count &&
       (previous->guest_frame + 1 != frame->frame_counter ||
        previous->layout != layout || previous->width != frame->width ||
+       previous->terrain_layer != frame->terrain_layer ||
        abs((int16_t)(frame->camera_x - previous->camera_x)) > 48 ||
        abs((int16_t)(frame->camera_y - previous->camera_y)) > 48 ||
        (p->inidisp & 128))) {
@@ -152,6 +154,7 @@ static void PoseGenActors(const Frame *frame, const Ppu *p) {
   f->camera_x = frame->camera_x;
   f->camera_y = frame->camera_y;
   f->width = frame->width;
+  f->terrain_layer = frame->terrain_layer;
   f->extra = p->extraLeftRight;
   f->bias = p->wsPresentationXBias;
   int first = PPU_objPriority(p) ? (p->oamaddl & 0xfe) / 2 : 0;
