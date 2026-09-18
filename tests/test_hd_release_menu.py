@@ -30,6 +30,8 @@ class HdReleaseMenuTests(unittest.TestCase):
         self.assertIn('setenv("DKC1_HD_CONNECTED_WORLD","1",0)', picker)
         self.assertIn('DKC1_HD_RELEASE_PACK', packaging)
         self.assertIn('ditto "$hd_pack" "$private_scene/Materials"', packaging)
+        self.assertIn('scripts/apply_hd_fixed_patch.py', packaging)
+        self.assertIn('assets/hd-preview/treehouse-candy-v1.json', packaging)
         self.assertNotIn('entry.state', packaging)
         self.assertNotIn('DKC1_SAVESTATE_INPUT', picker)
 

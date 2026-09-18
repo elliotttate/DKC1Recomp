@@ -45,7 +45,10 @@ That digest covers the indexed `.dkhd` rasters, not the separately loaded fixed
 plates. The corrected Candy portrait is in `fixed-treehouse-wide.bgra`, SHA-256
 `33ceb4a39a711449004cf6111f547380606b970fafedf1206679624cdfcb787d`;
 its source, mask, raw round-trip, and 12-replay evidence are under
-`build/hd-slice/treehouse-candy-20260917/`.
+`build/hd-slice/treehouse-candy-20260917/`. The accepted portrait patch itself
+is tracked at `assets/hd-preview/treehouse-candy-v1.png` with a hash-locked raw
+payload and manifest. `build_macos.sh` applies that patch deterministically to
+the private fixed plate, or leaves an already-corrected plate unchanged.
 The silhouette index has 4,924 exact object masks; `object-bases.bin` holds
 3,673 authored native rasters so night CGRAM can tint that art.
 

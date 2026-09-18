@@ -86,6 +86,12 @@ if [[ -n "$hd_pack" && ( -f "$hd_pack/preload.txt" || -f "$hd_pack/pack-manifest
   cmake -E remove_directory "$private_scene/Materials"
   mkdir -p "$private_scene/Materials"
   ditto "$hd_pack" "$private_scene/Materials"
+  candy_plate="$private_scene/Materials/fixed-treehouse-wide.bgra"
+  if [[ -f "$candy_plate" ]]; then
+    python3 "$repo_dir/scripts/apply_hd_fixed_patch.py" \
+      --plate "$candy_plate" \
+      --manifest "$repo_dir/assets/hd-preview/treehouse-candy-v1.json"
+  fi
 fi
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"

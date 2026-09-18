@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "name": "treehouse-candy-v1",
+  "plate": {
+    "width": 1368,
+    "height": 896,
+    "format": "BGRA8",
+    "base_sha256": "715975fedddaef4724ad08f4a9b0c8ce8608466a61850f9876d3c80b519249aa",
+    "output_sha256": "33ceb4a39a711449004cf6111f547380606b970fafedf1206679624cdfcb787d"
+  },
+  "patch": {
+    "file": "treehouse-candy-v1.rgba",
+    "preview": "treehouse-candy-v1.png",
+    "width": 58,
+    "height": 168,
+    "format": "RGBA8",
+    "x": 987,
+    "y": 264,
+    "blend": "source-over-srgb-round-nearest",
+    "sha256": "67810a492b0bdf5de45c8478b3dac7f0339aedae74bedf0a8ce0d42ca23bb1a9",
+    "preview_sha256": "1faa3d8995121f6d2635e0bd3be922bc3c4475fe698b93f29c5901db047b720f"
+  }
+}

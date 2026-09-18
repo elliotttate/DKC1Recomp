@@ -1,6 +1,6 @@
 # Banana Hoard and Treehouse HD plates
 
-September 17, 2026. Uncommitted review candidate. This is an HD host-
+September 17, 2026. Review record. This is an HD host-
 presentation change only; cartridge streaming, activation, collision, bounds,
 save data, and the original low-resolution frame are unchanged.
 
@@ -264,6 +264,21 @@ raw round-trip, and replay evidence are preserved under:
 ```text
 build/hd-slice/treehouse-candy-20260917/
 ```
+
+The accepted 58x168 portrait patch is the deliberate exception to the normal
+private-art rule and is tracked in Git as:
+
+```text
+assets/hd-preview/treehouse-candy-v1.png
+assets/hd-preview/treehouse-candy-v1.rgba
+assets/hd-preview/treehouse-candy-v1.json
+```
+
+`scripts/apply_hd_fixed_patch.py` verifies the unmodified plate and patch
+hashes, performs the same rounded source-over blend, and requires the corrected
+plate hash before replacing the file atomically. The macOS packaging script
+runs it after copying a private HD pack; already-corrected plates are accepted
+idempotently and any unknown plate fails closed.
 
 `verify-treehouse-candy-v1/results.json` passes 12 deterministic native/wide
 idle replays from the controller-derived `fresh-treehouse.state`. Every audited
