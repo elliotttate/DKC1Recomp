@@ -21,6 +21,12 @@ rem these objects from the last full build would silently omit the fix under
 rem test even though the candidate link succeeds.
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_game.obj ..\..\runner\dkc1_game.c
 if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_hd_scene.obj ..\..\runner\dkc1_hd_scene.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_hd_sprites.obj ..\..\runner\dkc1_hd_sprites.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_framegen.obj ..\..\runner\dkc1_framegen.c
+if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_dixie_mod.obj ..\..\runner\dkc1_dixie_mod.c
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_video.obj ..\..\runner\dkc1_video.c
@@ -44,12 +50,12 @@ cl /nologo /c /W0 /O1 %DEFS% %INCS% %BUILD_ID_DEFS% /Fo:..\main_layer_capture.ob
 if errorlevel 1 exit /b 1
 dir /b *.obj > objects.rsp
 link /nologo /out:..\dkc1_headless_candidate.exe @objects.rsp ^
-  ..\main_headless.obj ws2_32.lib user32.lib
+  ..\main_headless.obj ws2_32.lib user32.lib advapi32.lib
 if errorlevel 1 exit /b 1
 link /nologo /out:..\dkc1_desktop_candidate.exe @objects.rsp ^
-  ..\main_win32.obj ws2_32.lib user32.lib gdi32.lib winmm.lib
+  ..\main_win32.obj ws2_32.lib user32.lib advapi32.lib gdi32.lib winmm.lib
 if errorlevel 1 exit /b 1
 link /nologo /out:..\dkc1_layer_capture_candidate.exe @objects.rsp ^
-  ..\main_layer_capture.obj ws2_32.lib user32.lib
+  ..\main_layer_capture.obj ws2_32.lib user32.lib advapi32.lib
 if errorlevel 1 exit /b 1
 echo DIAGNOSTICS_CANDIDATE_BUILD_OK

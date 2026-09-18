@@ -107,13 +107,26 @@ With a Visual Studio developer environment available:
 .\build\dkc1_desktop.exe "C:\private\dkc1.sfc"
 ```
 
+The Windows host presents through a Direct3D 11 flip-model swap chain paced
+by its frame-latency waitable object, so frames follow the display's own
+cadence and the pacing log records which refresh each image landed on. It is
+per-monitor DPI aware, shows SNES pixels at their 7:6 aspect with a
+sharp-bilinear sampler by default (`View > Scaling`, `View > Pixel Aspect`),
+and falls back to GDI paced by `DwmFlush` when Direct3D is unavailable
+(`DKC1_PRESENTER=gdi` forces it). See `docs/HOST_PACING.md`.
+
 The desktop host enables widescreen by default. Set `DKC1_WIDESCREEN=0` for
 the exact 256x224 presentation path. At a level's authored walls the
 4:3 edge stays pinned at the wall and the inward view is released gradually
 over eight margins of travel, so nothing past the level is shown; View >
 Level Edge on macOS (or `DKC1_WIDESCREEN_EDGE=reflect|bars|shift|glide`)
 switches to a view locked to the camera with the terrain mirrored past the
-wall, black past the wall, or the earlier inward clamp. The headless validator accepts a frame
+wall, black past the wall, or the earlier inward clamp. On Windows, `DKC1_FRAMEGEN=1` (or View > Smooth Animation / Frame Generation,
+F10) smooths held character poses at 60 Hz with a four-frame (~67 ms) visual
+buffer. A 120/240 Hz display also receives intermediate motion/animation
+images at 120 Hz. The game clock and raw native output remain unchanged;
+unsupported cases keep cartridge artwork. See `docs/HOST_PACING.md` and
+`docs/FRAMEGEN_REVIEW.md` for verification and limits. The headless validator accepts a frame
 count and supports deterministic input playback and private frame/state
 captures; its environment variables are documented in `docs/BRINGUP.md`.
 

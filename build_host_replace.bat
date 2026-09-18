@@ -40,6 +40,8 @@ cl /nologo /c /MP8 /W0 /O1 %DEFS% %INCS% ^
   %SR%\snes\interp_bridge.c %SR%\snes\cx4.c ^
   ..\..\runner\dkc1_game.c ..\..\runner\dkc1_video.c ^
   ..\..\runner\dkc1_dixie_mod.c ^
+  ..\..\runner\dkc1_hd_scene.c ..\..\runner\dkc1_hd_sprites.c ^
+  ..\..\runner\dkc1_framegen.c ^
   ..\..\runner\dkc1_margin_proxy.c ^
   ..\..\runner\dkc1_ws_trace.c ^
   ..\..\runner\headless_host.c ..\..\runner\input_playback.c ^
@@ -59,6 +61,6 @@ if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% %BUILD_ID_DEFS% /Fo:..\main_headless_replace.obj ..\..\runner\headless_main.c
 if errorlevel 1 exit /b 1
 dir /b *.obj > objects.rsp
-link /nologo /out:..\dkc1_headless_replace_trace.exe @objects.rsp ..\main_headless_replace.obj ws2_32.lib user32.lib
+link /nologo /out:..\dkc1_headless_replace_trace.exe @objects.rsp ..\main_headless_replace.obj ws2_32.lib user32.lib advapi32.lib
 if errorlevel 1 exit /b 1
 echo REPLACE_BUILD_OK

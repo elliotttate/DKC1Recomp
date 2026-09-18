@@ -13,6 +13,12 @@ cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_margin_proxy.obj ..\..\runner\dkc1_
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_game.obj ..\..\runner\dkc1_game.c
 if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_hd_scene.obj ..\..\runner\dkc1_hd_scene.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_hd_sprites.obj ..\..\runner\dkc1_hd_sprites.c
+if errorlevel 1 exit /b 1
+cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:dkc1_framegen.obj ..\..\runner\dkc1_framegen.c
+if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:bankbf_part08_v2.obj ..\..\generated\snesrecomp\bankbf_part08_v2.c
 if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:bankbf_part00_v2.obj ..\..\generated\snesrecomp\bankbf_part00_v2.c
@@ -21,6 +27,6 @@ cl /nologo /c /W0 /O1 %DEFS% %INCS% /Fo:bankbf_part04_v2.obj ..\..\generated\sne
 if errorlevel 1 exit /b 1
 dir /b *.obj > objects.rsp
 link /nologo /out:..\dkc1_headless_phaseguard.exe @objects.rsp ^
-  ..\main_headless.obj ws2_32.lib user32.lib
+  ..\main_headless.obj ws2_32.lib user32.lib advapi32.lib
 if errorlevel 1 exit /b 1
 echo PHASEGUARD_HEADLESS_BUILD_OK

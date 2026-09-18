@@ -78,6 +78,62 @@ class AnalyzePacingTests(unittest.TestCase):
         self.assertEqual(summary["audio_ring_frames"]["min"], 2136)
         self.assertEqual(summary["steady_audio_internal_underflows"], 0)
 
+    def test_v4_retains_cpu_audio_and_midpoint_timing(self):
+        header = {"schema": "dkc1.pacing.v4", "refresh_hz": 60.0}
+        frames = [frame_v3(1, 16.6), frame_v3(2, 16.7)]
+        for row in frames:
+            row.update(mid_presented=1, mid_skips=0, real_to_mid_ms=8.3,
+                       mid_to_real_ms=8.4, mid_submit_error_ms=0.01)
+        summary = MODULE.analyze(header, frames, warmup=0)
+        self.assertEqual(summary["interval_source"], "submit_interval_ms")
+        self.assertEqual(summary["mid_presented"], 2)
+        self.assertEqual(summary["steady_mid_skips"], 0)
+        self.assertAlmostEqual(summary["real_to_mid_ms"]["p50"], 8.3)
+        self.assertEqual(summary["steady_audio_drops"], 0)
+
+    def test_v5_reports_dxgi_scanout_statistics(self):
+        header = {"schema": "dkc1.pacing.v5", "refresh_hz": 60.0,
+                  "pacing": "waitable", "presenter": "d3d11",
+                  "present_divisor": 1, "framegen_extra_refresh": 0}
+        frames = [frame_v3(number, 16.7) for number in range(1, 6)]
+        # Displayed-frame statistics lag the present call by one frame; the
+        # fourth present occupied two refreshes (one repeated refresh).
+        refreshes = [100, 101, 102, 104, 105]
+        for index, row in enumerate(frames):
+            row.update(mid_presented=0, mid_skips=0, real_to_mid_ms=0.0,
+                       mid_to_real_ms=0.0, mid_submit_error_ms=0.0,
+                       wait_timeout=1 if index == 3 else 0,
+                       present_count=index + 2, stat_valid=1,
+                       stat_present_count=index + 1,
+                       stat_present_refresh=refreshes[index],
+                       stat_sync_refresh=refreshes[index],
+                       stat_sync_qpc_ms=1000.0 + refreshes[index] * 16.6666,
+                       stat_disjoint=0, stat_lag_presents=1)
+        summary = MODULE.analyze(header, frames, warmup=0)
+        self.assertEqual(summary["interval_source"], "submit_interval_ms")
+        self.assertEqual(summary["pacing"], "waitable")
+        self.assertEqual(summary["steady_wait_timeouts"], 1)
+        scan = summary["scanout"]
+        self.assertEqual(scan["presents"], 4)
+        self.assertEqual(scan["expected_refreshes_per_present"], 1)
+        self.assertEqual(scan["repeated_refreshes"], 1)
+        self.assertEqual(scan["early_refreshes"], 0)
+        self.assertEqual(scan["stat_lag_presents_max"], 1)
+        self.assertAlmostEqual(scan["refreshes_per_present"]["max"], 2.0)
+        self.assertAlmostEqual(scan["measured_refresh_hz"], 60.0002, places=3)
+
+    def test_v5_without_statistics_reports_no_presents(self):
+        header = {"schema": "dkc1.pacing.v5", "refresh_hz": 60.0,
+                  "pacing": "dwmflush", "presenter": "gdi",
+                  "present_divisor": 1}
+        frames = [frame_v3(1, 16.7), frame_v3(2, 16.6)]
+        for row in frames:
+            row.update(mid_presented=0, mid_skips=0, stat_valid=0,
+                       stat_disjoint=0, stat_lag_presents=0)
+        summary = MODULE.analyze(header, frames, warmup=0)
+        self.assertEqual(summary["scanout"]["presents"], 0)
+        self.assertIsNone(summary["scanout"]["refreshes_per_present"])
+
     def test_loader_validates_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "pacing.jsonl"

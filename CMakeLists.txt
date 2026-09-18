@@ -50,6 +50,7 @@ set(DKC1_RUNNER_SOURCES
     runner/dkc1_video.c
     runner/dkc1_hd_scene.c
     runner/dkc1_hd_sprites.c
+    runner/dkc1_framegen.c
     runner/dkc1_dixie_mod.c
     runner/dkc1_margin_proxy.c
     runner/dkc1_ws_trace.c

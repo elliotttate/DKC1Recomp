@@ -55,7 +55,17 @@ retail verification remains the default and malformed/non-matching pins fail),
 `DKC1_ROUTE_FRAME_LIMIT` / `DKC1_ROUTE_AUTOCLOSE_MS` /
 `DKC1_ROUTE_RESULT` (visible-host automation), `SNESRECOMP_FPS`,
 `DKC1_PRESENT_HZ` (optional 30-240 Hz presentation-cadence override;
-normally the host chooses an exact 60 Hz display divisor when available),
+normally the Windows host locks to the display through the Direct3D 11
+swap chain's frame-latency waitable object at an exact 60 Hz divisor),
+`DKC1_PRESENTER=gdi` (Windows: force the GDI fallback, paced by `DwmFlush`),
+`DKC1_SCALING=sharp|nearest|linear` (Windows sampler; sharp bilinear is the
+default), `DKC1_SQUARE_PIXELS=1` (Windows: 8:7 square pixels instead of the
+7:6 SNES pixel aspect), `DKC1_WINDOW_SCALE=1..8` (Windows windowed integer
+scale; default follows the monitor DPI), `DKC1_FULLSCREEN=1` (Windows: start
+fullscreen), `DKC1_PRESENT_WARMUP_MS=0..5000` (Windows: present the initial
+frame for that long before frame 1 so the compositor's one-time
+presentation-path change lands outside a timing capture; evidence runs use
+2500, play leaves 0),
 `DKC1_USE_DISPLAY_LINK_PACING` (macOS A/B: opt into window-bound display-link
 cadence), `DKC1_KEEP_RENDERER_VSYNC` (macOS A/B: restore blocking SDL Metal
 vsync), `DKC1_DISABLE_DISPLAY_LINK` / `DKC1_DISABLE_VSYNC` (explicit negative
@@ -64,8 +74,71 @@ presentation). The macOS release default keeps emulation on one fixed 60 Hz
 Mach authority while a host-only Metal display link presents immutable frames
 independently at the requested 120 Hz panel cadence.
 
+**Smooth animation / frame generation (Windows, default off):**
+`DKC1_FRAMEGEN=1` (View menu / F10) smooths held sprite poses at 60 Hz using
+four frames of look-ahead (66.7 ms visual delay). On 120/240 Hz displays an
+immutable midpoint is submitted by a worker between each pair of delayed
+real images. The native framebuffer and guest state are unchanged.
+Unsupported composition/overlaps retain raw output. See `docs/HOST_PACING.md`
+and `docs/FRAMEGEN_REVIEW.md` for constraints and measured scope.
+`DKC1_FRAMEGEN=force` tests the 120 Hz software path on a 60 Hz display.
+`DKC1_FRAMEGEN_DUMP_START/_COUNT/_DIR` writes raw prev/cur, delayed display F,
+and its following mid F+0.5 PPMs plus metadata (`pose_source_frame`,
+`pose_actors`, `pose_pixels`, `pose_mismatch`). `DKC1_POSE_LOG` writes OAM
+track/pose-interval JSONL; `DKC1_POSE_DEBUG=1` prints composition failures.
+`DKC1_FRAMEGEN_TWEEN=1/2` enables the superseded adjacent-frame flow/dissolve
+for A/B diagnosis only (default 0). `DKC1_FRAMEGEN_LIVE_SCROLL=0` also selects
+an unsupported old path. The v4 pacing trace adds `mid_after_frame`,
+`real_to_mid_ms`, `mid_to_real_ms` to the existing midpoint statistics.
+
+`python tools/verify_framegen.py --exe <desktop.exe> --rom <rom> --state
+<immutable.state> --output <new-dir> --wide 0|1` runs one off capture and at
+least three repeats at 60/forced-120, checks every raw/display/mid image and
+WRAM/OAM byte and final checkpoint VRAM hashes, then separately gates
+undumped timing/audio. `--input <route.dks>
+--frames <count>` supplies another deterministic schedule. Runs are serial,
+restore a private root, and close gracefully. Force mode is not scanout proof.
+Waitable DXGI timing also gates missing statistics, held/early refreshes and
+disjoint statistics; passing CPU budgets alone is not a display-cadence pass.
+`--capture-window` additionally captures the actual window during the first
+dumped run of each enabled mode, recording its process/build/root/input identity.
+Window capture is excluded from timing runs. The capture helper temporarily
+uses per-monitor DPI coordinates to avoid cropping a scaled Windows window.
+`frames_with_generated_poses` counts nonzero `pose_actors`;
+`frames_with_generated_pixels` counts changed display pixels, including BG work.
+
+Within enabled frame generation, the Mode 1 background smoother samples each
+isolated BG at its own fractional scroll using the same four-frame look-ahead.
+`DKC1_FRAMEGEN_BG=0` disables that stage for A/B; `DKC1_FRAMEGEN_BG_SYNC=1`
+uses its serial fallback instead of the Windows immutable-frame worker.
+`DKC1_BG_MOTION_LOG=<path>` records source phase, filtered pixel count,
+`oracle_failed_rows`, row-112 scroll offsets and coarse elapsed time. These
+diagnostics are default-off. Native raw images remain unchanged; unsupported
+composition fails closed. See `docs/BACKGROUND_SMOOTHING_REVIEW.md`.
+
+`python tools/analyze_bg_frame_steps.py --capture <framegen-dump> --layers
+<same-frame-layer-capture> --start <source-frame> --count 16 --cadence 120
+--output <motion.json>` follows exact textured BG pixel correspondences in
+display F / midpoint F+0.5. `--cadence 60` uses only real display phases.
+The independent BG1/BG2/BG3 captures identify the visible seed pixels; ambiguous
+or insufficient texture is rejected. NumPy/Pillow required. This is spatial
+motion evidence, never a physical refresh/drop counter. See
+`docs/BACKGROUND_PACING_REVIEW.md` for the cleared-running reproduction.
+Add `--fractional` for subpixel output: this fits actual RGB samples against
+the independent native layer references at 1/16-pixel resolution with final
+RGB-rounding tolerance. It does not consume proposed runtime motion values.
+Ambiguous/insufficient layers remain ungraded, and surviving correspondences
+are carried between frames. The original exact-integer tracker remains the
+default for unsmoothed captures.
+
 **Evidence taps:** `DKC1_PACING_LOG` (desktop-host frame work/wait/submit/
-GDI timing jsonl; summarize with `tools/analyze_pacing.py`),
+present timing jsonl, per-frame frame-generation plan statistics, and on
+Windows v5 the swap chain's DXGI frame statistics: which refresh each
+present landed on, the scanout oracle; summarize with
+`tools/analyze_pacing.py`, which reports refreshes per displayed present
+and repeated refreshes), `DKC1_ANIM_CADENCE_LOG` (any
+host: per-frame camera and live-actor displayed pose/position jsonl;
+summarize pose hold lengths with `tools/analyze_anim_cadence.py`),
 `DKC1_SCANOUT_LOG` (macOS physical drawable `presentedTime`, source-frame
 repeat, queue, camera, and PPU-scroll jsonl; summarize with
 `tools/analyze_scanout.py` while the app is visibly unobscured),
@@ -264,6 +337,11 @@ optional `quickload` leg seeded by a state the entry route itself saves.
 - `analyze_pacing.py LOG [--warmup N] [--json]` — summarize desktop
   scheduler submit cadence separately from emulation/render work and GDI
   completion; v1 and v2 pacing logs are accepted.
+- `analyze_anim_cadence.py LOG [--warmup N] [--min-samples N] [--json-out]`
+  — from a `DKC1_ANIM_CADENCE_LOG` capture, report per sprite id how many
+  frames each displayed pose is held (effective animation rate at 60 Hz)
+  and camera/actor pixels-per-frame, i.e. what presentation interpolation
+  can and cannot smooth.
 - `run_regression.py CONTRACTS --rom R [--json-out]` — 3×-identical gate
   (checkpoints + end-of-run renderer/audio hashes + integrity budgets),
   entry + quickload legs.

@@ -13,6 +13,7 @@
 #include "dkc1_invariant_monitor.h"
 #include "dkc1_debug_dump.h"
 #include "dkc1_flight_recorder.h"
+#include "dkc1_framegen.h"
 #include "dkc1_script.h"
 #include "dkc1_video.h"
 #include "input_playback.h"
@@ -26,6 +27,40 @@
 #include "snes/snes.h"
 #include "snes/ws_shadow.h"
 
+/* Interpreter telemetry for the pacing log (snes/interp_bridge.h pulls in
+ * the bridge's internal types; the two accessors are all the host needs). */
+long interp_tier_hit_count(void);
+unsigned long long interp_bridge_steps_total(void);
+const unsigned long long *interp_bridge_bank_steps(void);
+const unsigned long long *interp_bridge_page_steps(void);
+
+/* At exit, name the code pages the interpreter spent the most opcodes in.
+ * Those are the recompiler coverage gaps that make some frames slow. */
+static void ReportInterpreterHotspots(void) {
+  const unsigned long long total = interp_bridge_steps_total();
+  if (!total) return;
+  const unsigned long long *pages = interp_bridge_page_steps();
+  unsigned top_index[12] = {0};
+  unsigned long long top_count[12] = {0};
+  for (unsigned page = 0; page < 65536; page++) {
+    const unsigned long long count = pages[page];
+    if (!count || count <= top_count[11]) continue;
+    int slot = 11;
+    while (slot > 0 && top_count[slot - 1] < count) {
+      top_count[slot] = top_count[slot - 1];
+      top_index[slot] = top_index[slot - 1];
+      slot--;
+    }
+    top_count[slot] = count;
+    top_index[slot] = page;
+  }
+  fprintf(stderr, "[interp] %llu interpreted opcodes; hottest pages:",
+          total);
+  for (int slot = 0; slot < 12 && top_count[slot]; slot++)
+    fprintf(stderr, " $%06X:%llu", top_index[slot] << 8, top_count[slot]);
+  fprintf(stderr, "\n");
+}
+
 #include <windows.h>
 #include <commdlg.h>
 #include <direct.h>
@@ -34,13 +69,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "win32_pacing_log.inc"
 
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
 
 enum {
-  kScale = 2,
   kPanelWidth = 380,
   kAudioBuffers = 8,
   kAudioFramesPerBuffer = 536,
@@ -63,6 +98,7 @@ enum {
   kMenuTogglePanel,
   kMenuProvenance,
   kMenuFpsCounter,
+  kMenuFrameGen,
   kMenuAspectNative,  /* kMenuAspect* stay contiguous for the radio group */
   kMenuAspectWidescreen,
   kMenuLayerComposite,  /* kMenuLayer* stay contiguous for the radio group */
@@ -70,6 +106,11 @@ enum {
   kMenuLayerBg2,
   kMenuLayerBg3,
   kMenuLayerObj,
+  kMenuScalingSharp,  /* kMenuScaling* stay contiguous for the radio group */
+  kMenuScalingNearest,
+  kMenuScalingLinear,
+  kMenuPixelAspectSnes,  /* kMenuPixelAspect* stay contiguous */
+  kMenuPixelAspectSquare,
 };
 
 static const DWORD kWindowedStyle =
@@ -138,6 +179,71 @@ static long s_tail_deadline;
 static char s_host_status[512] = "manual play";
 static Dkc1InputPlayback s_input_playback;
 static Dkc1WramDump s_wram_dump;
+
+/* Optional buffered pose smoothing; raw frames remain untouched for evidence.
+ * s_smooth_pixels is delayed real F, s_mid_pixels is its following F+0.5.
+ * The worker gets a private immutable midpoint copy for its half refresh. */
+static uint8_t s_mid_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
+static uint8_t s_prev_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
+static uint8_t s_smooth_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
+static int s_smooth_valid;
+static int s_prev_pixels_valid;
+static int s_framegen_enabled;    /* user setting: DKC1_FRAMEGEN or View menu */
+static int s_framegen_supported;  /* display refresh is an even multiple of 60 */
+static int s_framegen_force;      /* DKC1_FRAMEGEN=force: present regardless */
+static int s_framegen_last_valid;
+static Dkc1FrameGenStats s_framegen_stats;
+static double s_present_fps_value;
+static int s_present_frames_window;
+static long s_framegen_dump_start = -1;
+static long s_framegen_dump_count;
+
+static SRWLOCK s_present_lock = SRWLOCK_INIT;
+static void CancelMidPresent(void);
+static int s_presenter_d3d;                 /* 1: Direct3D 11 flip model */
+static int s_window_minimized;             /* WM_SIZE SIZE_MINIMIZED */
+static const char *s_dpi_awareness_mode = "unaware";
+static const char *s_priority_mode = "normal";
+
+#include "win32_present.inc"
+
+static int FrameGenActive(void) {
+  return s_framegen_enabled;
+}
+static int FrameGenExtraRefresh(void) {
+  return s_framegen_enabled && (s_framegen_supported || s_framegen_force);
+}
+
+static void ApplyFrameGenSetting(void) {
+  CancelMidPresent();
+  s_smooth_valid = 0;
+  Dkc1FrameGenSetEnabled(FrameGenActive() != 0);
+  if (!FrameGenActive()) {
+    s_framegen_last_valid = 0;
+    memset(&s_framegen_stats, 0, sizeof s_framegen_stats);
+  }
+}
+
+static void ForgetFrameGenHistory(void) {
+  CancelMidPresent();
+  Dkc1FrameGenInvalidate();
+  s_prev_pixels_valid = 0;
+  s_framegen_last_valid = 0;
+  s_smooth_valid = 0;
+}
+
+static void WritePpm(const char *path, const uint8_t *pixels, int width,
+                     int height) {
+  FILE *f = fopen(path, "wb");
+  if (!f) return;
+  fprintf(f, "P6\n%d %d\n255\n", width, height);
+  for (int i = 0; i < width * height; i++) {
+    const uint8_t rgb[3] = {pixels[i * 4 + 2], pixels[i * 4 + 1],
+                            pixels[i * 4 + 0]};
+    fwrite(rgb, 1, 3, f);
+  }
+  fclose(f);
+}
 
 static uint16_t ReadWram16(unsigned address) {
   return (uint16_t)(g_ram[address] | ((uint16_t)g_ram[address + 1] << 8));
@@ -563,7 +669,20 @@ static HMENU BuildMenuBar(void) {
   AppendMenuA(view, MF_STRING, kMenuTogglePanel, "Debug &Panel");
   AppendMenuA(view, MF_STRING, kMenuProvenance, "Pro&venance Overlay\tF1");
   AppendMenuA(view, MF_STRING, kMenuFpsCounter, "FPS &Counter");
+  AppendMenuA(view, MF_STRING, kMenuFrameGen,
+              "Smooth Animation / Frame &Generation\tF10");
+  HMENU scaling = CreatePopupMenu();
+  AppendMenuA(scaling, MF_STRING, kMenuScalingSharp, "&Sharp Bilinear");
+  AppendMenuA(scaling, MF_STRING, kMenuScalingNearest, "&Nearest");
+  AppendMenuA(scaling, MF_STRING, kMenuScalingLinear, "&Linear");
+  HMENU pixel_aspect = CreatePopupMenu();
+  AppendMenuA(pixel_aspect, MF_STRING, kMenuPixelAspectSnes,
+              "SNES &7:6 pixels");
+  AppendMenuA(pixel_aspect, MF_STRING, kMenuPixelAspectSquare,
+              "S&quare pixels");
   AppendMenuA(view, MF_POPUP, (UINT_PTR)aspect, "&Aspect Ratio");
+  AppendMenuA(view, MF_POPUP, (UINT_PTR)pixel_aspect, "Pi&xel Aspect");
+  AppendMenuA(view, MF_POPUP, (UINT_PTR)scaling, "S&caling");
   AppendMenuA(view, MF_POPUP, (UINT_PTR)layers, "&Layers");
   HMENU bar = CreateMenu();
   AppendMenuA(bar, MF_POPUP, (UINT_PTR)file, "&File");
@@ -586,6 +705,9 @@ static void RefreshMenuChecks(void) {
                                                   : MF_UNCHECKED));
   CheckMenuItem(s_menu, kMenuFpsCounter,
                 MF_BYCOMMAND | (s_show_fps ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(s_menu, kMenuFrameGen,
+                MF_BYCOMMAND |
+                    (s_framegen_enabled ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuRadioItem(s_menu, kMenuAspectNative, kMenuAspectWidescreen,
                      Dkc1VideoIsWidescreen() ? kMenuAspectWidescreen
                                              : kMenuAspectNative,
@@ -600,18 +722,34 @@ static void RefreshMenuChecks(void) {
   }
   CheckMenuRadioItem(s_menu, kMenuLayerComposite, kMenuLayerObj,
                      layer_item, MF_BYCOMMAND);
+  CheckMenuRadioItem(s_menu, kMenuScalingSharp, kMenuScalingLinear,
+                     (UINT)(kMenuScalingSharp + s_scaling_mode),
+                     MF_BYCOMMAND);
+  CheckMenuRadioItem(s_menu, kMenuPixelAspectSnes, kMenuPixelAspectSquare,
+                     s_square_pixels ? kMenuPixelAspectSquare
+                                     : kMenuPixelAspectSnes,
+                     MF_BYCOMMAND);
 }
 
 static void UpdateDebugTitle(void) {
   if (!s_window) return;
   char title[320];
   snprintf(title, sizeof title,
-           "DKC1Recomp %s | frame %ld | %s | %s | %s | provenance %s",
+           "DKC1Recomp %s | frame %ld | %s | %s | %s | provenance %s | "
+           "framegen %s",
            DKC1_BUILD_COMMIT, s_host_frame, s_paused ? "PAUSED" : "running",
            Dkc1VideoIsWidescreen() ? "16:9" : "4:3",
            LayerModeName(Dkc1DebugLayerMask()),
-           Dkc1DebugProvenanceOverlay() ? "ON" : "off");
-  SetWindowTextA(s_window, title);
+           Dkc1DebugProvenanceOverlay() ? "ON" : "off",
+           FrameGenActive() ? "ON"
+                            : s_framegen_enabled ? "unsupported" : "off");
+  /* SetWindowText forces a non-client repaint; only send it when the
+   * text changed (the frame counter advances the title once a second). */
+  static char last_title[320];
+  if (strcmp(title, last_title) != 0) {
+    snprintf(last_title, sizeof last_title, "%s", title);
+    SetWindowTextA(s_window, title);
+  }
   RefreshMenuChecks();
 }
 
@@ -717,99 +855,50 @@ static void ResolvePixelInspect(void) {
            "pixel (%d,%d) inspected", s_inspect_x, s_inspect_y);
 }
 
-/* Host-side FPS badge, composed off-screen like the panel so nothing
- * flickers; never rendered into the framebuffer evidence. */
-static void DrawFpsBadge(HDC dc, int x, int y) {
-  enum { kBadgeWidth = 96, kBadgeHeight = 22 };
-  static HDC badge_dc;
-  static HBITMAP badge_bitmap;
-  if (!badge_dc) {
-    badge_dc = CreateCompatibleDC(dc);
-    badge_bitmap = CreateCompatibleBitmap(dc, kBadgeWidth, kBadgeHeight);
-    SelectObject(badge_dc, badge_bitmap);
-  }
-  RECT rect = {0, 0, kBadgeWidth, kBadgeHeight};
-  FillRect(badge_dc, &rect, MenubarBrush());
-  SetBkMode(badge_dc, TRANSPARENT);
-  SetTextColor(badge_dc, RGB(126, 217, 87));
-  HFONT old_font =
-      (HFONT)SelectObject(badge_dc, GetStockObject(ANSI_FIXED_FONT));
+/* Host-side FPS badge, composed into a DIB so nothing flickers; never
+ * rendered into the framebuffer evidence. */
+static HostSurface s_badge_surface;
+static HostSurface s_panel_surface;
+static int s_panel_surface_valid;
+
+static int ComposeBadgeSurface(void) {
+  const int width = HostDpiScale(kHostBadgeWidth);
+  const int height = HostDpiScale(kHostBadgeHeight);
+  if (!HostSurfaceEnsure(&s_badge_surface, width, height)) return 0;
+  HDC dc = s_badge_surface.dc;
+  RECT rect = {0, 0, width, height};
+  FillRect(dc, &rect, MenubarBrush());
+  SetBkMode(dc, TRANSPARENT);
+  SetTextColor(dc, RGB(126, 217, 87));
+  HFONT old_font = (HFONT)SelectObject(dc, HostPanelFont());
   char text[32];
-  snprintf(text, sizeof text, "%5.1f FPS", s_fps_value);
-  DrawTextA(badge_dc, text, -1, &rect,
+  if (FrameGenActive())
+    snprintf(text, sizeof text, "%3.0f/%3.0f FPS", s_fps_value,
+             s_present_fps_value);
+  else
+    snprintf(text, sizeof text, "%5.1f FPS", s_fps_value);
+  DrawTextA(dc, text, -1, &rect,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-  SelectObject(badge_dc, old_font);
-  BitBlt(dc, x, y, kBadgeWidth, kBadgeHeight, badge_dc, 0, 0, SRCCOPY);
+  SelectObject(dc, old_font);
+  return 1;
 }
 
-static void PresentFrame(HDC dc) {
-  if (!dc || !s_window || !s_width || !s_height) return;
-  if (!s_bmi.bmiHeader.biSize) return;
-  if (s_fullscreen) {
-    /* Aspect-preserving letterbox across the whole monitor; the debug
-     * panel stays windowed-only. Bars are repainted with the same black
-     * every frame, so there is nothing to flicker. */
-    RECT client;
-    GetClientRect(s_window, &client);
-    const int cw = client.right, ch = client.bottom;
-    if (cw <= 0 || ch <= 0) return;
-    int dw = cw, dh = cw * s_height / s_width;
-    if (dh > ch) {
-      dh = ch;
-      dw = ch * s_width / s_height;
-    }
-    const int dx = (cw - dw) / 2, dy = (ch - dh) / 2;
-    HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RECT bar;
-    if (dy > 0) {
-      SetRect(&bar, 0, 0, cw, dy);
-      FillRect(dc, &bar, black);
-      SetRect(&bar, 0, dy + dh, cw, ch);
-      FillRect(dc, &bar, black);
-    }
-    if (dx > 0) {
-      SetRect(&bar, 0, 0, dx, ch);
-      FillRect(dc, &bar, black);
-      SetRect(&bar, dx + dw, 0, cw, ch);
-      FillRect(dc, &bar, black);
-    }
-    SetStretchBltMode(dc, COLORONCOLOR);  /* crisp pixels, no smoothing */
-    StretchDIBits(dc, dx, dy, dw, dh, 0, 0, s_width, s_height,
-                  s_pixels, &s_bmi, DIB_RGB_COLORS, SRCCOPY);
-    if (s_show_fps) DrawFpsBadge(dc, dx + 8, dy + 8);
+/* Compose the debug panel text into its DIB.  This runs on the producer
+ * thread before the present call, never inside the compositor's sampling
+ * window, and is skipped for half-frame presents. */
+static void ComposePanelSurface(int width, int height) {
+  if (!HostSurfaceEnsure(&s_panel_surface, width, height)) {
+    s_panel_surface_valid = 0;
     return;
   }
-  StretchDIBits(dc, 0, 0, s_width * kScale, s_height * kScale,
-                0, 0, s_width, s_height, s_pixels, &s_bmi,
-                DIB_RGB_COLORS, SRCCOPY);
-  if (s_show_fps) DrawFpsBadge(dc, 8, 8);
-  if (!s_panel_enabled) return;
-
-  /* Compose the panel off-screen: FillRect-then-DrawText straight onto the
-   * window DC lets the display sample between the background wipe and the
-   * glyph pass, which reads as constant text flicker. A finished buffer
-   * blitted once per frame is atomic. */
-  const int panel_height = s_height * kScale;
-  static HDC panel_dc;
-  static HBITMAP panel_bitmap;
-  static int panel_buffer_height;
-  if (!panel_dc || panel_buffer_height != panel_height) {
-    if (panel_bitmap) DeleteObject(panel_bitmap);
-    if (panel_dc) DeleteDC(panel_dc);
-    panel_dc = CreateCompatibleDC(dc);
-    panel_bitmap = CreateCompatibleBitmap(dc, kPanelWidth, panel_height);
-    SelectObject(panel_dc, panel_bitmap);
-    panel_buffer_height = panel_height;
-  }
-
-  RECT panel = {0, 0, kPanelWidth, panel_height};
+  HDC panel_dc = s_panel_surface.dc;
+  RECT panel = {0, 0, width, height};
   HBRUSH background = CreateSolidBrush(RGB(18, 21, 25));
   FillRect(panel_dc, &panel, background);
   DeleteObject(background);
   SetBkMode(panel_dc, TRANSPARENT);
   SetTextColor(panel_dc, RGB(222, 230, 238));
-  HFONT font = (HFONT)GetStockObject(ANSI_FIXED_FONT);
-  HFONT old_font = (HFONT)SelectObject(panel_dc, font);
+  HFONT old_font = (HFONT)SelectObject(panel_dc, HostPanelFont());
 
   char invariant_summary[160];
   char script[256] = "manual keyboard input";
@@ -817,10 +906,20 @@ static void PresentFrame(HDC dc) {
   else if (s_input_playback.count)
     snprintf(script, sizeof script, "input playback: %zu frames",
              s_input_playback.count);
+  char framegen_line[128];
+  if (FrameGenActive()) {
+    snprintf(framegen_line, sizeof framegen_line,
+             "%s; 67ms buffer; %u groups / %u pixels",
+             FrameGenExtraRefresh() ? "60/120 Hz" : "60 Hz",
+             s_framegen_stats.pose_actors, s_framegen_stats.pose_pixels);
+  } else {
+    snprintf(framegen_line, sizeof framegen_line, "off (F10)");
+  }
   char text[2048];
   snprintf(text, sizeof text,
            "VISIBLE WIDESCREEN DEBUGGER\r\n"
            "Build: %s\r\n"
+           "Presenter: %s  DPI %d (%s)\r\n"
            "\r\n"
            "Host frame: %ld\r\n"
            "State: %s%s%s\r\n"
@@ -835,6 +934,7 @@ static void PresentFrame(HDC dc) {
            "Scanner: rec $%02X  range $%04X..$%04X (%u px)\r\n"
            "Section: state $%04X  records $%04X..$%04X  limit $%04X\r\n"
            "Widescreen world: %s  extra %d px/side\r\n"
+           "Smooth animation: %s\r\n"
            "\r\n"
            "Evidence taps\r\n"
            "WS trace: %s\r\n"
@@ -848,6 +948,7 @@ static void PresentFrame(HDC dc) {
            "F3 BG1  F4 BG2  F5 BG3  F6 OBJ\r\n"
            "F7 pause/resume   F8 single-step\r\n"
            "F9 export rolling repro bundle\r\n"
+           "F10 smooth animation / frame generation\r\n"
            "F11 quick save   F12 quick load\r\n"
            "Alt+Enter fullscreen; Esc returns\r\n"
            "Esc quit (when windowed)\r\n"
@@ -855,6 +956,8 @@ static void PresentFrame(HDC dc) {
            "The side panel is host-only and is not\r\n"
            "included in framebuffer evidence.",
            s_build_id,
+           s_presenter_d3d ? "Direct3D 11 flip" : "GDI", s_dpi,
+           s_dpi_awareness_mode,
            s_host_frame,
            s_paused ? "PAUSED" : "running",
            s_route_finished ? " / ROUTE COMPLETE" : "",
@@ -870,6 +973,7 @@ static void PresentFrame(HDC dc) {
            ReadWram16(0x1e0b),
            Dkc1VideoTerrainReady() ? "READY" : "not ready",
            Dkc1VideoExtra(),
+           framegen_line,
            EnvironmentEnabled("DKC1_WS_TRACE") ? "ON" : "off",
            EnvironmentEnabled("DKC1_OAM_LOG") ? "ON" : "off",
            EnvironmentEnabled("DKC1_LIFECYCLE_TRACE") ? "ON" : "off",
@@ -880,14 +984,117 @@ static void PresentFrame(HDC dc) {
                                        sizeof invariant_summary),
            s_pixel_report);
   RECT text_rect = panel;
-  text_rect.left += 12;
-  text_rect.top += 12;
-  text_rect.right -= 10;
+  text_rect.left += HostDpiScale(12);
+  text_rect.top += HostDpiScale(12);
+  text_rect.right -= HostDpiScale(10);
   DrawTextA(panel_dc, text, -1, &text_rect,
             DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
   SelectObject(panel_dc, old_font);
-  BitBlt(dc, s_width * kScale, 0, kPanelWidth, panel_height,
-         panel_dc, 0, 0, SRCCOPY);
+  s_panel_surface_valid = 1;
+}
+
+/* Present one complete host framebuffer through the active presenter.
+ * `pixels` is either the real frame or the host-only in-between frame;
+ * the panel is recomposed only when asked so a half-period present does
+ * not pay for text layout twice.  `dc` is only used by the GDI path (a
+ * WM_PAINT device context); NULL acquires one.  Callers hold
+ * s_present_lock. */
+static void PresentPixelsUnlocked(HDC dc, const uint8_t *pixels,
+                                  int compose_panel, UINT sync_interval) {
+  if (!s_window || !s_width || !s_height || !pixels) return;
+  if (s_window_minimized) return;  /* nothing to show; the loop keeps time */
+  RECT client;
+  GetClientRect(s_window, &client);
+  const int cw = client.right, ch = client.bottom;
+  if (cw <= 0 || ch <= 0) return;
+  const RECT dest = HostGameRect(cw, ch);
+  const int dw = dest.right - dest.left, dh = dest.bottom - dest.top;
+  const int show_panel = s_panel_enabled && !s_fullscreen;
+  const int panel_width = HostPanelWidth();
+  if (show_panel && compose_panel) ComposePanelSurface(panel_width, ch);
+  const int badge_x = dest.left + HostDpiScale(8);
+  const int badge_y = dest.top + HostDpiScale(8);
+
+  if (s_presenter_d3d && s_d3d.active) {
+    static const float kDark[4] = {18.0f / 255.0f, 21.0f / 255.0f,
+                                   25.0f / 255.0f, 1.0f};
+    static const float kBlack[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    int bw, bh;
+    if (HostD3DBeginFrame(&bw, &bh, s_fullscreen ? kBlack : kDark)) {
+      HostD3DUpload(&s_d3d.frame, pixels, s_width, s_height,
+                    (size_t)s_width * 4);
+      HostD3DDrawQuad(&s_d3d.frame, &dest, s_scaling_mode);
+      if (show_panel && s_panel_surface_valid) {
+        if (compose_panel)
+          HostD3DUpload(&s_d3d.panel, s_panel_surface.pixels,
+                        s_panel_surface.width, s_panel_surface.height,
+                        (size_t)s_panel_surface.width * 4);
+        RECT panel_rect = {dest.right, 0, dest.right + panel_width, ch};
+        HostD3DDrawQuad(&s_d3d.panel, &panel_rect, kHostScalingNearest);
+      }
+      if (s_show_fps && ComposeBadgeSurface() &&
+          HostD3DUpload(&s_d3d.badge, s_badge_surface.pixels,
+                        s_badge_surface.width, s_badge_surface.height,
+                        (size_t)s_badge_surface.width * 4)) {
+        RECT badge_rect = {badge_x, badge_y,
+                           badge_x + s_badge_surface.width,
+                           badge_y + s_badge_surface.height};
+        HostD3DDrawQuad(&s_d3d.badge, &badge_rect, kHostScalingNearest);
+      }
+      HostD3DPresent(sync_interval);
+      return;
+    }
+    /* Device lost or resize failure: the loop notices s_d3d.active == 0
+     * and moves to GDI; draw this frame with GDI right away. */
+  }
+
+  HDC owned = NULL;
+  if (!dc) {
+    owned = GetDC(s_window);
+    dc = owned;
+  }
+  if (!dc || !s_bmi.bmiHeader.biSize) return;
+  if (s_fullscreen) {
+    /* Aspect-preserving letterbox across the whole monitor; bars are
+     * repainted with the same black every frame, so nothing flickers. */
+    HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RECT bar;
+    if (dest.top > 0) {
+      SetRect(&bar, 0, 0, cw, dest.top);
+      FillRect(dc, &bar, black);
+      SetRect(&bar, 0, dest.bottom, cw, ch);
+      FillRect(dc, &bar, black);
+    }
+    if (dest.left > 0) {
+      SetRect(&bar, 0, 0, dest.left, ch);
+      FillRect(dc, &bar, black);
+      SetRect(&bar, dest.right, 0, cw, ch);
+      FillRect(dc, &bar, black);
+    }
+  }
+  if (s_scaling_mode == kHostScalingLinear) {
+    SetStretchBltMode(dc, HALFTONE);
+    SetBrushOrgEx(dc, 0, 0, NULL);
+  } else {
+    SetStretchBltMode(dc, COLORONCOLOR);  /* crisp pixels, no smoothing */
+  }
+  StretchDIBits(dc, dest.left, dest.top, dw, dh, 0, 0, s_width, s_height,
+                pixels, &s_bmi, DIB_RGB_COLORS, SRCCOPY);
+  if (s_show_fps && ComposeBadgeSurface())
+    BitBlt(dc, badge_x, badge_y, s_badge_surface.width,
+           s_badge_surface.height, s_badge_surface.dc, 0, 0, SRCCOPY);
+  if (show_panel && s_panel_surface_valid)
+    BitBlt(dc, dest.right, 0, panel_width, ch, s_panel_surface.dc, 0, 0,
+           SRCCOPY);
+  GdiFlush();
+  if (owned) ReleaseDC(s_window, owned);
+}
+
+static void PresentFrame(const uint8_t *pixels, int compose_panel,
+                         UINT sync_interval) {
+  AcquireSRWLockExclusive(&s_present_lock);
+  PresentPixelsUnlocked(NULL, pixels, compose_panel, sync_interval);
+  ReleaseSRWLockExclusive(&s_present_lock);
 }
 
 static HWAVEOUT s_waveout;
@@ -908,15 +1115,25 @@ static unsigned long s_audio_ring_frames;
 static unsigned long long s_audio_internal_underflows;
 
 /* Resize the windowed frame to fit the game view plus the optional panel. */
+static void AdjustWindowRectForHostDpi(RECT *rect) {
+  HMODULE user32 = GetModuleHandleA("user32.dll");
+  typedef BOOL (WINAPI *AdjustFn)(LPRECT, DWORD, BOOL, DWORD, UINT);
+  AdjustFn adjust = user32
+      ? (AdjustFn)GetProcAddress(user32, "AdjustWindowRectExForDpi") : NULL;
+  if (!adjust || !adjust(rect, kWindowedStyle, TRUE, 0, (UINT)s_dpi))
+    AdjustWindowRect(rect, kWindowedStyle, TRUE);
+}
+
 static void ApplyWindowedSize(void) {
   if (!s_window || s_fullscreen) return;
-  RECT rect = { 0, 0,
-                s_width * kScale + (s_panel_enabled ? kPanelWidth : 0),
-                s_height * kScale };
-  AdjustWindowRect(&rect, kWindowedStyle, TRUE);
+  int width, height;
+  HostWindowedClientSize(&width, &height);
+  RECT rect = {0, 0, width, height};
+  AdjustWindowRectForHostDpi(&rect);
   SetWindowPos(s_window, NULL, 0, 0, rect.right - rect.left,
                rect.bottom - rect.top,
                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  HostD3DRequestResize();
   InvalidateRect(s_window, NULL, FALSE);
 }
 
@@ -961,6 +1178,7 @@ static void SetAspectMode(int widescreen) {
            (size_t)s_width * (size_t)s_height * 4);
   }
   Dkc1BeginDrawing(s_pixels, (size_t)s_width * 4);
+  ForgetFrameGenHistory();  /* buffers changed width */
   ApplyWindowedSize();
   snprintf(s_host_status, sizeof s_host_status,
            "aspect changed to %s (%dx%d)",
@@ -972,6 +1190,7 @@ static void SetAspectMode(int widescreen) {
 
 static void SetFullscreen(int enable) {
   if (!s_window || enable == s_fullscreen) return;
+  CancelMidPresent();
   s_fullscreen = enable;
   if (enable) {
     s_windowed_placement.length = sizeof s_windowed_placement;
@@ -994,6 +1213,7 @@ static void SetFullscreen(int enable) {
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
     ApplyWindowedSize();  /* panel may have been toggled while fullscreen */
   }
+  HostD3DRequestResize();
   InvalidateRect(s_window, NULL, FALSE);
   UpdateDebugTitle();
 }
@@ -1023,8 +1243,43 @@ static void PromptStatePath(int save_mode) {
 
 static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
+    case WM_SIZE:
+      CancelMidPresent();
+      s_window_minimized = wp == SIZE_MINIMIZED;
+      if (wp != SIZE_MINIMIZED) HostD3DRequestResize();
+      break;
+    case WM_ENTERMENULOOP:
+      CancelMidPresent();
+      break;
+    case WM_ERASEBKGND:
+      /* The swap chain covers the client area; a GDI erase would flash. */
+      if (s_presenter_d3d && s_d3d.active) return 1;
+      break;
+    case WM_DPICHANGED: {
+      /* Per-monitor DPI: keep an integer window scale and let the
+       * suggested rectangle place the window on the new monitor. */
+      const int dpi = (int)HIWORD(wp);
+      const RECT *suggested = (const RECT *)lp;
+      if (dpi >= 48 && dpi <= 960) {
+        s_dpi = dpi;
+        s_window_scale = HostWindowScaleForDpi(s_dpi);
+      }
+      if (!s_fullscreen && suggested) {
+        int width, height;
+        HostWindowedClientSize(&width, &height);
+        RECT rect = {0, 0, width, height};
+        AdjustWindowRectForHostDpi(&rect);
+        SetWindowPos(hwnd, NULL, suggested->left, suggested->top,
+                     rect.right - rect.left, rect.bottom - rect.top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+      }
+      HostD3DRequestResize();
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     case WM_CLOSE:
     case WM_DESTROY:
+      CancelMidPresent();
       s_running = 0;
       PostQuitMessage(0);
       return 0;
@@ -1109,25 +1364,7 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       const int click_x = (int)(short)LOWORD(lp);
       const int click_y = (int)(short)HIWORD(lp);
       int game_x = -1, game_y = -1;
-      if (s_fullscreen) {
-        RECT client;
-        GetClientRect(hwnd, &client);
-        const int cw = client.right, ch = client.bottom;
-        if (cw > 0 && ch > 0) {
-          int dw = cw, dh = cw * s_height / s_width;
-          if (dh > ch) { dh = ch; dw = ch * s_width / s_height; }
-          const int dx = (cw - dw) / 2, dy = (ch - dh) / 2;
-          if (click_x >= dx && click_x < dx + dw && click_y >= dy &&
-              click_y < dy + dh) {
-            game_x = (click_x - dx) * s_width / dw;
-            game_y = (click_y - dy) * s_height / dh;
-          }
-        }
-      } else if (click_x >= 0 && click_x < s_width * kScale &&
-                 click_y >= 0 && click_y < s_height * kScale) {
-        game_x = click_x / kScale;
-        game_y = click_y / kScale;
-      }
+      HostClientToGame(hwnd, click_x, click_y, &game_x, &game_y);
       if (game_x >= 0) {
         s_inspect_x = game_x;
         s_inspect_y = game_y;
@@ -1143,6 +1380,21 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (!(lp & (1u << 30))) SetFullscreen(!s_fullscreen);
         return 0;
       }
+      if (wp == VK_F10) {  /* F10 arrives as a system key */
+        if (!(lp & (1u << 30))) {
+          s_framegen_enabled = !s_framegen_enabled;
+          ApplyFrameGenSetting();
+          snprintf(s_host_status, sizeof s_host_status,
+                   "frame generation %s%s",
+                   s_framegen_enabled ? "enabled" : "disabled",
+                   s_framegen_enabled ? " (67 ms display buffer)" : "");
+          UpdateDebugTitle();
+        }
+        return 0;
+      }
+      break;
+    case WM_SYSKEYUP:
+      if (wp == VK_F10) return 0;  /* keep F10 from entering menu mode */
       break;
     case WM_SYSCHAR:
       if (wp == VK_RETURN) return 0;  /* no menu beep for Alt+Enter */
@@ -1200,6 +1452,31 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case kMenuFpsCounter:
           s_show_fps = !s_show_fps;
           break;
+        case kMenuFrameGen:
+          s_framegen_enabled = !s_framegen_enabled;
+          ApplyFrameGenSetting();
+          snprintf(s_host_status, sizeof s_host_status,
+                   "frame generation %s%s",
+                   s_framegen_enabled ? "enabled" : "disabled",
+                   s_framegen_enabled ? " (67 ms display buffer)" : "");
+          break;
+        case kMenuScalingSharp:
+          s_scaling_mode = kHostScalingSharp;
+          break;
+        case kMenuScalingNearest:
+          s_scaling_mode = kHostScalingNearest;
+          break;
+        case kMenuScalingLinear:
+          s_scaling_mode = kHostScalingLinear;
+          break;
+        case kMenuPixelAspectSnes:
+          s_square_pixels = 0;
+          ApplyWindowedSize();
+          break;
+        case kMenuPixelAspectSquare:
+          s_square_pixels = 1;
+          ApplyWindowedSize();
+          break;
         case kMenuAspectNative:
           SetAspectMode(0);
           break;
@@ -1220,7 +1497,14 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PAINT: {
       PAINTSTRUCT ps;
       HDC dc = BeginPaint(hwnd, &ps);
-      PresentFrame(dc);
+      /* The flip-model presenter redraws on its own cadence (the paused
+       * loop keeps presenting), so only the GDI path paints here. */
+      if (!(s_presenter_d3d && s_d3d.active)) {
+        AcquireSRWLockExclusive(&s_present_lock);
+        PresentPixelsUnlocked(dc, s_smooth_valid ? s_smooth_pixels : s_pixels,
+                              1, 0);
+        ReleaseSRWLockExclusive(&s_present_lock);
+      }
       EndPaint(hwnd, &ps);
       return 0;
     }
@@ -1388,23 +1672,58 @@ static void AudioPump(void) {
   }
 }
 
-/* Present-time scheduler.  The old loop submitted the GDI frame first and
- * slept afterward.  Any variation in emulation/render work therefore moved
- * the next submission by the same amount, and a missed deadline was followed
- * by a short catch-up frame.  Schedule the presentation itself instead: do
- * the work, wait on an absolute QPC cadence, then submit.  Overruns re-anchor
- * immediately so a hitch is never followed by a burst of tightly-spaced
- * frames. */
+/* Frame pacer.
+ *
+ * Three ways to find the next presentation slot, chosen once at start-up:
+ *
+ *  - waitable (Direct3D 11 presenter, display refresh an integer multiple
+ *    of ~60 Hz): block on the swap chain's frame-latency waitable object.
+ *    It is signalled when the previous image has been consumed by the
+ *    compositor or flipped to the screen, so the cadence is the display's
+ *    own and there is no period estimate to drift, no lead to tune and no
+ *    vblank timestamp to interpret.  Present(divisor) shows each emulated
+ *    frame for exactly `divisor` refreshes.
+ *  - dwmflush (GDI fallback on the same displays): block on the
+ *    compositor's frame boundary with DwmFlush, then blit immediately.
+ *    The GDI update lands at the very start of the compositor's window
+ *    instead of racing its sampling point.
+ *  - timer (DKC1_PRESENT_HZ override, incompatible refresh, or
+ *    DKC1_FRAMEGEN=force): the previous absolute QPC schedule.  A missed
+ *    deadline re-anchors to "now" and is never followed by a catch-up
+ *    frame.  The D3D presenter uses sync interval 0 here so the latest
+ *    queued image is shown and the timer alone sets the cadence.
+ *
+ * In the compositor-locked modes the loop waits first, then polls input,
+ * emulates, renders and presents, which removes most of a frame of input
+ * latency compared with the old work-then-hold ordering.  Timer mode and
+ * the 120 Hz frame-generation path keep the deterministic work-first
+ * ordering because their submit time, not the compositor, sets cadence. */
+typedef enum HostPaceMode {
+  kHostPaceTimer = 0,
+  kHostPaceWaitable,
+  kHostPaceDwmFlush,
+} HostPaceMode;
+
+typedef HRESULT (WINAPI *HostDwmTimingFn)(HWND, DWM_TIMING_INFO *);
+typedef HRESULT (WINAPI *HostDwmFlushFn)(void);
+
 typedef struct HostFramePacer {
   LARGE_INTEGER frequency;
   HANDLE timer;
   HMODULE dwm_module;
-  HRESULT (WINAPI *dwm_timing)(HWND, DWM_TIMING_INFO *);
-  double refresh_hz;
+  HostDwmTimingFn dwm_timing;
+  HostDwmFlushFn dwm_flush;
+  HostPaceMode mode;
+  int locked;                 /* display refresh is a multiple of ~60 Hz */
+  int divisor;                /* display refreshes per emulated frame */
+  int mid_flushes;            /* worker copy: compositor passes per half */
+  UINT mid_sync_interval;     /* worker copy */
+  double refresh_hz;          /* emulated frames per second */
   double display_hz;
   double period_ticks;
-  double submit_lead_ticks;
-  double next_present_tick;
+  double half_period_ticks;
+  double next_present_tick;   /* timer mode schedule */
+  double wake_tick;           /* when the last frame wait returned */
   double last_submit_tick;
   double last_present_tick;
   double pending_submit_tick;
@@ -1418,15 +1737,42 @@ typedef struct HostFramePacer {
   double pending_render_ms;
   double pending_diagnostics_ms;
   double pending_audio_ms;
+  int pending_wait_timeout;
+  double pending_pump_ms;     /* message pump this iteration */
+  double pending_slow_msg_ms; /* slowest dispatched message */
+  UINT pending_slow_msg;
+  double pending_stats_ms;    /* DXGI statistics query */
+  double pending_gap_ms;      /* previous present completion -> this wait */
+  double last_presented_tick;
+  double last_wake_tick;
+  double pending_wake_interval_ms; /* slot cadence: wait return to return */
+  unsigned long long pending_interp_steps; /* interpreted opcodes this frame */
+  long pending_tier_hits;                  /* dispatch tier-downs this frame */
+  unsigned pending_interp_bank;            /* bank with most interpreted ops */
+  unsigned long long pending_interp_bank_steps;
+  unsigned long long interp_bank_before[256];
+  int minimized_pacing;       /* waitable mode parked on the timer */
   unsigned long overruns;
   unsigned long frames;
   long test_stall_frame;
   DWORD test_stall_ms;
   int test_stall_fired;
   int timer_resolution_active;
-  int compositor_synced;
   const char *clock_source;
   FILE *log;
+  HostPacingLog *async_log;
+  double pending_log_ms;
+  double wait_start_tick;
+  double loop_start_tick;
+  unsigned long mid_skips;
+  int pending_mid_presented;
+  double pending_interp_ms;
+  double pending_mid_submit_tick;
+  double pending_mid_submit_error_ms;
+  double pending_mid_present_ms;
+  double pending_real_to_mid_ms;
+  long pending_mid_after_frame;
+  HostScanoutStats scanout;
 } HostFramePacer;
 
 static int HostFramePacerOverrideHz(double *refresh_hz) {
@@ -1442,55 +1788,55 @@ static int HostFramePacerOverrideHz(double *refresh_hz) {
   return 0;
 }
 
-static double HostFramePacerFallbackHz(void) {
-  /* An exact SNES cadence drifts through a 60 Hz compositor and produces a
-   * periodic doubled/dropped presentation.  Prefer an exact display divisor
-   * only when it remains effectively 60 Hz; unusual refresh rates retain the
-   * hardware cadence rather than changing game speed substantially. */
-  HDC dc = GetDC(s_window);
-  const int display_hz = dc ? GetDeviceCaps(dc, VREFRESH) : 0;
-  if (dc) ReleaseDC(s_window, dc);
-  if (display_hz > 0) {
-    const int divisor = (display_hz + 30) / 60;
-    if (divisor > 0) {
-      const double divided_hz = (double)display_hz / (double)divisor;
-      if (divided_hz >= 59.5 && divided_hz <= 60.5)
-        return divided_hz;
-    }
-  }
-  return 60.098811862;
-}
-
 static int HostFramePacerReadDwm(HostFramePacer *pacer,
                                  DWM_TIMING_INFO *timing) {
   if (!pacer->dwm_timing) return 0;
   memset(timing, 0, sizeof *timing);
   timing->cbSize = sizeof *timing;
   /* The desktop-wide query exposes the composition clock even before this
-   * GDI window has accumulated per-window present statistics. */
+   * window has accumulated per-window present statistics. */
   return SUCCEEDED(pacer->dwm_timing(NULL, timing)) &&
          timing->qpcRefreshPeriod > 0;
 }
 
-static void HostFramePacerAnchorToDwm(HostFramePacer *pacer,
-                                      double now_tick) {
+/* Display refresh in Hz: the compositor's rational rate, else the device
+ * mode, else 0.  Only used to pick the integer divisor and the nominal
+ * audio request rate; the compositor-locked modes never schedule from it. */
+static double HostFramePacerDisplayHz(HostFramePacer *pacer) {
   DWM_TIMING_INFO timing;
-  if (!pacer->compositor_synced ||
-      !HostFramePacerReadDwm(pacer, &timing)) {
-    pacer->next_present_tick = now_tick;
-    return;
+  if (HostFramePacerReadDwm(pacer, &timing)) {
+    pacer->clock_source = "dwm";
+    if (timing.rateRefresh.uiDenominator > 0 &&
+        timing.rateRefresh.uiNumerator > 0)
+      return (double)timing.rateRefresh.uiNumerator /
+             (double)timing.rateRefresh.uiDenominator;
+    return (double)pacer->frequency.QuadPart /
+           (double)timing.qpcRefreshPeriod;
   }
-  const double display_period = (double)timing.qpcRefreshPeriod;
-  int divisor = (int)(pacer->period_ticks / display_period + 0.5);
-  if (divisor < 1) divisor = 1;
-  /* WaitForPresent adds one game period. Back the stored anchor up by the
-   * remaining display refreshes so its first target is the next vblank, then
-   * continue at the selected integer divisor. Submit one millisecond before
-   * that boundary to leave DWM time to consume the GDI surface. */
-  pacer->next_present_tick = (double)timing.qpcVBlank -
-      pacer->submit_lead_ticks - (double)(divisor - 1) * display_period;
-  while (pacer->next_present_tick + pacer->period_ticks <= now_tick)
-    pacer->next_present_tick += pacer->period_ticks;
+  HDC dc = GetDC(s_window);
+  const int display_hz = dc ? GetDeviceCaps(dc, VREFRESH) : 0;
+  if (dc) ReleaseDC(s_window, dc);
+  if (display_hz > 1) {
+    pacer->clock_source = "display";
+    return (double)display_hz;
+  }
+  return 0.0;
+}
+
+static const char *HostPaceModeName(HostPaceMode mode) {
+  switch (mode) {
+    case kHostPaceWaitable: return "waitable";
+    case kHostPaceDwmFlush: return "dwmflush";
+    default: return "timer";
+  }
+}
+
+static const char *HostScalingName(void) {
+  switch (s_scaling_mode) {
+    case kHostScalingNearest: return "nearest";
+    case kHostScalingLinear: return "linear";
+    default: return "sharp";
+  }
 }
 
 static int HostFramePacerInit(HostFramePacer *pacer) {
@@ -1500,34 +1846,48 @@ static int HostFramePacerInit(HostFramePacer *pacer) {
       !QueryPerformanceCounter(&now))
     return 0;
   pacer->clock_source = "hardware";
+  pacer->dwm_module = LoadLibraryA("dwmapi.dll");
+  if (pacer->dwm_module) {
+    pacer->dwm_timing = (HostDwmTimingFn)GetProcAddress(
+        pacer->dwm_module, "DwmGetCompositionTimingInfo");
+    pacer->dwm_flush =
+        (HostDwmFlushFn)GetProcAddress(pacer->dwm_module, "DwmFlush");
+  }
   if (HostFramePacerOverrideHz(&pacer->refresh_hz)) {
     pacer->clock_source = "override";
   } else {
-    pacer->dwm_module = LoadLibraryA("dwmapi.dll");
-    if (pacer->dwm_module) {
-      pacer->dwm_timing = (HRESULT (WINAPI *)(HWND, DWM_TIMING_INFO *))
-          GetProcAddress(pacer->dwm_module, "DwmGetCompositionTimingInfo");
-    }
-    DWM_TIMING_INFO timing;
-    if (HostFramePacerReadDwm(pacer, &timing)) {
-      pacer->display_hz = (double)pacer->frequency.QuadPart /
-                          (double)timing.qpcRefreshPeriod;
+    pacer->display_hz = HostFramePacerDisplayHz(pacer);
+    if (pacer->display_hz > 0.0) {
       const int divisor = (int)(pacer->display_hz / 60.0 + 0.5);
-      const double divided_hz = divisor > 0
-          ? pacer->display_hz / (double)divisor : 0.0;
+      const double divided_hz =
+          divisor > 0 ? pacer->display_hz / (double)divisor : 0.0;
+      /* An exact SNES cadence drifts through a 60 Hz compositor and
+       * produces a periodic doubled/dropped presentation.  Lock to the
+       * display when an integer divisor lands within 59.5-60.5 Hz. */
       if (divided_hz >= 59.5 && divided_hz <= 60.5) {
+        pacer->locked = 1;
+        pacer->divisor = divisor;
         pacer->refresh_hz = divided_hz;
-        pacer->period_ticks =
-            (double)timing.qpcRefreshPeriod * (double)divisor;
-        pacer->submit_lead_ticks =
-            (double)pacer->frequency.QuadPart / 1000.0;
-        pacer->compositor_synced = 1;
-        pacer->clock_source = "dwm";
       }
     }
-    if (!pacer->refresh_hz)
-      pacer->refresh_hz = HostFramePacerFallbackHz();
+    if (!pacer->locked) {
+      pacer->refresh_hz = 60.098811862;  /* hardware cadence */
+      pacer->clock_source = "hardware";
+    }
   }
+  if (pacer->locked) {
+    if (s_presenter_d3d && s_d3d.active) pacer->mode = kHostPaceWaitable;
+    else if (pacer->dwm_flush) pacer->mode = kHostPaceDwmFlush;
+    else pacer->mode = kHostPaceTimer;
+  } else {
+    pacer->mode = kHostPaceTimer;
+  }
+  /* DKC1_FRAMEGEN=force wants the 120 Hz submission path on a display
+   * that cannot show it; only the free-running timer can submit twice
+   * per emulated frame without stalling on the compositor. */
+  if (s_framegen_enabled && s_framegen_force &&
+      !(pacer->locked && pacer->divisor >= 2 && (pacer->divisor % 2) == 0))
+    pacer->mode = kHostPaceTimer;
   s_host_frame_rate = pacer->refresh_hz;
   {
     const char *frame_text = getenv("DKC1_PACING_TEST_STALL_FRAME");
@@ -1541,10 +1901,15 @@ static int HostFramePacerInit(HostFramePacer *pacer) {
       }
     }
   }
-  if (!pacer->period_ticks)
-    pacer->period_ticks =
-        (double)pacer->frequency.QuadPart / pacer->refresh_hz;
-  HostFramePacerAnchorToDwm(pacer, (double)now.QuadPart);
+  pacer->period_ticks =
+      (double)pacer->frequency.QuadPart / pacer->refresh_hz;
+  /* Frame generation needs the in-between image to land on its own display
+   * refresh: an even divisor gives it exactly half the emulated period. */
+  s_framegen_supported =
+      pacer->locked && pacer->divisor >= 2 && (pacer->divisor % 2) == 0;
+  pacer->half_period_ticks = pacer->period_ticks * 0.5;
+  pacer->next_present_tick = (double)now.QuadPart;
+  pacer->wake_tick = (double)now.QuadPart;
   pacer->timer = CreateWaitableTimerExA(
       NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
   if (!pacer->timer) {
@@ -1557,24 +1922,62 @@ static int HostFramePacerInit(HostFramePacer *pacer) {
     if (path && *path) {
       pacer->log = fopen(path, "wb");
       if (pacer->log) {
+        pacer->async_log = HostPacingLogOpen(pacer->log, path);
+        if (!pacer->async_log) {
+          fclose(pacer->log);
+          pacer->log = NULL;
+          fprintf(stderr, "[pacing] unable to create diagnostic queue\n");
+          return 1;
+        }
         s_audio_log_stats = 1;
-        fprintf(pacer->log,
-                "{\"schema\":\"dkc1.pacing.v3\",\"refresh_hz\":%.9f,"
+        HostPacingLogWrite(pacer->async_log,
+                "{\"schema\":\"dkc1.pacing.v5\",\"refresh_hz\":%.9f,"
                 "\"display_hz\":%.9f,\"clock_source\":\"%s\","
-                "\"submit_lead_ms\":%.4f,\"audio_preroll\":%d,"
+                "\"pacing\":\"%s\",\"presenter\":\"%s\","
+                "\"presenter_error\":\"%.120s\","
+                "\"dpi\":%d,\"dpi_awareness\":\"%s\",\"window_scale\":%d,"
+                "\"scaling\":\"%s\",\"pixel_aspect\":\"%s\","
+                "\"thread_priority\":\"%s\","
+                "\"submit_lead_ms\":0.0000,\"audio_preroll\":%d,"
                 "\"audio_ring_start_frames\":%d,"
-                "\"test_stall_frame\":%ld,\"test_stall_ms\":%lu}\n",
+                "\"present_divisor\":%d,\"framegen\":%d,"
+                "\"framegen_extra_refresh\":%d,"
+                "\"framegen_half_period_ms\":%.4f,"
+                "\"test_stall_frame\":%ld,\"test_stall_ms\":%lu,"
+                "\"log_mode\":\"async\",\"log_capacity\":%u,"
+                "\"max_frame_latency\":%u,\"pid\":%lu,\"main_tid\":%lu,"
+                "\"qpc_frequency\":%lld}\n",
                 pacer->refresh_hz, pacer->display_hz,
-                pacer->clock_source,
-                pacer->submit_lead_ticks * 1000.0 /
-                    (double)pacer->frequency.QuadPart,
+                pacer->clock_source, HostPaceModeName(pacer->mode),
+                s_presenter_d3d ? "d3d11" : "gdi", s_d3d.error,
+                s_dpi, s_dpi_awareness_mode, s_window_scale,
+                HostScalingName(), s_square_pixels ? "1:1" : "7:6",
+                s_priority_mode,
                 s_audio_preroll_buffers, kAudioRingStartFrames,
+                pacer->divisor, FrameGenActive(), FrameGenExtraRefresh(),
+                pacer->half_period_ticks * 1000.0 /
+                    (double)pacer->frequency.QuadPart,
                 pacer->test_stall_frame,
-                (unsigned long)pacer->test_stall_ms);
+                (unsigned long)pacer->test_stall_ms, kPacingLogSlots,
+                s_d3d.max_frame_latency, GetCurrentProcessId(), GetCurrentThreadId(),
+                pacer->frequency.QuadPart);
       }
     }
   }
   return 1;
+}
+
+/* Sync interval for a Present call: exactly `divisor` refreshes per
+ * emulated frame when compositor-locked (half of it for each image of the
+ * 120 Hz frame-generation pair); 0 in timer mode so the timer alone sets
+ * cadence and the newest queued image wins. */
+static UINT HostFramePacerSyncInterval(const HostFramePacer *pacer,
+                                       int is_mid) {
+  (void)is_mid;
+  if (pacer->mode != kHostPaceWaitable) return 0;
+  int refreshes = pacer->divisor > 0 ? pacer->divisor : 1;
+  if (FrameGenExtraRefresh() && refreshes >= 2) refreshes /= 2;
+  return (UINT)refreshes;
 }
 
 static void HostFramePacerInjectTestStall(HostFramePacer *pacer,
@@ -1586,49 +1989,21 @@ static void HostFramePacerInjectTestStall(HostFramePacer *pacer,
   }
 }
 
+/* Pause/resume: drop any half-frame and restart the timer schedule from
+ * now.  The compositor-locked modes have no schedule to restart. */
 static void HostFramePacerReset(HostFramePacer *pacer) {
+  CancelMidPresent();
   LARGE_INTEGER now;
   QueryPerformanceCounter(&now);
-  HostFramePacerAnchorToDwm(pacer, (double)now.QuadPart);
+  pacer->next_present_tick = (double)now.QuadPart;
   pacer->last_submit_tick = 0.0;
   pacer->last_present_tick = 0.0;
 }
 
-static void HostFramePacerWaitForPresent(HostFramePacer *pacer,
-                                         double work_start_tick) {
+/* Block until the absolute tick `target`: a high-resolution timer for the
+ * coarse wait, then a bounded spin for the last millisecond. */
+static void HostFramePacerWaitUntil(HostFramePacer *pacer, double target) {
   LARGE_INTEGER now;
-  QueryPerformanceCounter(&now);
-  double before_wait = (double)now.QuadPart;
-  double target = pacer->next_present_tick + pacer->period_ticks;
-  pacer->pending_work_ms =
-      (before_wait - work_start_tick) * 1000.0 /
-      (double)pacer->frequency.QuadPart;
-  pacer->pending_late_ms = 0.0;
-
-  if (before_wait > target) {
-    pacer->pending_late_ms =
-        (before_wait - target) * 1000.0 /
-        (double)pacer->frequency.QuadPart;
-    pacer->overruns++;
-    if (pacer->compositor_synced) {
-      const double late_ticks = before_wait - target;
-      if (late_ticks > pacer->submit_lead_ticks) {
-        /* The vblank itself has passed. Skip to the next compositor boundary
-         * rather than permanently shifting the cadence off-phase. */
-        HostFramePacerAnchorToDwm(pacer, before_wait);
-        target = pacer->next_present_tick + pacer->period_ticks;
-      }
-      /* If only the pre-vblank lead was missed, submit immediately; DWM still
-       * has the remainder of the lead window and the next target stays on the
-       * original phase. */
-    } else {
-      /* No compositor clock is available. Do not chase the missed deadline;
-       * give the next frame a complete interval. */
-      target = before_wait;
-    }
-  }
-  pacer->next_present_tick = target;
-
   for (;;) {
     QueryPerformanceCounter(&now);
     const double remaining = target - (double)now.QuadPart;
@@ -1650,23 +2025,112 @@ static void HostFramePacerWaitForPresent(HostFramePacer *pacer,
     }
     YieldProcessor();
   }
-  QueryPerformanceCounter(&now);
-  pacer->pending_wait_ms =
-      ((double)now.QuadPart - before_wait) * 1000.0 /
-      (double)pacer->frequency.QuadPart;
 }
 
-static void HostFramePacerBeginPresent(HostFramePacer *pacer) {
+#include "win32_mid_present.inc"
+
+/* Block until the next emulated-frame slot.  `work_first` callers have
+ * already done this frame's work (timer mode, 120 Hz frame generation);
+ * their work time is measured here.  Wait-first callers measure it at
+ * present time. */
+static void HostFramePacerWaitFrame(HostFramePacer *pacer,
+                                    double work_start_tick, int work_first) {
   LARGE_INTEGER now;
   QueryPerformanceCounter(&now);
+  const double before_wait = (double)now.QuadPart;
+  pacer->wait_start_tick = before_wait;
+  const double ticks_per_ms = (double)pacer->frequency.QuadPart / 1000.0;
+  pacer->pending_wait_timeout = 0;
+  pacer->pending_late_ms = 0.0;
+  if (work_first)
+    pacer->pending_work_ms = (before_wait - work_start_tick) / ticks_per_ms;
+  pacer->pending_gap_ms = pacer->last_presented_tick > 0.0
+      ? (before_wait - pacer->last_presented_tick) / ticks_per_ms -
+            (work_first ? pacer->pending_work_ms : 0.0)
+      : 0.0;
+  HostPaceMode mode = pacer->mode;
+  if (mode == kHostPaceWaitable && s_window_minimized) {
+    /* A minimized flip-model window stops consuming presents for a while
+     * before DXGI throttles it; park on the timer instead of timing out
+     * (nothing is presented while minimized). */
+    if (!pacer->minimized_pacing) {
+      pacer->minimized_pacing = 1;
+      pacer->next_present_tick = before_wait;
+    }
+    mode = kHostPaceTimer;
+  } else if (pacer->minimized_pacing) {
+    pacer->minimized_pacing = 0;
+  }
+  switch (mode) {
+    case kHostPaceWaitable:
+      if (!HostD3DWaitForSlot(250)) {
+        pacer->pending_wait_timeout = 1;
+        pacer->overruns++;
+      }
+      break;
+    case kHostPaceDwmFlush: {
+      int passes = pacer->divisor > 0 ? pacer->divisor : 1;
+      if (FrameGenExtraRefresh() && passes >= 2) passes /= 2;
+      for (int i = 0; i < passes; i++) {
+        if (!pacer->dwm_flush || FAILED(pacer->dwm_flush())) {
+          pacer->pending_wait_timeout = 1;
+          pacer->overruns++;
+          break;
+        }
+      }
+      break;
+    }
+    default: {
+      double target = pacer->next_present_tick + pacer->period_ticks;
+      if (before_wait > target) {
+        /* Missed deadline: give the next frame a complete interval from
+         * now rather than chasing the schedule with a short frame. */
+        pacer->pending_late_ms = (before_wait - target) / ticks_per_ms;
+        pacer->overruns++;
+        target = before_wait;
+      }
+      pacer->next_present_tick = target;
+      HostFramePacerWaitUntil(pacer, target);
+      break;
+    }
+  }
+  QueryPerformanceCounter(&now);
+  pacer->wake_tick = (double)now.QuadPart;
+  pacer->pending_wait_ms = (pacer->wake_tick - before_wait) / ticks_per_ms;
+  /* In wait-first modes the present-call spacing absorbs work variance;
+   * the slot cadence is the spacing of the wait returns. */
+  pacer->pending_wake_interval_ms = pacer->last_wake_tick > 0.0
+      ? (pacer->wake_tick - pacer->last_wake_tick) / ticks_per_ms : 0.0;
+  pacer->last_wake_tick = pacer->wake_tick;
+}
+
+static void HostFramePacerBeginPresent(HostFramePacer *pacer,
+                                       int work_first) {
+  LARGE_INTEGER now;
+  QueryPerformanceCounter(&now);
+  const double ticks_per_ms = (double)pacer->frequency.QuadPart / 1000.0;
   pacer->pending_submit_tick = (double)now.QuadPart;
   pacer->pending_submit_interval_ms = pacer->last_submit_tick > 0.0
-      ? (pacer->pending_submit_tick - pacer->last_submit_tick) * 1000.0 /
-            (double)pacer->frequency.QuadPart
+      ? (pacer->pending_submit_tick - pacer->last_submit_tick) / ticks_per_ms
       : 0.0;
-  pacer->pending_submit_error_ms =
-      (pacer->pending_submit_tick - pacer->next_present_tick) * 1000.0 /
-      (double)pacer->frequency.QuadPart;
+  if (pacer->mode == kHostPaceTimer) {
+    pacer->pending_submit_error_ms =
+        (pacer->pending_submit_tick - pacer->next_present_tick) /
+        ticks_per_ms;
+  } else {
+    pacer->pending_submit_error_ms = 0.0;
+  }
+  if (!work_first) {
+    /* Wait-first: the frame's budget runs from the slot signal to this
+     * present; exceeding one period means the image misses its refresh. */
+    pacer->pending_work_ms =
+        (pacer->pending_submit_tick - pacer->wake_tick) / ticks_per_ms;
+    const double budget_ms = pacer->period_ticks / ticks_per_ms;
+    if (pacer->pending_work_ms > budget_ms) {
+      pacer->pending_late_ms = pacer->pending_work_ms - budget_ms;
+      pacer->overruns++;
+    }
+  }
   pacer->last_submit_tick = pacer->pending_submit_tick;
 }
 
@@ -1686,17 +2150,20 @@ static void HostFramePacerPresented(HostFramePacer *pacer, long host_frame) {
   LARGE_INTEGER now;
   QueryPerformanceCounter(&now);
   const double present_tick = (double)now.QuadPart;
+  const double ticks_per_ms = (double)pacer->frequency.QuadPart / 1000.0;
   const double interval_ms = pacer->last_present_tick > 0.0
-      ? (present_tick - pacer->last_present_tick) * 1000.0 /
-            (double)pacer->frequency.QuadPart
-      : 0.0;
+      ? (present_tick - pacer->last_present_tick) / ticks_per_ms : 0.0;
   const double present_ms =
-      (present_tick - pacer->pending_submit_tick) * 1000.0 /
-      (double)pacer->frequency.QuadPart;
+      (present_tick - pacer->pending_submit_tick) / ticks_per_ms;
   pacer->last_present_tick = present_tick;
   pacer->frames++;
+  if (pacer->log && s_presenter_d3d) HostD3DScanout(&pacer->scanout);
+  else memset(&pacer->scanout, 0, sizeof pacer->scanout);
+  QueryPerformanceCounter(&now);
+  pacer->pending_stats_ms = ((double)now.QuadPart - present_tick) / ticks_per_ms;
   if (pacer->log) {
-    fprintf(pacer->log,
+    const HostScanoutStats *scan = &pacer->scanout;
+    HostPacingLogWrite(pacer->async_log,
             "{\"frame\":%ld,\"work_ms\":%.4f,\"wait_ms\":%.4f,"
             "\"late_ms\":%.4f,\"present_interval_ms\":%.4f,"
             "\"submit_interval_ms\":%.4f,\"submit_error_ms\":%.4f,"
@@ -1705,7 +2172,32 @@ static void HostFramePacerPresented(HostFramePacer *pacer, long host_frame) {
             "\"diagnostics_ms\":%.4f,\"audio_ms\":%.4f,"
             "\"audio_queued_frames\":%d,\"audio_starvations\":%lu,"
             "\"audio_drops\":%lu,\"audio_ring_frames\":%lu,"
-            "\"audio_internal_underflows\":%llu,\"overruns\":%lu}\n",
+            "\"audio_internal_underflows\":%llu,"
+            "\"framegen\":%d,\"interp_ms\":%.4f,\"interp_valid\":%d,"
+            "\"interp_reject\":\"%s\",\"sprites_exact\":%u,"
+            "\"sprites_actor\":%u,\"sprites_nearest\":%u,"
+            "\"sprites_unmatched\":%u,\"actors_tracked\":%u,"
+            "\"poses_changed\":%u,\"sprites_tween\":%u,\"tween_rects\":%u,"
+            "\"tween_cells\":%u,\"tween_moved\":%u,\"tween_pixels\":%u,"
+            "\"pose_actors\":%u,\"pose_pixels\":%u,\"pose_mismatch\":%u,"
+            "\"pose_source_frame\":%d,"
+            "\"max_scroll_step\":%d,\"mid_presented\":%d,"
+            "\"mid_skips\":%lu,\"mid_submit_error_ms\":%.4f,"
+            "\"mid_present_ms\":%.4f,\"mid_after_frame\":%ld,"
+            "\"real_to_mid_ms\":%.4f,\"mid_to_real_ms\":%.4f,"
+            "\"wait_timeout\":%d,\"present_count\":%u,"
+            "\"stat_valid\":%d,\"stat_present_count\":%u,"
+            "\"stat_present_refresh\":%u,\"stat_sync_refresh\":%u,"
+            "\"stat_sync_qpc_ms\":%.4f,\"stat_disjoint\":%d,"
+            "\"stat_lag_presents\":%d,\"pump_ms\":%.4f,\"slow_msg\":%u,"
+            "\"slow_msg_ms\":%.4f,\"stats_ms\":%.4f,\"gap_ms\":%.4f,"
+            "\"wake_interval_ms\":%.4f,\"interp_steps\":%llu,"
+            "\"tier_hits\":%ld,\"interp_bank\":%u,"
+            "\"interp_bank_steps\":%llu,\"overruns\":%lu,"
+            "\"submit_qpc_ms\":%.4f,\"present_end_qpc_ms\":%.4f,"
+            "\"wait_start_qpc_ms\":%.4f,\"wake_qpc_ms\":%.4f,"
+            "\"loop_start_qpc_ms\":%.4f,\"previous_log_ms\":%.4f,"
+            "\"log_dropped\":%u}\n",
             host_frame, pacer->pending_work_ms, pacer->pending_wait_ms,
             pacer->pending_late_ms, interval_ms,
             pacer->pending_submit_interval_ms,
@@ -1715,14 +2207,77 @@ static void HostFramePacerPresented(HostFramePacer *pacer, long host_frame) {
             pacer->pending_audio_ms, s_audio_last_queued_frames,
             s_audio_starvations, s_audio_drops, s_audio_ring_frames,
             s_audio_internal_underflows,
-            pacer->overruns);
+            FrameGenActive(), pacer->pending_interp_ms,
+            s_framegen_last_valid,
+            s_framegen_stats.reject ? s_framegen_stats.reject : "",
+            s_framegen_stats.sprites_exact, s_framegen_stats.sprites_actor,
+            s_framegen_stats.sprites_nearest,
+            s_framegen_stats.sprites_unmatched,
+            s_framegen_stats.actors_tracked,
+            s_framegen_stats.poses_changed,
+            s_framegen_stats.sprites_tween, s_framegen_stats.tween_rects,
+            s_framegen_stats.tween_cells, s_framegen_stats.tween_moved,
+            s_framegen_stats.tween_pixels,
+            s_framegen_stats.pose_actors, s_framegen_stats.pose_pixels,
+            s_framegen_stats.pose_mismatch,
+            s_framegen_stats.pose_source_frame,
+            s_framegen_stats.max_scroll_step,
+            pacer->pending_mid_presented, pacer->mid_skips,
+            pacer->pending_mid_submit_error_ms,
+            pacer->pending_mid_present_ms, pacer->pending_mid_after_frame,
+            pacer->pending_real_to_mid_ms,
+            pacer->pending_mid_presented
+                ? (pacer->pending_submit_tick -
+                   pacer->pending_mid_submit_tick) / ticks_per_ms
+                : 0.0,
+            pacer->pending_wait_timeout, scan->present_count, scan->valid,
+            scan->displayed_count, scan->displayed_refresh,
+            scan->sync_refresh,
+            (double)scan->sync_qpc / ticks_per_ms, scan->disjoint,
+            scan->valid ? (int)(scan->present_count - scan->displayed_count)
+                        : 0,
+            pacer->pending_pump_ms, pacer->pending_slow_msg,
+            pacer->pending_slow_msg_ms, pacer->pending_stats_ms,
+            pacer->pending_gap_ms, pacer->pending_wake_interval_ms,
+            pacer->pending_interp_steps, pacer->pending_tier_hits,
+            pacer->pending_interp_bank, pacer->pending_interp_bank_steps,
+            pacer->overruns, pacer->pending_submit_tick / ticks_per_ms,
+            present_tick / ticks_per_ms, pacer->wait_start_tick / ticks_per_ms,
+            pacer->wake_tick / ticks_per_ms, pacer->loop_start_tick / ticks_per_ms,
+            pacer->pending_log_ms, pacer->async_log->dropped);
+    pacer->pending_mid_submit_error_ms = 0.0;
+    pacer->pending_mid_present_ms = 0.0;
+    pacer->pending_mid_presented = 0;
+    pacer->pending_interp_ms = 0.0;
   }
+  QueryPerformanceCounter(&now);
+  pacer->pending_log_ms = ((double)now.QuadPart - present_tick) / ticks_per_ms -
+                          pacer->pending_stats_ms;
+  /* Include statistics and logging in the next gap: no unmeasured hole. */
+  pacer->last_presented_tick = present_tick;
+}
+
+/* The Direct3D device was lost mid-run: continue with GDI on the
+ * compositor-flush clock (or the timer when DWM is unavailable). */
+static void HostFramePacerFallBackToGdi(HostFramePacer *pacer) {
+  CancelMidPresent();
+  s_presenter_d3d = 0;
+  if (pacer->mode == kHostPaceWaitable)
+    pacer->mode = pacer->dwm_flush ? kHostPaceDwmFlush : kHostPaceTimer;
+  HostFramePacerReset(pacer);
+  snprintf(s_host_status, sizeof s_host_status,
+           "Direct3D presenter lost (%.100s); using GDI on %s pacing",
+           s_d3d.error, HostPaceModeName(pacer->mode));
+  HostD3DShutdown();
+  InvalidateRect(s_window, NULL, FALSE);
+  UpdateDebugTitle();
 }
 
 static void HostFramePacerClose(HostFramePacer *pacer) {
   if (pacer->log) {
-    fflush(pacer->log);
-    fclose(pacer->log);
+    HostPacingLogClose(pacer->async_log);
+    pacer->async_log = NULL;
+    pacer->log = NULL;
     s_audio_log_stats = 0;
   }
   if (pacer->timer) CloseHandle(pacer->timer);
@@ -1731,6 +2286,11 @@ static void HostFramePacerClose(HostFramePacer *pacer) {
 }
 
 int main(int argc, char **argv) {
+  /* Before any window or device context exists: per-monitor DPI
+   * awareness (otherwise DWM bitmap-stretches the window at >100%
+   * scaling) and an opt-out from power throttling. */
+  s_dpi_awareness_mode = HostInitDpiAwareness();
+  HostDisablePowerThrottling();
   InitBuildIdentity();
   /* Contain default-named tier2 discovery captures instead of littering
    * the working directory; explicit env settings are respected. */
@@ -1935,10 +2495,27 @@ int main(int argc, char **argv) {
   RegisterClassA(&wc);
 
   s_menu = BuildMenuBar();
-  RECT rect = { 0, 0,
-                s_width * kScale + (s_panel_enabled ? kPanelWidth : 0),
-                s_height * kScale };
-  AdjustWindowRect(&rect, kWindowedStyle, TRUE);
+  {
+    const char *scaling = getenv("DKC1_SCALING");
+    if (scaling && *scaling) {
+      if (_stricmp(scaling, "nearest") == 0)
+        s_scaling_mode = kHostScalingNearest;
+      else if (_stricmp(scaling, "linear") == 0)
+        s_scaling_mode = kHostScalingLinear;
+      else
+        s_scaling_mode = kHostScalingSharp;
+    }
+    s_square_pixels = EnvironmentEnabled("DKC1_SQUARE_PIXELS");
+  }
+  s_dpi = HostWindowDpi(NULL);  /* primary monitor until the window exists */
+  s_window_scale = HostWindowScaleForDpi(s_dpi);
+  RECT rect;
+  {
+    int width, height;
+    HostWindowedClientSize(&width, &height);
+    SetRect(&rect, 0, 0, width, height);
+    AdjustWindowRectForHostDpi(&rect);
+  }
   s_window = CreateWindowA(
       wc.lpszClassName,
       "DKC1Recomp — Z=B  X=Y  S=A  A=X  Q/W=L/R  Enter=Start  Esc=quit",
@@ -1950,6 +2527,10 @@ int main(int argc, char **argv) {
   SetWindowPos(s_window, NULL, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
                    SWP_FRAMECHANGED);
+  /* The window's own monitor may differ from the primary. */
+  s_dpi = HostWindowDpi(s_window);
+  s_window_scale = HostWindowScaleForDpi(s_dpi);
+  ApplyWindowedSize();
   UpdateDebugTitle();
 
   memset(&s_bmi, 0, sizeof s_bmi);
@@ -1962,6 +2543,50 @@ int main(int argc, char **argv) {
 
   AudioInit();
 
+  {
+    /* Direct3D 11 flip-model presenter unless DKC1_PRESENTER=gdi or the
+     * device cannot be created; the GDI path stays as the fallback. */
+    const char *presenter = getenv("DKC1_PRESENTER");
+    const int want_gdi = presenter && _stricmp(presenter, "gdi") == 0;
+    s_presenter_d3d = !want_gdi && HostD3DInit(s_window);
+    if (!s_presenter_d3d) {
+      if (!want_gdi && s_d3d.error[0])
+        snprintf(s_host_status, sizeof s_host_status,
+                 "GDI presenter (%.200s)", s_d3d.error);
+      else if (want_gdi)
+        snprintf(s_host_status, sizeof s_host_status,
+                 "GDI presenter (DKC1_PRESENTER=gdi)");
+    }
+    if (EnvironmentEnabled("DKC1_FULLSCREEN")) SetFullscreen(1);
+  }
+
+  {
+    /* Frame generation is a presentation option: off unless asked, so the
+     * visible debugger's window captures remain real cartridge frames. */
+    const char *framegen = getenv("DKC1_FRAMEGEN");
+    s_framegen_enabled = framegen && *framegen && *framegen != '0';
+    s_framegen_force = framegen && _stricmp(framegen, "force") == 0;
+    if (s_framegen_enabled &&
+        (EnvironmentEnabled("DKC1_WS_TRACE") ||
+         EnvironmentEnabled("SNESRECOMP_WS_CACHE_LOG") ||
+         EnvironmentEnabled("SNESRECOMP_WS_RETRODICT"))) {
+      /* The in-between render serves margin tiles a second time, which
+       * would double-count in the widescreen evidence taps. */
+      s_framegen_enabled = 0;
+      snprintf(s_host_status, sizeof s_host_status,
+               "frame generation disabled: widescreen evidence taps armed");
+    }
+    const char *dump_start = getenv("DKC1_FRAMEGEN_DUMP_START");
+    const char *dump_count = getenv("DKC1_FRAMEGEN_DUMP_COUNT");
+    if (dump_start && *dump_start) {
+      s_framegen_dump_start = strtol(dump_start, NULL, 10);
+      s_framegen_dump_count =
+          dump_count && *dump_count ? strtol(dump_count, NULL, 10) : 1;
+    }
+  }
+
+  /* Raise the emulation thread before the pacer records its identity. */
+  s_priority_mode = HostRaiseThreadPriority(&s_mmcss_handle);
   HostFramePacer pacer;
   if (!HostFramePacerInit(&pacer)) {
     MessageBoxA(s_window, "high-resolution clock unavailable",
@@ -1971,15 +2596,67 @@ int main(int argc, char **argv) {
   }
   LARGE_INTEGER freq;
   freq = pacer.frequency;
+  ApplyFrameGenSetting();
+  UpdateDebugTitle();
+
+  {
+    /* Optional presenter warm-up.  About 1.5 s after a flip-model window
+     * starts presenting, the desktop compositor changes its presentation
+     * path once (a 60-80 ms Present stall was measured on this machine's
+     * displays).  Evidence runs can absorb that transition before frame 1
+     * by presenting the initial framebuffer for a while first; emulation,
+     * audio and the pacing log all start afterwards. */
+    const char *warm_text = getenv("DKC1_PRESENT_WARMUP_MS");
+    long warm_ms = warm_text && *warm_text ? strtol(warm_text, NULL, 10) : 0;
+    if (warm_ms > 5000) warm_ms = 5000;
+    if (warm_ms > 0 && !s_paused) {
+      const ULONGLONG until = GetTickCount64() + (ULONGLONG)warm_ms;
+      while (s_running && GetTickCount64() < until) {
+        MSG msg;
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+          TranslateMessage(&msg);
+          DispatchMessage(&msg);
+        }
+        HostFramePacerWaitFrame(&pacer, 0.0, 1);
+        PresentFrame(s_pixels, 1, HostFramePacerSyncInterval(&pacer, 0));
+        if (s_presenter_d3d && !s_d3d.active)
+          HostFramePacerFallBackToGdi(&pacer);
+      }
+      HostFramePacerReset(&pacer);
+      pacer.overruns = 0;
+      snprintf(s_host_status, sizeof s_host_status,
+               "presenter warmed for %ld ms before frame 1", warm_ms);
+    }
+  }
 
   while (s_running) {
     LARGE_INTEGER work_start;
     QueryPerformanceCounter(&work_start);
     double phase_tick = (double)work_start.QuadPart;
-    MSG msg;
-    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-      TranslateMessage(&msg);
-      DispatchMessage(&msg);
+    pacer.loop_start_tick = phase_tick;
+    {
+      /* Time the pump and remember the slowest message: a blocking
+       * handler shows up here rather than in work or wait. */
+      MSG msg;
+      LARGE_INTEGER pump_start, msg_start, msg_end;
+      QueryPerformanceCounter(&pump_start);
+      pacer.pending_slow_msg = 0;
+      pacer.pending_slow_msg_ms = 0.0;
+      while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+        QueryPerformanceCounter(&msg_start);
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+        QueryPerformanceCounter(&msg_end);
+        const double ms = (double)(msg_end.QuadPart - msg_start.QuadPart) *
+                          1000.0 / (double)freq.QuadPart;
+        if (ms > pacer.pending_slow_msg_ms) {
+          pacer.pending_slow_msg_ms = ms;
+          pacer.pending_slow_msg = msg.message;
+        }
+      }
+      QueryPerformanceCounter(&msg_end);
+      pacer.pending_pump_ms = (double)(msg_end.QuadPart - pump_start.QuadPart) *
+                              1000.0 / (double)freq.QuadPart;
     }
     if (!s_running) break;
 
@@ -2041,7 +2718,10 @@ int main(int argc, char **argv) {
                  "quick load declined (build mismatch)");
       } else {
         const int loaded = RtlLoadSnapshot("quicksave.state");
-        if (loaded) AudioResetTimeline();
+        if (loaded) {
+          AudioResetTimeline();
+          ForgetFrameGenHistory();
+        }
         char recorder_error[256];
         const int reanchored = !loaded ||
             Dkc1FlightRecorderReanchorAfterStateLoad(
@@ -2066,7 +2746,10 @@ int main(int argc, char **argv) {
       }
       const int accepted = save_op ? RtlSaveSnapshot(s_pending_state_path)
                                    : RtlLoadSnapshot(s_pending_state_path);
-      if (!save_op && accepted) AudioResetTimeline();
+      if (!save_op && accepted) {
+        AudioResetTimeline();
+        ForgetFrameGenHistory();
+      }
       if (save_op && accepted)
         WriteStateBuildInfo(s_pending_state_path);
       char recorder_error[256];
@@ -2094,17 +2777,19 @@ int main(int argc, char **argv) {
 
     if (s_paused && !s_step_once) {
       ResolvePixelInspect();
-      HDC dc = GetDC(s_window);
-      PresentFrame(dc);
-      ReleaseDC(s_window, dc);
       HostFramePacerReset(&pacer);
-      Sleep(16);
+      HostFramePacerWaitFrame(&pacer, (double)work_start.QuadPart, 1);
+      PresentFrame(s_smooth_valid ? s_smooth_pixels : s_pixels, 1,
+                   HostFramePacerSyncInterval(&pacer, 0));
+      if (s_presenter_d3d && !s_d3d.active)
+        HostFramePacerFallBackToGdi(&pacer);
       continue;
     }
 
     Dkc1ScriptOps script_ops = {0};
     uint32_t input = 0;
     int run_frame = 1;
+    int poll_manual = 0;
     if (s_route_frame_limit > 0 && s_host_frame >= s_route_frame_limit) {
       SetRouteTerminal(0, "complete",
                        "frame limit reached; paused for inspection");
@@ -2132,6 +2817,7 @@ int main(int argc, char **argv) {
           continue;
         }
         AudioResetTimeline();
+        ForgetFrameGenHistory();
         if (!Dkc1FlightRecorderReanchorAfterStateLoad(
                 s_host_frame, recorder_error, sizeof recorder_error)) {
           snprintf(message, sizeof message,
@@ -2166,7 +2852,7 @@ int main(int argc, char **argv) {
       input = Dkc1InputPlaybackFrame(&s_input_playback,
                                       (size_t)s_host_frame);
     } else {
-      input = PollInput();
+      poll_manual = 1;
     }
 
     if (!run_frame) {
@@ -2174,10 +2860,40 @@ int main(int argc, char **argv) {
       continue;
     }
 
+    /* Compositor-locked modes wait for the slot first so the controller is
+     * sampled as late as possible; timer mode and the 120 Hz frame
+     * generation pair keep the deterministic work-first ordering. */
+    const int work_first =
+        pacer.mode == kHostPaceTimer || FrameGenExtraRefresh();
+    if (!work_first) {
+      HostFramePacerWaitFrame(&pacer, (double)work_start.QuadPart, 0);
+      QueryPerformanceCounter(&work_start);
+      phase_tick = (double)work_start.QuadPart;
+    }
+    if (poll_manual) input = PollInput();
+
     s_last_input = input;
     Dkc1DebugRecordInput(input);
     pacer.pending_setup_ms = HostFramePacerPhaseMs(&pacer, &phase_tick);
-    RtlRunFrame(input);
+    {
+      const unsigned long long steps_before = interp_bridge_steps_total();
+      const long tier_before = interp_tier_hit_count();
+      const unsigned long long *banks = interp_bridge_bank_steps();
+      memcpy(pacer.interp_bank_before, banks, sizeof pacer.interp_bank_before);
+      RtlRunFrame(input);
+      pacer.pending_interp_steps = interp_bridge_steps_total() - steps_before;
+      pacer.pending_tier_hits = interp_tier_hit_count() - tier_before;
+      pacer.pending_interp_bank = 0;
+      pacer.pending_interp_bank_steps = 0;
+      for (unsigned bank = 0; bank < 256; bank++) {
+        const unsigned long long delta =
+            banks[bank] - pacer.interp_bank_before[bank];
+        if (delta > pacer.pending_interp_bank_steps) {
+          pacer.pending_interp_bank_steps = delta;
+          pacer.pending_interp_bank = bank;
+        }
+      }
+    }
     pacer.pending_emulation_ms = HostFramePacerPhaseMs(&pacer, &phase_tick);
     if (g_fail) {
       MessageBoxA(s_window, "runtime failure (off-rails execution)",
@@ -2193,6 +2909,26 @@ int main(int argc, char **argv) {
     }
     Dkc1DrawPpuFrame();
     pacer.pending_render_ms = HostFramePacerPhaseMs(&pacer, &phase_tick);
+    /* In-between frame: a second, host-only render of this frame's scene at
+     * positions halfway back toward the previous frame. Skipped while a
+     * click inspect or provenance overlay needs the real render's
+     * provenance surface to stay intact. */
+    int mid_valid = 0;
+    s_smooth_valid = 0;
+    s_framegen_last_valid = 0;
+    memset(&s_framegen_stats, 0, sizeof s_framegen_stats);
+    if (FrameGenActive() && !s_inspect_pending && !s_step_once &&
+        !Dkc1DebugProvenanceOverlay() && Dkc1DebugLayerMask() == 0xff) {
+      if (FrameGenExtraRefresh())
+        mid_valid = Dkc1DrawInterpolatedFrame(s_mid_pixels, (size_t)s_width * 4,
+                                            &s_framegen_stats) ? 1 : 0;
+      Dkc1DrawSmoothedFrames(s_pixels, s_smooth_pixels, s_mid_pixels,
+                            mid_valid != 0, &s_framegen_stats);
+      mid_valid = FrameGenExtraRefresh();
+      s_smooth_valid = 1;
+      s_framegen_last_valid = mid_valid;
+    }
+    pacer.pending_interp_ms = HostFramePacerPhaseMs(&pacer, &phase_tick);
     s_host_frame++;
     Dkc1BlankScanFrame(s_host_frame, s_pixels, s_width, s_height,
                        Dkc1VideoTerrainReady());
@@ -2242,22 +2978,92 @@ int main(int argc, char **argv) {
           (double)freq.QuadPart;
       if (elapsed >= 0.5) {
         s_fps_value = fps_frames / elapsed;
+        s_present_fps_value = s_present_frames_window / elapsed;
         fps_frames = 0;
+        s_present_frames_window = 0;
         fps_anchor = fps_now;
       }
     }
 
-    HostFramePacerWaitForPresent(&pacer, (double)work_start.QuadPart);
-    HDC dc = GetDC(s_window);
-    HostFramePacerBeginPresent(&pacer);
-    PresentFrame(dc);
-    ReleaseDC(s_window, dc);
+    /* The half-frame worker must have presented before this thread waits
+     * for its own slot: that fixes the order F, F+0.5, F+1. */
+    CollectMidPresent(&pacer);
+    if (work_first)
+      HostFramePacerWaitFrame(&pacer, (double)work_start.QuadPart, 1);
+    HostFramePacerBeginPresent(&pacer, work_first);
+    PresentFrame(s_smooth_valid ? s_smooth_pixels : s_pixels, 1,
+                 HostFramePacerSyncInterval(&pacer, 0));
     HostFramePacerPresented(&pacer, s_host_frame);
-    if ((s_host_frame % 15) == 0) UpdateDebugTitle();
+    s_present_frames_window++;
+    if (s_presenter_d3d && !s_d3d.active)
+      HostFramePacerFallBackToGdi(&pacer);
+    else if (FrameGenExtraRefresh() && mid_valid)
+      ScheduleMidPresent(&pacer, s_mid_pixels);
+    if (s_framegen_dump_count > 0 && s_host_frame >= s_framegen_dump_start &&
+        s_host_frame < s_framegen_dump_start + s_framegen_dump_count) {
+      /* Raw N-1/N plus delayed display F and its following midpoint F+0.5. */
+      const char *dir = getenv("DKC1_FRAMEGEN_DUMP_DIR");
+      if (!dir || !*dir) dir = "build/framegen-dump";
+      _mkdir(dir);
+      char path[1024];
+      if (s_prev_pixels_valid) {
+        snprintf(path, sizeof path, "%s/frame%06ld_prev.ppm", dir,
+                 s_host_frame);
+        WritePpm(path, s_prev_pixels, s_width, s_height);
+      }
+      if (mid_valid) {
+        snprintf(path, sizeof path, "%s/frame%06ld_mid.ppm", dir,
+                 s_host_frame);
+        WritePpm(path, s_mid_pixels, s_width, s_height);
+      }
+      snprintf(path, sizeof path, "%s/frame%06ld_cur.ppm", dir, s_host_frame);
+      WritePpm(path, s_pixels, s_width, s_height);
+      snprintf(path, sizeof path, "%s/frame%06ld_display.ppm", dir, s_host_frame);
+      WritePpm(path, s_smooth_valid ? s_smooth_pixels : s_pixels, s_width, s_height);
+      snprintf(path, sizeof path, "%s/frame%06ld.json", dir, s_host_frame);
+      FILE *meta = fopen(path, "wb");
+      if (meta) {
+        fprintf(meta,
+                "{\"host_frame\":%ld,\"framegen\":%d,\"interp_valid\":%d,"
+                "\"reject\":\"%s\",\"sprites_exact\":%u,"
+                "\"sprites_actor\":%u,\"sprites_nearest\":%u,"
+                "\"sprites_unmatched\":%u,\"actors_tracked\":%u,"
+                "\"poses_changed\":%u,\"sprites_tween\":%u,"
+                "\"tween_rects\":%u,\"pose_actors\":%u,\"pose_pixels\":%u,"
+                "\"pose_mismatch\":%u,\"pose_source_frame\":%d,"
+                "\"camera_dx\":%d,\"camera_dy\":%d,\"max_scroll_step\":%d}\n",
+                s_host_frame, FrameGenActive(), mid_valid,
+                s_framegen_stats.reject ? s_framegen_stats.reject : "",
+                s_framegen_stats.sprites_exact,
+                s_framegen_stats.sprites_actor,
+                s_framegen_stats.sprites_nearest,
+                s_framegen_stats.sprites_unmatched,
+                s_framegen_stats.actors_tracked,
+                s_framegen_stats.poses_changed,
+                s_framegen_stats.sprites_tween, s_framegen_stats.tween_rects,
+                s_framegen_stats.pose_actors, s_framegen_stats.pose_pixels,
+                s_framegen_stats.pose_mismatch, s_framegen_stats.pose_source_frame,
+                s_framegen_stats.camera_dx, s_framegen_stats.camera_dy,
+                s_framegen_stats.max_scroll_step);
+        fclose(meta);
+      }
+    }
+    memcpy(s_prev_pixels, s_pixels, (size_t)s_width * (size_t)s_height * 4);
+    s_prev_pixels_valid = 1;
+    if ((s_host_frame % 60) == 0) UpdateDebugTitle();
     s_step_once = 0;
 
   }
 
+  CloseMidPresenter();
+  /* Flush the pacing evidence before any presenter teardown can fault. */
+  HostFramePacerClose(&pacer);
+  if (pacer.log || EnvironmentEnabled("DKC1_INTERP_HOTSPOTS"))
+    ReportInterpreterHotspots();
+  HostD3DShutdown();
+  HostSurfaceFree(&s_panel_surface);
+  HostSurfaceFree(&s_badge_surface);
+  HostReleaseThreadPriority(s_mmcss_handle);
   if (s_waveout) {
     waveOutReset(s_waveout);
     waveOutClose(s_waveout);
@@ -2273,7 +3079,6 @@ int main(int argc, char **argv) {
     WriteRouteResult("aborted");
   Dkc1ScriptFree();
   Dkc1InputPlaybackFree(&s_input_playback);
-  HostFramePacerClose(&pacer);
   free(rom);
   return 0;
 }

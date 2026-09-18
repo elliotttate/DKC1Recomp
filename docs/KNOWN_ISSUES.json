@@ -237,6 +237,36 @@
       "expected": "Complete connected, source-aligned environment coverage without hard changes between replacement and older materials; preserve exact source context matching and guest behavior.",
       "first_seen": "2026-09-07",
       "mitigation_note": "Private connected-world pack verifies every source subtile and preserves guest hashes; visible BG misses are zero on the native exit route and bounded wide route. Offline source-constrained matte cleanup removes tested DK/Diddy gray fringes. A focused Nano revision restores the floating life-balloon face in 27 source frames and 54 facing keys; native red-balloon QA and bounded replays are documented in docs/HD_BALLOON_FACE_REVIEW.md. A later saved-state scrolling fix keeps verified connected subtiles stable while exact fallback fills only unresolved neighbors; see docs/HD_NANO_POPIN_REVIEW.md. The same-pack motion diagnostic drops stable-source changes from 29714 to 4914, with zero visible background misses on the final exact-state route. Unseen object composites and unsupported rooms still fall back; no full-game visual acceptance or release-default promotion. The later left-doorway patch was a partial-left ring-period binding error, corrected in the opt-in connected renderer; exact/fresh evidence and remaining coverage misses are recorded in docs/HD_NANO_LEFT_EDGE_REVIEW.md. Jungle Bonus 1 now has a separately registered Nano terrain/backdrop/foreground pack, correct uniform cave color math and OBJ palette exemption, plus verified Jungle return selection. See docs/HD_NANO_BONUS_REVIEW.md; remaining original composites and other rooms keep this issue open."
+    },
+    {
+      "id": "framegen-held-poses-and-half-period-budget",
+      "status": "fixed",
+      "summary": "Opt-in Windows frame generation left held character poses unchanged at 60 Hz; synchronous midpoint scheduling also skipped 120 Hz images when pose rendering exceeded half a game period. Fixed within the verified Jungle scope.",
+      "repro": "tools/verify_framegen.py; exact and fresh-entry schedules in docs/FRAMEGEN_REVIEW.md",
+      "evidence": "build/framegen-audit-20260918/accepted-native/report.json; build/framegen-audit-20260918/accepted-wide/report.json; build/framegen-audit-20260918/accepted-fresh-entry/report.json; build/framegen-audit-20260918/accepted-long-timing/report.json",
+      "expected": "Optional buffered interpolation fills supported held poses and 120 Hz midpoint slots while preserving raw cartridge frames and guest state.",
+      "first_seen": "2026-09-18",
+      "fixed_note": "Four-frame look-ahead over decoded OAM artwork, exact composite gate, fractional pose sampling and an immutable-image midpoint worker. Three deterministic replays per mode/branch pass; 1341/1341 long-run midpoints submitted without skips or audio errors. Physical 120 Hz and full-game artwork coverage remain unverified; unsupported/overlapping groups keep raw artwork. See docs/FRAMEGEN_REVIEW.md."
+    },
+    {
+      "id": "framegen-background-scroll-quantization",
+      "status": "fixed",
+      "summary": "Whole-pixel BG scroll caused uneven parallax steps in optional Windows frame generation. Fractional per-layer sampling fixes the measured Jungle running paths; other layouts are not certified.",
+      "repro": "docs/BACKGROUND_PACING_REVIEW.md; cleared-run.dks from the preserved user root, with independent fresh-entry replay",
+      "evidence": "docs/BACKGROUND_SMOOTHING_REVIEW.md; build/bg-smooth-20260918/accepted60-captures.json; build/bg-smooth-20260918/captures.json; build/bg-smooth-20260918/candidate-1-motion-120-60.json; build/bg-smooth-20260918/fresh-motion-420-60.json",
+      "expected": "Optional generated background phases advance each layer fractionally at its own velocity, preserving raw cartridge output and failing closed on unsupported composition.",
+      "first_seen": "2026-09-18",
+      "fixed_note": "Existing scratch PPU passes capture isolated priority/palette planes. A centered eight-interval filter using the accepted four-frame look-ahead samples each BG fractionally, with exact composition and bounds gates. Three wide 60 Hz replays, native on/off, fresh entry and serial/worker comparisons preserve raw images and guest bytes. Independent pixel registration measures smooth BG1/BG2 motion in both directions at 60 and software 120 cadence. BG3 has synthetic coverage but insufficient visible texture for scene grading. Default-off frame generation only; this spatial fix does not close the separate Windows display-pacing issue."
+    },
+    {
+      "id": "win32-running-pacing-outliers",
+      "status": "open",
+      "summary": "Additional Windows running samples contain occasional 33-50 ms real-submission gaps despite clean median and p99 pacing; overrun re-anchoring adds a long wait after late work.",
+      "repro": "docs/BACKGROUND_PACING_REVIEW.md; fresh-running-timing-60 frame 421 and cleared-timing-0-60-3 frames 322/455",
+      "evidence": "build/background-pacing-20260918/cleared-timings.json; build/background-pacing-20260918/fresh-running-timing-60/pacing.jsonl",
+      "expected": "Bounded late-frame recovery and independently verified presentation cadence; no universal zero-drop claim from host submission intervals alone.",
+      "first_seen": "2026-09-18",
+      "mitigation_note": "User is independently fixing the Windows host/compositor path. This audit preserves the tested executable and logs without changing that code. A 2.277 ms late frame incurred 31.0844 ms additional wait and a 50.0322 ms interval. Audio-phase elapsed spikes do not isolate whether an OS call or scheduling caused the initial lateness. Physical scanout remains unverified. 2026-09-18 follow-up: the GDI/timer presenter was replaced by the Direct3D 11 flip-model presenter paced by the swap chain waitable object (docs/HOST_PACING.md, Windows presenter). Its DXGI frame statistics are the scanout oracle: in the September 18 captures every present landed on its own refresh except one 33 ms slot in a debug-panel run where the compositor itself held the image for two refreshes, and a one-time 58-81 ms Present at about 1.5 s after the first present (the compositor changing presentation path; DKC1_PRESENT_WARMUP_MS=2500 moves it before frame 1). Remaining outliers are attributable to the compositor/virtual display, not host submission."
     }
   ]
 }

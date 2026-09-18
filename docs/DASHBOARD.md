@@ -1,6 +1,6 @@
 # DKC1Recomp regression dashboard
 
-Generated 2026-09-16 18:01 UTC at commit `ee6d662-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
+Generated 2026-09-18 14:40 UTC at commit `cb8c322-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
 
 ## Contracts
 
@@ -43,5 +43,8 @@ _No sweep report; run `python tools/level_sweep.py`._
 | hd-bounce-and-left-idle-materials | fixed | Within the supported Jungle slice, enemy-bounce spin had no HD keys in either direction; chest-beating used stale right-facing drafts and missing left-facing keys, causing original-sprite fallback during idle. | `recipes/hd-bounce-right.dks, hd-bounce-left.dks, hd-idle-cycle-right.dks and hd-idle-cycle-left.dks from the private immutable HD root.` |
 | hd-material-cache-exhaustion | fixed | The private HD scene cache stopped loading materials after 4096 identities, causing installed walking poses and background chunks to fall back to original pixels. | `recipes/hd-cache-pressure.dks and the preserved tester-state warm replay; old/new divergence starts at eligible HD frame 637 in the wide route.` |
 | hd-environment-nano-coverage | open | Connected Nano scenery covers Jungle and the tested Jungle Bonus 1 cave; broader sprite/composite and other-room coverage remain incomplete. | `recipes/hd-barrel-right.dks and recipes/hd-barrel-left.dks with scene-pack-nano-environment-v7` |
+| framegen-held-poses-and-half-period-budget | fixed | Opt-in Windows frame generation left held character poses unchanged at 60 Hz; synchronous midpoint scheduling also skipped 120 Hz images when pose rendering exceeded half a game period. Fixed within the verified Jungle scope. | `tools/verify_framegen.py; exact and fresh-entry schedules in docs/FRAMEGEN_REVIEW.md` |
+| framegen-background-scroll-quantization | fixed | Whole-pixel BG scroll caused uneven parallax steps in optional Windows frame generation. Fractional per-layer sampling fixes the measured Jungle running paths; other layouts are not certified. | `docs/BACKGROUND_PACING_REVIEW.md; cleared-run.dks from the preserved user root, with independent fresh-entry replay` |
+| win32-running-pacing-outliers | open | Additional Windows running samples contain occasional 33-50 ms real-submission gaps despite clean median and p99 pacing; overrun re-anchoring adds a long wait after late work. | `docs/BACKGROUND_PACING_REVIEW.md; fresh-running-timing-60 frame 421 and cleared-timing-0-60-3 frames 322/455` |
 
 Issue lifecycle: edit `docs/KNOWN_ISSUES.json` (set status `fixed` with the fixing commit) and regenerate. A fixed issue regressing shows up here as its contract/sweep line failing.

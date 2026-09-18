@@ -946,6 +946,50 @@ floor remains unpassed because 36 required clean anchors are unavailable.
 - `DKC1_PACING_LOG` adds `audio_ratio`, `audio_fill_average`, and `audio_target_frames`. Canonical production is unchanged; only mixed host PCM is resampled. `DKC1_SCANOUT_LOG` repeat goal 0 means unqualified/non-integer cadence using target timestamps; goals 1–4 are qualified divisors.
 - Flight bundles and post-failure input tails preserve both controllers as six-digit masks. The verifier accepts both historical three-digit and new six-digit masks. Existing bundle schema and hashes remain valid.
 
+## September 18 Windows pose and frame generation audit
+
+The default-off Windows smoother now buffers four frames to interpolate held
+OAM artwork at 60 Hz and fractional pose/motion phases at 120 Hz. A separate
+immutable-image midpoint presenter leaves the producer a full 16.67 ms budget.
+No gameplay or widescreen policy change is involved. Unsupported composition
+and ambiguous overlapping groups retain raw artwork.
+
+`tools/verify_framegen.py` is the serial visible-host A/B/repeat/timing gate;
+its exact arguments and environment taps are in `.claude/skills/dkc1-tools/TOOLS.md`.
+Raw `_prev/_cur.ppm` images remain unmodified. `_display.ppm` is delayed F;
+`_mid.ppm` is the following F+0.5, identified by `pose_source_frame` in JSON.
+`DKC1_POSE_LOG` records artwork tracks; `pose_mismatch` records a failed
+per-surface composite oracle. Dumping is not a cadence test. The independent
+undumped `dkc1.pacing.v4` trace includes actual real-to-mid and mid-to-real
+software submission intervals and the midpoint's `mid_after_frame` identity.
+
+See `docs/FRAMEGEN_REVIEW.md` for frame-by-frame evidence, root/build/ROM hashes,
+validated scope and remaining hardware/scene coverage. `force` mode is only
+software-path proof on this machine's 60 Hz display. Animation-cadence logging
+continues to describe original cartridge poses, not the generated output.
+
+The follow-up running audit in `docs/BACKGROUND_PACING_REVIEW.md` keeps spatial
+judder separate from timing outliers. `tools/analyze_bg_frame_steps.py` seeds
+visible textured pixels from independent same-frame BG captures, follows
+exact correspondences through delayed real/mid images, and rejects ambiguous
+or insufficient texture. `--cadence 60|120` selects real-only or real/mid
+phases; JSON records signed pixel steps, matched-point counts and confidence.
+It is read-only and makes no scanout claim. Undumped timing remains a separate
+`DKC1_PACING_LOG` run; clean submission averages cannot prove smooth layers.
+
+The opt-in fractional BG stage and its exact/fresh running evidence are in
+`docs/BACKGROUND_SMOOTHING_REVIEW.md`. `DKC1_FRAMEGEN_BG=0` disables the stage;
+`DKC1_FRAMEGEN_BG_SYNC=1` selects the serial implementation for worker A/B.
+`DKC1_BG_MOTION_LOG=<path>` records source phase, processed pixels, extraction
+oracle failures and row-112 layer offsets. This log is not visual proof.
+`analyze_bg_frame_steps.py --fractional` independently fits actual displayed
+RGB to native layer references at 1/16-pixel resolution, rejecting ambiguous
+texture. `verify_framegen.py --capture-window` adds actual-window evidence only
+to dumped runs; its helper uses per-monitor DPI coordinates. The harness now
+distinguishes `frames_with_generated_poses` (nonzero actor count) from
+`frames_with_generated_pixels` (any modified pixels, including backgrounds).
+Undumped 60 Hz DXGI timing remains independent of this spatial proof.
+
 ## Mac graphics and pause-menu diagnostics (September 6, 2026)
 
 The Metal presenter now supports DKC2 Reconstruct/CRT and four phosphor profiles. Raw WS/plane/state evidence is collected before the color-copy and shader stages. Use Flat + Raw + Nearest for visible native-pixel comparison; other selected effects intentionally change visible RGB. All guest timing and tile-streaming diagnostics remain independent.

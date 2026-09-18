@@ -27,6 +27,8 @@ cl /nologo /c /MP8 /W0 /O1 %DEFS% %INCS% ^
   %SR%\snes\interp_bridge.c %SR%\snes\cx4.c ^
   ..\..\runner\dkc1_game.c ..\..\runner\dkc1_video.c ^
   ..\..\runner\dkc1_dixie_mod.c ^
+  ..\..\runner\dkc1_hd_scene.c ..\..\runner\dkc1_hd_sprites.c ^
+  ..\..\runner\dkc1_framegen.c ^
   ..\..\runner\dkc1_margin_proxy.c ^
   ..\..\runner\dkc1_ws_trace.c ^
   ..\..\runner\headless_host.c ..\..\runner\input_playback.c ^
@@ -45,7 +47,7 @@ if errorlevel 1 exit /b 1
 set LINK_RETRIES=0
 dir /b *.obj > objects.rsp
 :link_headless
-link /nologo /out:..\dkc1_headless_noadapt.exe @objects.rsp ..\main_headless.obj ws2_32.lib user32.lib
+link /nologo /out:..\dkc1_headless_noadapt.exe @objects.rsp ..\main_headless.obj ws2_32.lib user32.lib advapi32.lib
 if not errorlevel 1 goto link_desktop_begin
 set /a LINK_RETRIES+=1
 if %LINK_RETRIES% GEQ 5 exit /b 1
@@ -55,7 +57,7 @@ goto link_headless
 :link_desktop_begin
 set LINK_RETRIES=0
 :link_desktop
-link /nologo /out:..\dkc1_desktop_noadapt.exe @objects.rsp ..\main_win32.obj ws2_32.lib user32.lib gdi32.lib winmm.lib
+link /nologo /out:..\dkc1_desktop_noadapt.exe @objects.rsp ..\main_win32.obj ws2_32.lib user32.lib advapi32.lib gdi32.lib winmm.lib
 if not errorlevel 1 goto build_ok
 set /a LINK_RETRIES+=1
 if %LINK_RETRIES% GEQ 5 exit /b 1

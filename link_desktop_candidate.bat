@@ -8,6 +8,6 @@ if errorlevel 1 exit /b 1
 cd /d "%~dp0build\hostobj_tools"
 dir /b *.obj > objects.rsp
 link /nologo /out:..\dkc1_desktop_candidate.exe @objects.rsp ^
-  ..\main_win32.obj ws2_32.lib user32.lib gdi32.lib winmm.lib
+  ..\main_win32.obj ws2_32.lib user32.lib advapi32.lib gdi32.lib winmm.lib
 if errorlevel 1 exit /b 1
 echo CANDIDATE_LINK_OK
