@@ -233,6 +233,49 @@ pre-art probe: frame `07d9155e...63ed8`, WRAM `77c003d4...8e8e5`, VRAM
 `602b843f...16b`, CGRAM `3551261b...8e6`, OAM `f0cf1c33...d385`, and audio
 FNV-1a `5273b8935e1247fb`.
 
+### Candy portrait follow-up
+
+The first HD treehouse plate gave the framed Candy portrait the correct bow
+and costume colors but an invented, masculine face and head silhouette. The
+September 17 follow-up used the exact plate as its edit target and the supplied
+DKC-era Candy references for identity, then composited only the accepted
+portrait opening back into the canonical plate. Candy now retains her pale
+pink muzzle, green eyes and heavy lashes, pink eyelids and lips, blonde curls,
+polka-dot bow, brown fur, pink outfit, and hand-on-hip pose.
+
+The replacement is bounded to x=987..1044 and y=264..428 of the 1368x896
+plate. Exactly 8,904 RGB pixels changed, and an independent image difference
+found no changed pixel outside that rectangle. The wood frame, wall, room
+lighting, tire overlap, furniture, geometry, and all other room pixels are
+unchanged. The original and replacement fixed-plate hashes are:
+
+```text
+original fixed-treehouse-wide.bgra
+  715975fedddaef4724ad08f4a9b0c8ce8608466a61850f9876d3c80b519249aa
+replacement fixed-treehouse-wide.bgra
+  33ceb4a39a711449004cf6111f547380606b970fafedf1206679624cdfcb787d
+accepted plate PNG
+  4e23e778705a8172ee5be3d34c555c7e219669e238af458f378488b310c57f6
+```
+
+Generation input, the unmodified plate, accepted edit, deterministic mask,
+raw round-trip, and replay evidence are preserved under:
+
+```text
+build/hd-slice/treehouse-candy-20260917/
+```
+
+`verify-treehouse-candy-v1/results.json` passes 12 deterministic native/wide
+idle replays from the controller-derived `fresh-treehouse.state`. Every audited
+frame reports `fixed_plate="treehouse"`, zero reconstruction mismatches, and
+zero fallback pixels. The repeated wide HD result is
+`ba45bbc5b254908f5d4e013a067e27eecbf9db1423eebbcb3661d7f9b905e451`;
+WRAM, VRAM, CGRAM, OAM, and audio remain identical across all repeats. The
+rebuilt 0.0.15 app contains the replacement raw hash, passes strict deep
+codesign verification, and was inspected paused in the real 16:9 application
+window. This is a fixed-plate art correction; the 40-entrance and transition
+matrices were not rerun.
+
 ## Visible QA and review build
 
 The signed preview app is:
