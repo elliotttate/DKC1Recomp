@@ -48,6 +48,23 @@ carries every presentation change the native host introduced into it.
   pins it to 4:3. Switching mods still restarts the game: Dixie is a separate
   recompiled program and cannot be swapped inside a running process.
 
+## Packages
+
+- `DKC1Recomp-v0.0.17-Windows-x64.zip`: the Windows SDL player host
+  (`DKC1Recomp.exe`, `dkc1_dixie_desktop.exe`, `SDL2.dll`, licenses, docs,
+  `BUILDINFO.json`). Windows 10/11 x64 with Direct3D 11 feature level 10.0
+  or OpenGL 3.3.
+- `DKC1Recomp-v0.0.15-macOS-arm64-HD-Preview.zip`: the latest macOS build,
+  carried forward **unchanged** from v0.0.15 and v0.0.16 with its original
+  filename and SHA-256
+  `01c00aa8b410bacce08c08574ed6a41f649bb9e121dcef5e0447171a8953be0f`. It
+  includes that release's first-level HD preview and Dixie support and
+  requires macOS 26 on Apple Silicon. It has not been rebuilt with this
+  release's Windows presenter changes or the Dixie widescreen change.
+
+SHA-256 sidecars accompany both archives. No ROM or save state is included;
+supply the verified clean DKC1 USA v1.0 ROM described in each package.
+
 ## Source changes
 
 - `runner/windows_present.c` ports the Direct3D presenter, pacer, midpoint
