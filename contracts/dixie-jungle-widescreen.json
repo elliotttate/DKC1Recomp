@@ -1,0 +1,96 @@
+{
+  "name": "dixie-jungle-widescreen",
+  "script": "../recipes/route_jungle.dks",
+  "frames": 16000,
+  "widescreen": true,
+  "repeats": 3,
+  "budgets": {
+    "cache_oob": 0,
+    "retrodict": 0
+  },
+  "checkpoints": {
+    "level_entry": {
+      "expect": [
+        {
+          "addr": "0x003E",
+          "op": "==",
+          "value": "0x0016"
+        },
+        {
+          "addr": "0x1B25",
+          "op": ">=",
+          "value": "0x0100"
+        },
+        {
+          "addr": "0x088B",
+          "op": "<=",
+          "value": "0x0100"
+        }
+      ]
+    },
+    "camera_0200": {
+      "expect": [
+        {
+          "addr": "0x088B",
+          "op": ">=",
+          "value": "0x0200"
+        }
+      ]
+    }
+  },
+  "quickload": {
+    "state_from": "mid_level.state",
+    "script": "../recipes/route_jungle_quickload.dks",
+    "frames": 9000,
+    "widescreen": true,
+    "budgets": {
+      "cache_oob": 0,
+      "retrodict": 0
+    },
+    "checkpoints": {
+      "quickload_settled": {
+        "expect": [
+          {
+            "addr": "0x003E",
+            "op": "==",
+            "value": "0x0016"
+          },
+          {
+            "addr": "0x1B25",
+            "op": ">=",
+            "value": "0x0100"
+          },
+          {
+            "addr": "0x088B",
+            "op": ">=",
+            "value": "0x0200"
+          }
+        ]
+      },
+      "quickload_advanced": {
+        "expect": [
+          {
+            "addr": "0x088B",
+            "op": ">=",
+            "value": "0x0280"
+          }
+        ]
+      }
+    }
+  },
+  "trace": {
+    "extra": 43,
+    "require_cgram": true,
+    "expect_empty": [
+      "policy_violations",
+      "raw_fallback_frames",
+      "centered_nonblack_margin_frames",
+      "stable_input_margin_changes",
+      "stable_input_unproven_margin_changes"
+    ],
+    "minimum_decision_counts": {
+      "edge_extension": 1,
+      "centered_fallback": 1
+    }
+  }
+}

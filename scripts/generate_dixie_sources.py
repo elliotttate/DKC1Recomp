@@ -6,8 +6,10 @@ verified clean ROM (runner/dkc1_dixie_mod.c). Generation needs that same
 image as the analysis oracle, so this script applies the embedded IPS patch
 (runner/dkc1_dixie_patch.inc) with the loader's exact semantics, checks the
 pinned SHA-256, and runs generate_snesrecomp.py over recomp/dixie into
-generated/snesrecomp_dixie. Nothing derived from the ROM is written outside
-the ignored generated/ tree; the temporary image is removed afterwards.
+generated/snesrecomp_dixie, including the same fail-closed widescreen
+override pass as stock (all 34 anchors match the variant). Nothing derived
+from the ROM is written outside the ignored generated/ tree; the temporary
+image is removed afterwards.
 """
 import argparse
 import hashlib
@@ -61,6 +63,9 @@ def main() -> int:
     parser.add_argument("--rom", required=True, type=Path, help="verified clean DKC1 USA v1.0 ROM")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "generated/snesrecomp_dixie")
     parser.add_argument("--analysis-backend", default="python")
+    parser.add_argument("--no-widescreen-overrides", action="store_true",
+                        help="skip the fail-closed presentation-widescreen pass "
+                             "(the v0.0.13 native-only variant)")
     args = parser.parse_args()
     data = args.rom.read_bytes()
     if len(data) % 1024 == 512:
@@ -79,7 +84,8 @@ def main() -> int:
             sys.executable, str(ROOT / "scripts/generate_snesrecomp.py"),
             "--rom", str(rom), "--config-dir", str(ROOT / "recomp/dixie"),
             "--output-dir", str(args.output_dir),
-            "--no-widescreen-overrides", "--analysis-backend", args.analysis_backend],
+            "--analysis-backend", args.analysis_backend]
+            + (["--no-widescreen-overrides"] if args.no_widescreen_overrides else []),
             check=True)
     print(f"Generated private Dixie sources in {args.output_dir}")
     return 0

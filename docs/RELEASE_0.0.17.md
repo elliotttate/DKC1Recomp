@@ -43,6 +43,10 @@ carries every presentation change the native host introduced into it.
   `%APPDATA%/Flat2VR/DKC1Recomp/saves/save.srm`, the experimental aquatic
   widescreen opt-in, and **Mods > Dixie Kong Country** as the bundled
   `dkc1_dixie_desktop.exe` synthesized from the same clean ROM.
+- **Dixie in widescreen.** The variant's generated code now receives the
+  same fail-closed widescreen adaptations as stock, and the host no longer
+  pins it to 4:3. Switching mods still restarts the game: Dixie is a separate
+  recompiled program and cannot be swapped inside a running process.
 
 ## Source changes
 
@@ -67,6 +71,17 @@ carries every presentation change the native host introduced into it.
 
 ## Validation
 
+- Dixie 16:9: three 16,000-frame Jungle entry repeats on the new
+  `dkc1_dixie_headless.exe` are byte-identical (framebuffer, WRAM, VRAM,
+  CGRAM, OAM, audio); the 4:3 `dixie-jungle` contract still passes its entry
+  and quickload legs. The new `dixie-jungle-widescreen` contract passes its
+  checkpoints with zero cache-bound events but fails the zero retrodiction
+  budget exactly as stock's `jungle-entry` does: that stock gate has been
+  failing since at least v0.0.14 (1,765 identical events on v0.0.14, v0.0.16
+  and this build, unaffected by the level-edge policy) and is now recorded as
+  an open known issue rather than a Dixie or merge regression. The merged
+  stock build's 16:9 Jungle framebuffer and audio hashes equal v0.0.14's.
+  The visible Dixie window was inspected in 16:9 at Jungle Hijinxs.
 - Windows CTest: `windows_graphics` (OpenGL and Direct3D synthetic tests: 12
   modes at native, 4x and fractional sizes, exact native pixels, stable
   repeats, immutable input, source invalidation), `windows_platform`

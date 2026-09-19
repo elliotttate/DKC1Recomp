@@ -23,7 +23,10 @@ port: linear expanded data banks `$40-$7D`, and the mod-specific zero-size
 sprite-DMA no-op. Both remain compile-time variant-only; stock cartridge
 mapping and DMA behavior are unchanged.
 
-Current validated scope is native 4:3 presentation, ROM synthesis/identity,
-fresh boot, deterministic Jungle input, and stock/Dixie process switching.
-Dixie widescreen and Dixie-specific HD character materials are not promoted;
-unsupported sprite materials fall back to authentic native rendering.
+Current validated scope is ROM synthesis/identity, fresh boot, deterministic
+Jungle input, and stock/Dixie process switching. Since v0.0.17 the variant is
+generated with the stock widescreen override pass and follows the saved
+aspect (see `docs/DIXIE_MOD.md`, validated on Windows through the Jungle
+contract; the Mac bundle has not been rebuilt with it). Dixie-specific HD
+character materials are not promoted; unsupported sprite materials fall back
+to authentic native rendering.

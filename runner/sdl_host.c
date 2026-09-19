@@ -1784,12 +1784,6 @@ static void ExportRepro(void) {
  * untouched, while the existing visible frame is center-cropped or centered
  * over black so a paused aspect change is immediately intelligible. */
 static void SetAspectMode(Dkc1VideoAspect requested) {
-  if (Dkc1DixieIsVariant() && requested != kDkc1VideoAspectNative) {
-    snprintf(s_status, sizeof s_status,
-             "Dixie currently uses its validated native 4:3 presentation");
-    UpdateTitle();
-    return;
-  }
   const Dkc1VideoAspect old_aspect = Dkc1VideoGetAspect();
   if (old_aspect == requested)
     return;
@@ -2482,7 +2476,6 @@ int main(int argc, char **argv) {
     Dkc1VideoSetWidescreen(*widescreen!='0');
   else
     Dkc1VideoSetAspect(s_graphics.aspect);
-  if (Dkc1DixieIsVariant()) Dkc1VideoSetAspect(kDkc1VideoAspectNative);
   s_graphics.aspect=Dkc1VideoGetAspect();
   {
     /* Level-wall presentation: the View menu's saved choice (glide when

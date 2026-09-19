@@ -319,6 +319,17 @@ if(WIN32)
         add_custom_command(TARGET dkc1_windows_dixie POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL2::SDL2>
                 $<TARGET_FILE_DIR:dkc1_windows_dixie>)
+        add_executable(dkc1_dixie_headless ${DKC1_ENGINE_SOURCES}
+            ${DKC1_DIXIE_GEN_SOURCES} ${DKC1_RUNNER_SOURCES}
+            runner/headless_host.c runner/headless_main.c)
+        target_include_directories(dkc1_dixie_headless PRIVATE runner recomp/dixie recomp
+            ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+        target_compile_definitions(dkc1_dixie_headless PRIVATE DKC1_DIXIE_VARIANT=1
+            SNESRECOMP_TRACE=0 SNESRECOMP_REVERSE_DEBUG=0
+            SNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1 SYSTEM_VOLUME_MIXER_AVAILABLE=0
+            _CRT_SECURE_NO_WARNINGS)
+        target_compile_options(dkc1_dixie_headless PRIVATE /W0)
+        target_link_libraries(dkc1_dixie_headless PRIVATE ${SNESRECOMP_RUNNER_LIBRARIES})
     endif()
     enable_testing()
     add_test(NAME windows_graphics COMMAND dkc1_windows --graphics-test)

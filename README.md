@@ -216,8 +216,12 @@ The optional **Mods > Dixie Kong Country** switch now replaces the former
 Kiddy/Baby Kong overlay. Dixie runs as a separate recompilation synthesized
 in memory from the same verified clean DKC1 ROM and the pinned mod patch; no
 second ROM is needed. The stock and Dixie runtimes are bundled together and
-use separate save directories. Dixie currently uses its validated native 4:3
-presentation, while the stock HD runtime retains its widescreen settings. See
+use separate save directories. Switching restarts the game: Dixie is a
+different recompiled program, so the two cannot swap inside one process.
+Since v0.0.17 the Dixie sources receive the same fail-closed widescreen
+adaptations as stock (all 34 anchors match) and the variant follows the saved
+aspect ratio; its 16:9 Jungle Hijinxs entry is deterministic and behaves like
+stock's on the same route. See [the mod record](docs/DIXIE_MOD.md) and
 [the Mac HD integration record](docs/DIXIE_HD_MAC.md) for behavior and scope.
 
 The macOS HD preview also includes **Mods > Upscaled HD Textures (Jungle

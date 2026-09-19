@@ -81,8 +81,9 @@ full graphics, controls, save-state, Dixie and MSU-1 feature set.
 
 Choose Mods > Dixie Kong Country to enable Dixie. This restarts into the
 Dixie executable using the same clean ROM; the embedded IPS patch is
-applied in memory. Switch the item off to return to stock. Use View > 4:3
-for the tested Dixie presentation.
+applied in memory. Switch the item off to return to stock. Switching
+restarts the game because Dixie is a separate recompiled program. Dixie
+keeps your aspect-ratio choice, including 16:10 and 16:9 widescreen.
 
 In-game saves from Candy persist in %APPDATA%/Flat2VR/DKC1Recomp/saves/
 save.srm; host save states and windows.ini live beside it. Back up saves

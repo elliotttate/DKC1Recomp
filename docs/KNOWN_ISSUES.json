@@ -2,6 +2,16 @@
   "schema": "dkc1.known-issues.v1",
   "issues": [
     {
+      "id": "jungle-retrodiction-ratchet",
+      "status": "open",
+      "summary": "The stock jungle-entry closure contract's zero retrodiction budget no longer holds: the 16:9 Jungle Hijinxs entry route reports 1,765 proven-wrong margin serves (frames 7409-7599, world x 47-542, whole BG1 columns; 754 same-tile attribute-only, 684 different art, 198 invisible tile-0 pairs, 127 blank-served). The signature matches the margin-decode-attribute-mismatch entry that was closed on 2026-08-16, so something between that fix and v0.0.14 reopened it and the contract was not re-run (the dashboard listed it as not run).",
+      "repro": "python tools/run_regression.py contracts/jungle-entry.json --exe <stock headless> --rom <clean ROM>; analyze <session>/retrodict-events.jsonl with tools/analyze_retrodiction.py",
+      "evidence": "2026-09-19: identical 1,765-event sets from v0.0.14 (engine de94587), v0.0.16 (engine 75223f3) and the v0.0.17 merge build; DKC1_WIDESCREEN_EDGE=reflect|bars|shift give 1,766, so the glide default is not the cause; the three builds' 16:9 Jungle framebuffer/audio hashes are identical (915dd2fb.../27389ed4195f83d2). The Dixie variant reports 1,791 events on the same frames (contracts/dixie-jungle-widescreen.json). Engine widescreen files are unchanged between the pins.",
+      "expected": "retrodictMismatch == 0 on the jungle-entry route as recorded by margin-decode-attribute-mismatch.",
+      "first_seen": "2026-09-19",
+      "mitigation_note": "Not a v0.0.17 regression: pre-existing on main since at least v0.0.14. Bisect candidates are the 2026-08-30 to 2026-09-06 margin/cave work on main (55d3f7a..e873d89) and the engine pins of that period; the visible impact in Jungle has not been characterized frame by frame."
+    },
+    {
       "id": "no-contact-damage",
       "status": "fixed",
       "summary": "Contact damage never lands: DK overlaps the first Gnawty for 3800+ frames unharmed in BOTH native and wide modes, and identically under forced LLE (not a dispatch/widescreen defect).",

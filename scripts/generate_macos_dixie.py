@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
             sys.executable, str(ROOT / "scripts/generate_snesrecomp.py"),
             "--rom", str(rom), "--config-dir", str(ROOT / "recomp/dixie"),
             "--output-dir", str(ROOT / "generated/snesrecomp_dixie"),
-            "--no-widescreen-overrides", "--analysis-backend", "python"],
+            "--analysis-backend", "python"],
             check=True)
     return 0
 

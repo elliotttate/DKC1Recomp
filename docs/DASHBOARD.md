@@ -1,11 +1,12 @@
 # DKC1Recomp regression dashboard
 
-Generated 2026-09-18 22:41 UTC at commit `3eb9a10-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
+Generated 2026-09-19 16:06 UTC at commit `076727d-dirty`. Regenerate with `python tools/make_dashboard.py` after a regression/sweep cycle.
 
 ## Contracts
 
 | contract | last result | legs | evidence |
 |---|---|---|---|
+| dixie-jungle-widescreen (`dixie-jungle-widescreen.json`) | NOT RUN in latest cycle | - | - |
 | dixie-jungle (`dixie-jungle.json`) | NOT RUN in latest cycle | - | - |
 | dixie-map-refresh (`dixie-map-refresh.json`) | NOT RUN in latest cycle | - | - |
 | dixie-stomp (`dixie-stomp.json`) | NOT RUN in latest cycle | - | - |
@@ -20,6 +21,7 @@ _No sweep report; run `python tools/level_sweep.py`._
 
 | id | status | summary | repro |
 |---|---|---|---|
+| jungle-retrodiction-ratchet | open | The stock jungle-entry closure contract's zero retrodiction budget no longer holds: the 16:9 Jungle Hijinxs entry route reports 1,765 proven-wrong margin serves (frames 7409-7599, world x 47-542, whole BG1 columns; 754 same-tile attribute-only, 684 different art, 198 invisible tile-0 pairs, 127 blank-served). The signature matches the margin-decode-attribute-mismatch entry that was closed on 2026-08-16, so something between that fix and v0.0.14 reopened it and the contract was not re-run (the dashboard listed it as not run). | `python tools/run_regression.py contracts/jungle-entry.json --exe <stock headless> --rom <clean ROM>; analyze <session>/retrodict-events.jsonl with tools/analyze_retrodiction.py` |
 | no-contact-damage | fixed | Contact damage never lands: DK overlaps the first Gnawty for 3800+ frames unharmed in BOTH native and wide modes, and identically under forced LLE (not a dispatch/widescreen defect). | `recipes/route_death.dks` |
 | entry-wide-centered-flap | open | WIDE<->CENTERED presentation flap during level entry (frames 7304-7331 of the jungle route). | `recipes/route_jungle.dks with DKC1_WS_TRACE` |
 | wide-world-key-unwrap | open | Wide world key camX=$FFF0 (-16) unwrap artifact near level start. | `recipes/route_jungle.dks with DKC1_WS_TRACE` |

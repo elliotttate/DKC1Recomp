@@ -68,13 +68,15 @@ include and the `Dkc1DixieLoadRom` synthesis path to revert.
 ## How to build (development)
 
 ```bat
-:: one-time: generate the variant's private sources (needs the patched ROM
-:: only as the analysis oracle; runtime synthesis needs only the clean ROM)
-python scripts/generate_snesrecomp.py --rom "<patched 6MiB rom>" ^
-  --config-dir recomp/dixie --output-dir generated/snesrecomp_dixie ^
-  --no-widescreen-overrides --analysis-backend python
+:: one-time: generate the variant's private sources from the clean ROM. The
+:: script applies the embedded IPS in Python, checks the pinned identity and
+:: runs the same fail-closed widescreen override pass as stock (v0.0.17;
+:: pass --no-widescreen-overrides for the v0.0.13 native-only variant).
+python scripts/generate_dixie_sources.py --rom "<clean 4MiB rom>"
 
-:: build both exes (stock first; the variant picks up the same host code)
+:: player build: build_windows.ps1 -Rom <rom> builds DKC1Recomp.exe,
+:: dkc1_dixie_desktop.exe and dkc1_dixie_headless.exe through CMake.
+:: debugger/headless variants via the direct scripts (stock first):
 build_host.bat
 build_host_dixie.bat
 
@@ -180,8 +182,32 @@ targeted results.
 The [v0.0.13 release record](RELEASE_0.0.13.md) covers the published Windows
 package and retained v0.0.12 save-persistence integration. The paired Mac
 archive is the unchanged v0.0.9 build and does not contain Dixie.
+## Widescreen (v0.0.17)
+
+The v0.0.13 variant was generated without the presentation-widescreen
+overrides and v0.0.15 locked the host to 4:3 for it. Both were choices, not
+limits: `scripts/apply_dkc1_widescreen_overrides.py` matches all 34 of its
+anchors in the Dixie generated units (the mod changes graphics and sprite
+data, not the culling, activation or OAM-packing code the pass adapts), so
+`generate_dixie_sources.py` now applies it and the host follows the saved
+aspect. `contracts/dixie-jungle-widescreen.json` is the stock `jungle-entry`
+gate run on the variant (`dkc1_dixie_headless.exe`, built by
+`build_windows.ps1`). On 2026-09-19 it passed its checkpoints with zero
+cache-bound events, and three 16,000-frame 16:9 repeats of the route were
+byte-identical in framebuffer, WRAM, VRAM, CGRAM, OAM and audio hashes. Its
+retrodiction budget fails exactly as stock's `jungle-entry` does on the same
+build and on v0.0.14/v0.0.16 (1,791 versus 1,765 events over the same 67
+frames; see `jungle-retrodiction-ratchet` in `docs/KNOWN_ISSUES.json`), so
+the Dixie 16:9 margins are as good as stock's, no better. Other scenes have
+the same fail-closed behavior as stock (black margins where reconstruction
+cannot be proven) and no separate Dixie promotion.
+
+Switching between stock and Dixie restarts the game. The variant is a
+separate recompiled program (its own generated translation units); running
+both in one process would need every generated symbol namespaced and would
+double the executable, so the sibling-process design stays.
+
 ## Non-goals (v1)
 
-- Widescreen for the mod build (stock presentation).
 - Full-game visual and behavioral certification.
 - Mac variant build and relaunch support.
