@@ -99,3 +99,9 @@ uint32_t Dkc1RoutePlayerInputs(
     size_t gamepad_count, const int player_sources[kDkc1DesktopPlayerCount],
     const int deadzone_percent[kDkc1DesktopPlayerCount],
     uint8_t trigger_threshold, uint32_t *host_actions);
+
+/* When co-op is on, Player 2 always receives the second keyboard map.
+ * A single connected gamepad is assigned to Player 2; Player 1 stays on
+ * the keyboard so both can move at once. Two gamepads map in order. */
+void Dkc1PrepareCoopSources(int source[kDkc1DesktopPlayerCount],
+                            size_t gamepad_count, int coop_enabled);

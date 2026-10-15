@@ -37,6 +37,7 @@ extern bool g_ws_active;
 extern int g_ws_extra;
 
 struct CpuState;
+struct Ppu;
 
 void Dkc1VideoSetWidescreen(bool enabled);
 bool Dkc1VideoIsWidescreen(void);
@@ -166,6 +167,10 @@ bool Dkc1VideoPrepareType5ChildRetry(struct CpuState *cpu);
 
 /* Keep a reference to the verified ROM for level-map margin decoding. */
 void Dkc1VideoSetRom(const uint8_t *rom, size_t size);
+void Dkc1VideoCopyCgram(struct Ppu *ppu, unsigned dst, unsigned src,
+                        unsigned words);
+int Dkc1VideoLoadCgramFromRom(struct Ppu *ppu, unsigned dst, uint8_t bank,
+                              uint16_t address, unsigned words);
 
 /* BG1/BG2 layers eligible for widening: Mode 1 with a 64-column tilemap. */
 uint8_t Dkc1VideoPpuWideLayerMask(uint8_t bg_mode,

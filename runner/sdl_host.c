@@ -6,6 +6,7 @@
  */
 #include "dkc1_blank_scan.h"
 #include "dkc1_baby_kong.h"
+#include "dkc1_coop_mod.h"
 #include "dkc1_dixie_mod.h"
 #include "snes/dma.h"
 #include "dkc1_debug_dump.h"
@@ -209,11 +210,13 @@ static int s_fullscreen;
 static Dkc1MacFullscreenScaling s_fullscreen_scaling;
 static Dkc1GraphicsSettings s_graphics;
 static Dkc1DesktopColorFilter s_color_filter;
-static uint8_t s_display_pixels[kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4];
+static uint8_t s_display_pixels[
+    kDkc1VideoWidescreenWidth * (2 * kDkc1VideoHeight) * 4];
 static int s_input_release_gate;
 static void OpenPauseMenu(int graphics_page);
 
 static int s_width;
+static int s_presentation_height;
 static int s_presentation_output_width;
 static int s_presentation_output_height;
 static int s_renderer_vsync;
@@ -825,7 +828,8 @@ static void UpdateTitle(void) {
                          Dkc1DebugLayerMask(),
                          Dkc1DebugProvenanceOverlay(), s_msu1 != NULL,
                          0, 0,  /* Baby Kong removed from the Mods menu */
-                         Dkc1DixieIsVariant() || Dkc1DixieSavedEnabled());
+                         Dkc1DixieIsVariant() || Dkc1DixieSavedEnabled(),
+                         Dkc1CoopEnabled());
   Dkc1MacUpdateGraphicsMenuState(s_graphics.display,s_graphics.upscaler,s_graphics.screen);
 }
 
@@ -946,18 +950,88 @@ static void ApplyPresentationGeometry(void) {
       return;
   }
   SDL_RenderSetLogicalSize(s_renderer, PresentationWidth(),
-                           kDkc1VideoHeight);
-  SDL_RenderSetIntegerScale(s_renderer, SDL_TRUE);
+                           s_presentation_height);
+  int window_width, window_height;
+  SDL_GetWindowSize(s_window, &window_width, &window_height);
+  SDL_RenderSetIntegerScale(
+      s_renderer, s_presentation_height > kDkc1VideoHeight &&
+                          (window_width < PresentationWidth() ||
+                           window_height < s_presentation_height)
+                      ? SDL_FALSE : SDL_TRUE);
 }
 
 static void ApplyWindowedSize(void) {
-  SDL_SetWindowSize(s_window, PresentationWidth() * s_graphics.window_scale,
-                    kDkc1VideoHeight * s_graphics.window_scale);
+  int width = PresentationWidth() * s_graphics.window_scale;
+  int height = s_presentation_height * s_graphics.window_scale;
+  SDL_Rect usable;
+  int top = 0, left = 0, bottom = 0, right = 0;
+  const int fit_coop = s_presentation_height > kDkc1VideoHeight &&
+      SDL_GetDisplayUsableBounds(SDL_GetWindowDisplayIndex(s_window),
+                                &usable) == 0;
+  if (fit_coop) {
+    (void)SDL_GetWindowBordersSize(s_window, &top, &left, &bottom, &right);
+    const int available_width = usable.w - left - right;
+    const int available_height = usable.h - top - bottom;
+    int scale = s_graphics.window_scale;
+    if (scale > available_width / PresentationWidth())
+      scale = available_width / PresentationWidth();
+    if (scale > available_height / s_presentation_height)
+      scale = available_height / s_presentation_height;
+    if (scale > 0) {
+      width = PresentationWidth() * scale;
+      height = s_presentation_height * scale;
+    } else if (available_width > 0 && available_height > 0) {
+      width = available_width;
+      height = width * s_presentation_height / PresentationWidth();
+      if (height > available_height) {
+        height = available_height;
+        width = height * PresentationWidth() / s_presentation_height;
+      }
+    }
+  }
+  SDL_SetWindowSize(s_window, width, height);
+  if (fit_coop) {
+    int x, y;
+    SDL_GetWindowPosition(s_window, &x, &y);
+    if (x + width + right > usable.x + usable.w)
+      x = usable.x + usable.w - width - right;
+    if (y + height + bottom > usable.y + usable.h)
+      y = usable.y + usable.h - height - bottom;
+    if (x < usable.x + left) x = usable.x + left;
+    if (y < usable.y + top) y = usable.y + top;
+    SDL_SetWindowPosition(s_window, x, y);
+  }
+  ApplyPresentationGeometry();
+}
+
+static int UpdatePresentationSize(void) {
+  const int height = Dkc1PresentationHeight();
+  if (height == s_presentation_height) return 1;
+#ifndef _WIN32
+  SDL_Texture *texture = SDL_CreateTexture(
+      s_renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+      s_width, height);
+  if (!texture) {
+    snprintf(s_status, sizeof s_status, "view resize failed: %.180s",
+             SDL_GetError());
+    return 0;
+  }
+  SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE);
+  SDL_DestroyTexture(s_texture);
+  s_texture = texture;
+#endif
+  s_presentation_height = height;
+  if (s_fullscreen)
+    ApplyPresentationGeometry();
+  else
+    ApplyWindowedSize();
+  return 1;
 }
 
 static bool InitVideo(void) {
+  s_presentation_height = Dkc1PresentationHeight();
   const int window_width = PresentationWidth() * s_graphics.window_scale;
-  const int window_height = kDkc1VideoHeight * s_graphics.window_scale;
+  const int window_height = s_presentation_height * s_graphics.window_scale;
   s_window = SDL_CreateWindow(
       "DKC1Recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       window_width, window_height,
@@ -1014,7 +1088,7 @@ static bool InitVideo(void) {
 
   s_texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                 SDL_TEXTUREACCESS_STREAMING, s_width,
-                                kDkc1VideoHeight);
+                                s_presentation_height);
   if (!s_texture)
     return false;
   SDL_SetTextureBlendMode(s_texture, SDL_BLENDMODE_NONE);
@@ -1084,11 +1158,13 @@ static void InitDisplayLink(void) {
 }
 
 static void PreparePresentation(void) {
-  const uint8_t *display=Dkc1DesktopColorFilterApply(&s_color_filter,s_pixels,
-      s_display_pixels,(size_t)s_width*kDkc1VideoHeight);
-  if (!display) display=s_pixels;
+  if (!UpdatePresentationSize()) return;
+  const uint8_t *pixels = Dkc1PresentationPixels(s_pixels, (size_t)s_width * 4);
+  const uint8_t *display=Dkc1DesktopColorFilterApply(&s_color_filter,pixels,
+      s_display_pixels,(size_t)s_width*s_presentation_height);
+  if (!display) display=pixels;
 #ifdef _WIN32
-  Dkc1WindowsGraphicsDraw((const uint32_t *)display,s_width,kDkc1VideoHeight,
+  Dkc1WindowsGraphicsDraw((const uint32_t *)display,s_width,s_presentation_height,
                          PresentationWidth(),&s_graphics);
   return;
 #endif
@@ -1103,7 +1179,7 @@ static void PreparePresentation(void) {
       info.bg_vscroll[layer] = g_ppu->vScroll[layer];
     }
     Dkc1MacMetalPresenterQueueFrame(
-        (const uint32_t *)display, s_width, kDkc1VideoHeight,
+        (const uint32_t *)display, s_width, s_presentation_height,
         PresentationWidth(), &info);
     return;
   }
@@ -1119,15 +1195,15 @@ static void PreparePresentation(void) {
           output_height != s_presentation_output_height)
         ApplyPresentationGeometry();
       const int presentation_width = PresentationWidth();
-      if ((int64_t)output_width * kDkc1VideoHeight <=
+      if ((int64_t)output_width * s_presentation_height <=
           (int64_t)output_height * presentation_width) {
         destination.w = output_width;
-        destination.h = (output_width * kDkc1VideoHeight +
+        destination.h = (output_width * s_presentation_height +
                          presentation_width / 2) / presentation_width;
       } else {
         destination.h = output_height;
         destination.w = (output_height * presentation_width +
-                         kDkc1VideoHeight / 2) / kDkc1VideoHeight;
+                         s_presentation_height / 2) / s_presentation_height;
       }
       destination.x = (output_width - destination.w) / 2;
       destination.y = (output_height - destination.h) / 2;
@@ -1158,9 +1234,13 @@ static void OpenFirstController(void) {
     if (!SDL_IsGameController(i)) continue;
     SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(i);
     int known = 0;
-    for (int p = 0; p < 2; p++)
-      if (s_controllers[p] && SDL_JoystickInstanceID(
-          SDL_GameControllerGetJoystick(s_controllers[p])) == id) known = 1;
+    for (int p = 0; p < 2; p++) {
+      if (!s_controllers[p]) continue;
+      SDL_Joystick *js = SDL_GameControllerGetJoystick(s_controllers[p]);
+      /* GUID identifies a model; two identical physical pads may share it. */
+      if (SDL_JoystickInstanceID(js) == id)
+        known = 1;
+    }
     if (known) continue;
     for (int p = 0; p < 2; p++) if (!s_controllers[p]) {
       s_controllers[p] = SDL_GameControllerOpen(i);
@@ -1384,7 +1464,10 @@ static uint32_t PollInput(void) {
       pads, count, 30), 0, s_controls.assist_enabled != 0);
   uint32_t keyboard[2];
   int bindings[2][12];
+  int sources[2];
   memcpy(bindings, s_controls.pads, sizeof bindings);
+  memcpy(sources, s_controls.source, sizeof sources);
+  Dkc1PrepareCoopSources(sources, count, Dkc1CoopEnabled());
   for (int p = 0; p < 2; p++) {
     keyboard[p] = Dkc1MapKeyboardBindings(s_controls.keys[p],
                                           GameKeyPressed, (void *)keys);
@@ -1393,7 +1476,7 @@ static uint32_t PollInput(void) {
         if (bindings[p][i] == s_controls.assist_pads[a]) bindings[p][i] = 0;
   }
   uint32_t result=Dkc1RoutePlayerInputsWithBindings(keyboard,pads,count,
-      s_controls.source,s_controls.deadzone,bindings);
+      sources,s_controls.deadzone,bindings);
   if (s_input_release_gate) {
     if (!result && !s_host_actions) s_input_release_gate=0;
     s_host_actions=0; return 0;
@@ -1675,7 +1758,7 @@ static void SetAspectMode(Dkc1VideoAspect requested) {
 #ifndef _WIN32
   SDL_Texture *new_texture = SDL_CreateTexture(
       s_renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
-      new_width, kDkc1VideoHeight);
+      new_width, s_presentation_height);
   if (!new_texture) {
     Dkc1VideoSetAspect(old_aspect);
     snprintf(s_status, sizeof s_status, "aspect change failed: %.180s",
@@ -1999,6 +2082,23 @@ void Dkc1MacMenuCommand(int command) {
     case kDkc1MacMenuChooseDixieRom:
       /* Removed: the mod ROM is synthesized; there is nothing to pick. */
       break;
+    case kDkc1MacMenuToggleCoop: {
+      const int enabled = Dkc1CoopEnabled();
+      Dkc1CoopSetEnabled(!enabled);
+      if (!UpdatePresentationSize()) {
+        Dkc1CoopSetEnabled(enabled);
+        break;
+      }
+      ClearRewind();
+      s_reanchor_pacer = 1;
+      Dkc1DrawPpuFrame();
+      Present();
+#ifndef _WIN32
+      Dkc1MacSetCoopEnabled(Dkc1CoopEnabled());
+#endif
+      snprintf(s_status, sizeof s_status, "%s", Dkc1CoopStatus());
+      break;
+    }
     case kDkc1MacMenuChooseMusicPack: {
       char *path = Dkc1MacChooseMsu1();
       if (path) {
@@ -2104,6 +2204,13 @@ static void PollEvents(void) {
                    event.window.event == SDL_WINDOWEVENT_HIDDEN) {
           Dkc1MacMetalPresenterSetActive(0);
         }
+        /* The SDL fallback must switch to fractional scaling when a resized
+         * window cannot fit the 448-line stack, and back when it can. */
+        if (s_renderer && !s_metal_presenter_active && !s_fullscreen &&
+            s_presentation_height > kDkc1VideoHeight &&
+            (event.window.event == SDL_WINDOWEVENT_RESIZED ||
+             event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED))
+          ApplyPresentationGeometry();
         if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED ||
             event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
             event.window.event == SDL_WINDOWEVENT_RESIZED ||
@@ -2289,6 +2396,13 @@ int main(int argc, char **argv) {
     SDL_Quit();
     return 4;
   }
+#ifndef _WIN32
+  {
+    const char *coop_env = getenv("DKC1_COOP");
+    if (!coop_env || !coop_env[0])
+      Dkc1CoopSetEnabled(Dkc1MacSavedCoopEnabled());
+  }
+#endif
   if (!Dkc1SramLoad(&s_sram_store, g_sram, (size_t)g_sram_size,
                     rom_error, sizeof rom_error)) {
     ShowError("Unable to load in-game saves", rom_error);
@@ -2297,9 +2411,8 @@ int main(int argc, char **argv) {
     return 13;
   }
 
-  /* Baby Kong was removed from the Mods menu (Dixie Kong Country is the only
-   * character option now); its persisted state is intentionally ignored so
-   * old settings cannot silently reactivate it. */
+  /* Baby Kong was removed from the Mods menu. Dixie Kong Country remains the
+   * character-variant option; simultaneous co-op is a separate overlay. */
 
   const char *snapshot = getenv("DKC1_SAVESTATE_INPUT");
   if (snapshot && *snapshot && !RtlLoadSnapshot(snapshot)) {
@@ -2364,11 +2477,9 @@ int main(int argc, char **argv) {
   }
   Dkc1MacLoadControls(&s_controls);
   Dkc1MacInstallMenu();
-#ifdef _WIN32
   /* Attaching the menu bar takes its height from the client area SDL just
-   * created; restore the integer-scaled client size beneath it. */
+   * created on Windows; also fit stacked views to the available desktop. */
   ApplyWindowedSize();
-#endif
   InitAudio();
   OpenFirstController();
 

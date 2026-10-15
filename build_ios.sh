@@ -12,8 +12,8 @@ if [[ -z "${DEVELOPER_DIR:-}" ]] && ! xcodebuild -version >/dev/null 2>&1; then
 fi
 for tool in cmake python3 xcodebuild; do command -v "$tool" >/dev/null; done
 xcrun --sdk "$sdk" --show-sdk-path >/dev/null
+rom="${2:-${DKC1_ROM:-$repo_dir/dkc1.sfc}}"
 if ! compgen -G "$repo_dir/generated/snesrecomp/*.c" >/dev/null; then
-    rom="${2:-${DKC1_ROM:-}}"
     if [[ -z "$rom" ]]; then echo "Private generated sources are missing; supply the supported ROM as argument 2." >&2; exit 2; fi
     python3 "$repo_dir/scripts/generate_snesrecomp.py" --rom "$rom"
 fi
@@ -24,7 +24,7 @@ signing=(-DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO)
 if [[ -n "${DKC1_IOS_TEAM:-}" && "$sdk" == iphoneos ]]; then
     signing=(-DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=YES "-DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=$DKC1_IOS_TEAM")
 fi
-cmake -S "$repo_dir" -B "$build_dir" -G Xcode \
+cmake -DDKC1_COOP_ROM="$rom" -S "$repo_dir" -B "$build_dir" -G Xcode \
     -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT="$sdk" \
     -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
     -DCMAKE_POLICY_DEFAULT_CMP0177=NEW \

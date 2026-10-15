@@ -66,6 +66,31 @@ if(NOT DKC1_SNESRECOMP_GEN_SOURCES)
         "No private generated sources found; run scripts/generate_snesrecomp.py first")
 endif()
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(DKC1_COOP_ROM "${CMAKE_CURRENT_SOURCE_DIR}/dkc1.sfc" CACHE FILEPATH
+    "Supported stock ROM used to validate co-op interpreter contracts")
+set(DKC1_COOP_RASTERIZER "${CMAKE_CURRENT_SOURCE_DIR}/generated/host/dkc1_coop_ppu.inc")
+add_custom_command(OUTPUT "${DKC1_COOP_RASTERIZER}"
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare_coop_rasterizer.py
+    DEPENDS scripts/prepare_coop_rasterizer.py ${SNESRECOMP_ROOT}/runner/src/snes/ppu.c
+    VERBATIM)
+set_source_files_properties(runner/dkc1_coop_ppu.c PROPERTIES
+    OBJECT_DEPENDS "${DKC1_COOP_RASTERIZER}")
+
+set(DKC1_COOP_INTERP "${CMAKE_CURRENT_SOURCE_DIR}/generated/host/dkc1_coop_interp_bridge.inc")
+set(DKC1_COOP_INTERP_RULES "${CMAKE_CURRENT_SOURCE_DIR}/generated/host/dkc1_coop_interp_rules.inc")
+add_custom_command(OUTPUT "${DKC1_COOP_INTERP}" "${DKC1_COOP_INTERP_RULES}"
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare_coop_interp_bridge.py
+        --rom "${DKC1_COOP_ROM}"
+    DEPENDS scripts/prepare_coop_interp_bridge.py scripts/apply_dkc1_coop_entities.py
+        scripts/apply_dkc1_coop_graphics.py scripts/apply_dkc1_coop_schedule.py
+        scripts/apply_dkc1_widescreen_overrides.py contracts/coop-hooks.json
+        runner/dkc1_coop_fields.def "${DKC1_COOP_ROM}"
+        ${SNESRECOMP_ROOT}/runner/src/snes/interp_bridge.c
+    VERBATIM)
+set_source_files_properties(runner/dkc1_coop_interp.c PROPERTIES
+    OBJECT_DEPENDS "${DKC1_COOP_INTERP};${DKC1_COOP_INTERP_RULES}")
+
 set(DKC1_RUNNER_SOURCES
     runner/desktop_sram.c
     runner/dkc1_game.c
@@ -74,6 +99,17 @@ set(DKC1_RUNNER_SOURCES
     runner/dkc1_baby_kong_animation.c
     runner/dkc1_baby_kong_movement.c
     runner/dkc1_dixie_mod.c
+    runner/dkc1_coop_mod.c
+    runner/dkc1_coop_world.c
+    runner/dkc1_coop_entities.c
+    runner/dkc1_coop_graphics.c
+    runner/dkc1_coop_view.c
+    runner/dkc1_coop_ppu.c
+    runner/dkc1_coop_formations.c
+    runner/dkc1_coop_hud.c
+    runner/dkc1_coop_interp.c
+    runner/dkc1_coop_schedule.c
+    runner/dkc1_coop_movement.c
     runner/dkc1_margin_proxy.c
     runner/dkc1_ws_trace.c
     runner/input_playback.c
@@ -90,6 +126,7 @@ set(DKC1_RUNNER_SOURCES
 # other games and are not part of either DKC1 frontend.
 set(DKC1_ENGINE_SOURCES ${SNESRECOMP_RUNNER_SOURCES})
 list(REMOVE_ITEM DKC1_ENGINE_SOURCES
+    "${SNESRECOMP_ROOT}/runner/src/snes/interp_bridge.c"
     "${SNESRECOMP_ROOT}/runner/src/keybinds.c"
     "${SNESRECOMP_ROOT}/runner/src/host_report.c")
 

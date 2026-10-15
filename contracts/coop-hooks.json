@@ -1,0 +1,557 @@
+{
+  "description": "Exact native co-op boundaries shared by AOT and interpreter. AOT anchors retain each original instruction/deadline phase; return ABI and palette bus reads remain backend specific.",
+  "hooks": [
+    {
+      "group": "camera",
+      "symbol": "CODE_80C263_M0X0",
+      "pc": "80C27C",
+      "call": "Dkc1CoopWorldNoteNativeCamera(cpu->ram)",
+      "bytes": "60 20 6d c3 ad 57"
+    },
+    {
+      "group": "camera",
+      "symbol": "CODE_809BEC_M0X0",
+      "pc": "809C4E",
+      "call": "Dkc1CoopWorldNoteNativeCamera(cpu->ram)",
+      "bytes": "60 03 00 05 00 01"
+    },
+    {
+      "group": "camera",
+      "symbol": "CODE_80C47B_M0X0",
+      "pc": "80C4A3",
+      "call": "Dkc1CoopWorldNoteNativeCamera(cpu->ram)",
+      "bytes": "60 a6 82 3c 69 0c"
+    },
+    {
+      "group": "mount",
+      "symbol": "CODE_BF888E_M0X0",
+      "pc": "BF88B4",
+      "call": "Dkc1CoopAnimalMountOccupied(cpu, Dkc1WramU16(cpu->ram, 0x82), cpu->A)",
+      "redirect": "BF88AB",
+      "bytes": "a4 84 99 12 05 aa"
+    },
+    {
+      "group": "mount",
+      "symbol": "CODE_BFCC24_M0X0",
+      "pc": "BFCC4D",
+      "call": "Dkc1CoopAnimalMountOccupied(cpu, Dkc1WramU16(cpu->ram, 0x88), Dkc1WramU16(cpu->ram, 0x82))",
+      "redirect": "BFCC31",
+      "bytes": "a5 82 99 12 05 aa"
+    },
+    {
+      "group": "mount",
+      "symbol": "CODE_BFBF8E_M0X0",
+      "pc": "BFBFAD",
+      "call": "Dkc1CoopBlockTeamSwap(cpu)",
+      "redirect": "BFBFA1",
+      "bytes": "a4 84 b9 12 05 d0"
+    },
+    {
+      "group": "mount",
+      "symbol": "CODE_80855D_M0X0",
+      "pc": "80855D",
+      "call": "Dkc1CoopPrepareMountedPartner(cpu)",
+      "redirect": "8085B7",
+      "aot": "    if (Dkc1CoopPrepareMountedPartner(cpu)) {\n      extern RecompReturn CODE_8085B7_M0X0(CpuState *cpu);\n      cpu->host_return_valid = _hrv;\n      cpu_tailcall_inherit_return_context(_entry_s, _hrv);\n      RecompReturn _coop_rider = CODE_8085B7_M0X0(cpu);\n      RecompStackPop();\n      return _coop_rider;\n    }\n",
+      "bytes": "85 76 a5 82 aa 3a"
+    },
+    {
+      "group": "mount",
+      "symbol": "CODE_80838C_M0X0",
+      "pc": "8083A8",
+      "call": "Dkc1CoopRestoreRoomMount(cpu)",
+      "bytes": "88 88 a9 02 00 99"
+    },
+    {
+      "group": "mount",
+      "symbol": "CODE_BF9EAC_M0X0",
+      "pc": "BF9EC2",
+      "call": "Dkc1CoopSaveCarriedMount(cpu)",
+      "bytes": "88 88 ad 16 05 8d"
+    },
+    {
+      "group": "mount",
+      "symbol": "Level_HandleExit_M0X0",
+      "pc": "B8840C",
+      "call": "Dkc1CoopRestoreCarriedMount(cpu)",
+      "bytes": "88 88 ad 5f 05 99"
+    },
+    {
+      "group": "mount",
+      "symbol": "CODE_808787_M0X0",
+      "pc": "808809",
+      "call": "Dkc1CoopFinishMountedPartner(cpu->ram)",
+      "bytes": "a9 01 00 8d 29 19"
+    },
+    {
+      "group": "mount",
+      "symbol": "CODE_B6F3F7_M0X0",
+      "pc": "B6F456",
+      "call": "Dkc1CoopRestoreMountedExit(cpu)",
+      "redirect": "B6F46A",
+      "bytes": "98 49 06 00 aa a9"
+    },
+    {
+      "group": "hud",
+      "symbol": "OAM_BeginFrameAndDrawHUD_M0X0",
+      "pc": "80A1AE",
+      "call": "Dkc1CoopHudBegin(cpu)",
+      "bytes": "20 45 a3 22 29 b5",
+      "private_boundary": true
+    },
+    {
+      "group": "hud",
+      "symbol": "OAM_BeginFrameAndDrawHUD_M0X0",
+      "pc": "80A1B9",
+      "call": "Dkc1CoopHudEnd(cpu)",
+      "bytes": "22 49 a8 bb 4c 9d",
+      "private_boundary": true
+    },
+    {
+      "group": "hud",
+      "symbol": "CODE_BBA772_M0X0",
+      "pc": "BBA772",
+      "call": "Dkc1CoopHudSpriteBegin(cpu)",
+      "bytes": "8b 4b ab 4a 4a 4a"
+    },
+    {
+      "group": "hud-return",
+      "symbol": "CODE_BBA772_M0X0",
+      "pc": "BBA7CA",
+      "call": "Dkc1CoopHudSpriteEnd(cpu)",
+      "bytes": "6b bd 11 0d dd e5"
+    },
+    {
+      "group": "hud-return",
+      "symbol": "CODE_BBA772_M0X0",
+      "pc": "BBA817",
+      "call": "Dkc1CoopHudSpriteEnd(cpu)",
+      "bytes": "6b 0a 0a 0a 0a 0a"
+    },
+    {
+      "group": "hud-return",
+      "symbol": "CODE_BBA772_M0X0",
+      "pc": "BBA844",
+      "call": "Dkc1CoopHudSpriteEnd(cpu)",
+      "bytes": "6b 20 df aa 6b 9c"
+    },
+    {
+      "group": "pickup",
+      "symbol": "CODE_BF8711_M0X0",
+      "pc": "BF8749",
+      "call": "Dkc1CoopPublishPickupBounds(cpu)",
+      "bytes": "60 20 f7 a0 b0 1c"
+    },
+    {
+      "group": "mount",
+      "symbol": "CODE_BF936E_M0X0",
+      "pc": "BF93DE",
+      "call": "Dkc1CoopFinishBarrelRescue(cpu)",
+      "aot_label": "93DB",
+      "aot_before": "    cpu->PB = 0xBE; /* JML into bank $BE */\n",
+      "bytes": "5c a4 80 be a9 60"
+    },
+    {
+      "group": "rope",
+      "symbol": "CODE_BFEE68_M0X0",
+      "pc": "BFEE82",
+      "call": "Dkc1CoopBlockRopeDeparture(cpu)",
+      "redirect": "BFEE7F",
+      "bytes": "a6 82 fe 29 10 bd"
+    },
+    {
+      "group": "rope",
+      "symbol": "CODE_BF94B3_M0X0",
+      "pc": "BF951B",
+      "call": "Dkc1CoopRopeWaitCamera(cpu)",
+      "redirect": "BF9526",
+      "bytes": "b9 89 0e 30 06 a9 50 00"
+    },
+    {
+      "group": "map",
+      "symbol": "CODE_80CF2D_M0X0",
+      "pc": "80CF2D",
+      "call": "Dkc1CoopSelectMapAvatar(cpu)",
+      "bytes": "a2 00 00 8e ab 08 bd 45"
+    },
+    {
+      "group": "rope",
+      "symbol": "CODE_BFEF0C_M0X0",
+      "pc": "BFEF51",
+      "call": "Dkc1CoopRememberRopeContact(cpu)",
+      "bytes": "8e fd 1a 60 20 75 b0"
+    },
+    {
+      "group": "wheel",
+      "symbol": "CODE_B6F4E0_M0X0",
+      "pc": "B6F4E9",
+      "call": "Dkc1CoopBlockWheelDeparture(cpu)",
+      "redirect": "B6F4EF",
+      "bytes": "fe 29 10 9e e9 13 4c 9d f4"
+    },
+    {
+      "group": "map",
+      "symbol": "CODE_80C157_M0X0",
+      "pc": "80C1C8",
+      "call": "Dkc1CoopPublishMapPads(cpu)",
+      "bytes": "60 85 1c e2 20"
+    },
+    {
+      "group": "scanner",
+      "symbol": "CODE_BDFE39_M0X0",
+      "pc": "BDFE67",
+      "call": "Dkc1CoopWorldNoteScan(cpu)",
+      "private_boundary": true,
+      "bytes": "6b 98 18 69 08 00"
+    },
+    {
+      "group": "scanner",
+      "symbol": "CODE_BDFDBD_M0X0",
+      "pc": "BDFDBD",
+      "call": "Dkc1CoopWorldNoteInitialize()",
+      "after_deadline": false,
+      "private_boundary": true,
+      "bytes": "4b ab 9c 03 1e 9c"
+    },
+    {
+      "group": "scanner",
+      "symbol": "CODE_BDF502_M0X0",
+      "pc": "BDF570",
+      "call": "Dkc1CoopWorldKeepSource(cpu, 0)",
+      "after_deadline": false,
+      "redirect": "BDF561",
+      "bytes": "ab bd fd 15 a8 a9",
+      "aot": "    if (Dkc1CoopWorldKeepSource(cpu, 0))\n      goto L_F561_M0X0;\n"
+    },
+    {
+      "group": "scanner",
+      "symbol": "CODE_BDF502_M0X0",
+      "pc": "BDF5C5",
+      "call": "Dkc1CoopWorldKeepSource(cpu, 1)",
+      "after_deadline": false,
+      "redirect": "BDF67A",
+      "bytes": "a5 78 38 e5 76 4a",
+      "aot": "    if (Dkc1CoopWorldKeepSource(cpu, 1))\n      goto L_F67A_M0X0;\n"
+    },
+    {
+      "group": "wheel",
+      "symbol": "CODE_B6AA34_M0X0",
+      "pc": "B6AA3D",
+      "call": "Dkc1CoopBlockCroctopusDeparture(cpu)",
+      "redirect": "B6AA4A",
+      "bytes": "fe 29 10 9e e9 13 a9 77 01 22 af 80 be"
+    },
+    {
+      "group": "pickup",
+      "symbol": "CODE_B683D2_M0X0",
+      "pc": "B68421",
+      "call": "Dkc1CoopRememberAnimalBonus(cpu)",
+      "bytes": "a9 11 00 8d 29 19"
+    }
+  ],
+  "operands": [
+    {
+      "name": "native rope ceiling operand",
+      "symbol": "CODE_BFA095_M0X0",
+      "pc": "BFA0A9",
+      "address": "0895",
+      "width": 2,
+      "bytes": "ed 95 08 38 e9 28 00",
+      "read": "cpu_read16(cpu, cpu->DB, (uint16)(0x0895))",
+      "call": "Dkc1CoopRopeClimbCameraY(cpu->ram, {native})",
+      "header": "dkc1_coop_mod.h"
+    },
+    {
+      "name": "native scripted Kong pad owner",
+      "symbol": "Player_ProcessInput_M0X0",
+      "pc": "BFB2C7",
+      "address": "0044",
+      "width": 2,
+      "bytes": "a5 44 0a a8 b9 04 05 85 80",
+      "read": "cpu_read16(cpu, 0x00, (uint16)(cpu->D + 0x0044))",
+      "call": "Dkc1CoopNativePadOwner(cpu, {native})",
+      "header": "dkc1_coop_mod.h",
+      "aot_label": "B2C7"
+    },
+    {
+      "name": "native per-view camera focus",
+      "symbol": "CODE_809BEC_M0X0",
+      "pc": "809BFC",
+      "address": "1E29",
+      "width": 2,
+      "bytes": "ad 29 1e f0 06 9c 29 1e a8",
+      "read": "cpu_read16(cpu, cpu->DB, (uint16)(0x1e29))",
+      "call": "Dkc1CoopWorldCameraFocus(cpu, {native})",
+      "header": "dkc1_coop_world.h"
+    }
+  ],
+  "culls": [
+    {
+      "symbol": "CODE_BCBC63_M0X0",
+      "failure": "BC75",
+      "success": "BC73",
+      "routine": "0xbc63",
+      "pc": "BCBC75",
+      "bytes": "38 60 a6 82"
+    },
+    {
+      "symbol": "CODE_BCBC77_M0X0",
+      "failure": "BC96",
+      "success": "BC94",
+      "routine": "0xbc77",
+      "pc": "BCBC96",
+      "bytes": "38 60 20 77"
+    },
+    {
+      "symbol": "CODE_BDF6FF_M0X0",
+      "failure": "F74F",
+      "success": "F735",
+      "routine": "0xf6ff",
+      "pc": "BDF74F",
+      "bytes": "38 60 a6 82"
+    },
+    {
+      "symbol": "CODE_BDF751_M0X0",
+      "failure": "F78A",
+      "success": "F77C",
+      "routine": "0xf751",
+      "pc": "BDF78A",
+      "bytes": "38 60 a6 82"
+    },
+    {
+      "symbol": "CODE_BDF78C_M0X0",
+      "failure": "F7CE",
+      "success": "F7C0",
+      "routine": "0xf78c",
+      "pc": "BDF7CE",
+      "bytes": "38 60 20 8c"
+    },
+    {
+      "symbol": "CODE_BDF7D4_M0X0",
+      "failure": "F816",
+      "success": "F808",
+      "routine": "0xf7d4",
+      "pc": "BDF816",
+      "bytes": "38 60 20 d4"
+    },
+    {
+      "symbol": "CODE_BDF81C_M0X0",
+      "failure": "F843",
+      "success": "F835",
+      "routine": "0xf81c",
+      "pc": "BDF843",
+      "bytes": "38 60 20 1c"
+    },
+    {
+      "symbol": "CODE_BDF85B_M0X0",
+      "failure": "F87B",
+      "success": "F879",
+      "routine": "0xf85b",
+      "pc": "BDF87B",
+      "bytes": "38 60 ad 95"
+    }
+  ],
+  "entity_hooks": [
+    {
+      "symbol": "CODE_BFA17E_M0X0",
+      "pc": "BFA1D4",
+      "kind": "label",
+      "call": "Dkc1CoopIndependentDamage(cpu)",
+      "redirect": "BFA1EF",
+      "bytes": "8a 49 06 00 a8 a9"
+    },
+    {
+      "symbol": "CODE_BFA3AE_M0X0",
+      "pc": "BFA3F9",
+      "kind": "label",
+      "call": "Dkc1CoopIndependentDamage(cpu)",
+      "redirect": "BFA40D",
+      "aot_label": "A3F8",
+      "aot_after": "      cpu->P = (uint8)((cpu->P & ~0x82) | (cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0)); }",
+      "source_pc": "BFA3F8",
+      "bytes": "fa 8a 49 06 00 a8"
+    },
+    {
+      "symbol": "CODE_BFA697_M0X0",
+      "pc": "BFA6D1",
+      "kind": "label",
+      "call": "Dkc1CoopIndependentFall(cpu)",
+      "redirect": "BFA6FC",
+      "bytes": "a4 84 b9 12 05 f0"
+    },
+    {
+      "symbol": "CODE_80A1E6_M0X0",
+      "pc": "80A1E6",
+      "kind": "label",
+      "call": "Dkc1CoopEntitiesPoolReset()",
+      "private_boundary": true,
+      "bytes": "a2 00 00 9e 45 0d"
+    },
+    {
+      "symbol": "CODE_BDF3A2_M0X0",
+      "pc": "BDF3B1",
+      "kind": "label",
+      "call": "Dkc1CoopEntityAllocate(cpu, 0x1eu)",
+      "redirect": "BDF3B5",
+      "bytes": "64 86 38 60 86 86"
+    },
+    {
+      "symbol": "CODE_BDF3A2_M0X0",
+      "pc": "BDF3B5",
+      "kind": "label",
+      "call": "Dkc1CoopEntityAllocated(cpu)",
+      "bytes": "86 86 a9 00 80 9d"
+    },
+    {
+      "symbol": "CODE_BDF3C3_M0X0",
+      "pc": "BDF3D2",
+      "kind": "label",
+      "call": "Dkc1CoopEntityAllocate(cpu, 0x34u)",
+      "redirect": "BDF3D6",
+      "bytes": "64 86 38 60 86 86"
+    },
+    {
+      "symbol": "CODE_BDF3C3_M0X0",
+      "pc": "BDF3D6",
+      "kind": "label",
+      "call": "Dkc1CoopEntityAllocated(cpu)",
+      "bytes": "86 86 a9 00 80 9d"
+    },
+    {
+      "symbol": "CODE_B6E775_M0X0",
+      "pc": "B6E78D",
+      "kind": "label",
+      "call": "cpu->X = Dkc1CoopEntityBackwardIndex(cpu->X)",
+      "aot_label": "E78B",
+      "aot_before": "    if ((0x0AB1 & 0xFF00) != ((0x0AB1 + cpu->X) & 0xFF00))",
+      "source_pc": "B6E78B",
+      "bytes": "ca ca dd b1 0a d0"
+    },
+    {
+      "symbol": "CODE_B6E775_M0X0",
+      "pc": "B6E79B",
+      "kind": "label",
+      "call": "cpu->Y = Dkc1CoopEntityBackwardIndex(cpu->Y)",
+      "aot_label": "E799",
+      "aot_before": "    if ((0x0AB1 & 0xFF00) != ((0x0AB1 + cpu->Y) & 0xFF00))",
+      "source_pc": "B6E799",
+      "bytes": "88 88 d9 b1 0a d0"
+    },
+    {
+      "symbol": "CODE_BCADBF_M0X0",
+      "pc": "BCADC4",
+      "kind": "label",
+      "call": "cpu->X = Dkc1CoopEntityBackwardIndex(cpu->X)",
+      "aot_label": "ADC2",
+      "aot_before": "    if (cpu->_flag_N == 0)",
+      "source_pc": "BCADC2",
+      "bytes": "ca ca 10 03 a2 32"
+    },
+    {
+      "symbol": "CODE_BBA594_M0X0",
+      "pc": "BBA59B",
+      "kind": "label",
+      "call": "Dkc1CoopEntityCollisionCursor(cpu)",
+      "aot_label": "A597",
+      "aot_before": "    if (cpu->_flag_Z == 1)",
+      "source_pc": "BBA597",
+      "bytes": "c6 88 c6 88 f0 72"
+    },
+    {
+      "symbol": "CODE_BBA66A_M0X0",
+      "pc": "BBA671",
+      "kind": "label",
+      "call": "Dkc1CoopEntityCollisionCursor(cpu)",
+      "aot_label": "A66D",
+      "aot_before": "    if (cpu->_flag_Z == 1)",
+      "source_pc": "BBA66D",
+      "bytes": "c6 88 c6 88 f0 68"
+    },
+    {
+      "symbol": "CODE_BBA58D_M0X0",
+      "pc": "BBA592",
+      "kind": "collision-start",
+      "call": "Dkc1CoopEntityLoopEnd(0x1eu)",
+      "source_pc": "BBA58F",
+      "bytes": "a9 1e 00 85 88 8b"
+    },
+    {
+      "symbol": "CODE_BBA663_M0X0",
+      "pc": "BBA668",
+      "kind": "collision-start",
+      "call": "Dkc1CoopEntityLoopEnd(0x1eu)",
+      "source_pc": "BBA665",
+      "bytes": "a9 1e 00 85 88 8b"
+    },
+    {
+      "symbol": "CODE_BCB781_M0X0",
+      "pc": "BCB78D",
+      "kind": "clear-range",
+      "call": "Dkc1CoopEntityClearRange((uint16)(cpu->D + cpu->X), cpu->A)",
+      "aot_label": "B789",
+      "source_pc": "BCB789",
+      "bytes": "aa b9 02 00 4a 74"
+    }
+  ],
+  "immediates": [
+    {
+      "symbol": "CODE_B6E775_M0X0",
+      "pc": "B6E788",
+      "aot_label": "E784",
+      "native": "0x32",
+      "call": "Dkc1CoopEntityLoopEnd(0x32u)",
+      "bytes": "a2 32 00 ca ca dd"
+    },
+    {
+      "symbol": "CODE_B6E775_M0X0",
+      "pc": "B6E796",
+      "aot_label": "E792",
+      "native": "0x32",
+      "call": "Dkc1CoopEntityLoopEnd(0x32u)",
+      "bytes": "a0 32 00 88 88 d9"
+    },
+    {
+      "symbol": "CODE_BCADBF_M0X0",
+      "pc": "BCADC6",
+      "aot_label": "ADC6",
+      "native": "0x32",
+      "call": "Dkc1CoopEntityLastHandle()",
+      "bytes": "a2 32 00 bd 45 0d"
+    }
+  ],
+  "resource_hooks": [
+    {
+      "symbol": "CODE_81D894_M0X0",
+      "pc": "81D894",
+      "kind": "group-release",
+      "call": "Dkc1CoopGraphicsRelease(cpu, _coop_graphics_handle)",
+      "redirect": "81D8AE",
+      "marker": "COOP_GRAPHICS_GROUP_RELEASE",
+      "bytes": "a4 82 b9 69 0c 29"
+    },
+    {
+      "symbol": "CODE_B5821E_M0X0",
+      "pc": "B5821E",
+      "kind": "palette",
+      "call": "Dkc1CoopGraphicsCopyPalette({read86},\n                               {read82})",
+      "marker": "COOP_GRAPHICS_INHERIT_PALETTE",
+      "bytes": "a9 00 00 5b b9 02"
+    },
+    {
+      "symbol": "CODE_B582BF_M0X0",
+      "pc": "B582BF",
+      "kind": "palette",
+      "call": "Dkc1CoopGraphicsCopyPalette({read86},\n                               {read82})",
+      "marker": "COOP_GRAPHICS_INHERIT_PALETTE",
+      "bytes": "a9 00 00 5b b9 02"
+    },
+    {
+      "symbol": "CODE_B582A5_M0X0",
+      "pc": "B582A5",
+      "kind": "palette",
+      "call": "Dkc1CoopGraphicsUseFixedPalette({read86})",
+      "marker": "COOP_GRAPHICS_FIXED_PALETTE",
+      "bytes": "a9 00 00 5b a6 86"
+    }
+  ]
+}

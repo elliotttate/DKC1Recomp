@@ -8,6 +8,11 @@
 const RtlGameInfo *Dkc1GameInfo(void);
 void Dkc1BeginDrawing(uint8_t *pixels, size_t pitch);
 void Dkc1DrawPpuFrame(void);
+/* Display composition is separate from the cartridge's 224-line framebuffer.
+ * The returned pixels are packed at Dkc1VideoWidth()*4 bytes per row. */
+int Dkc1PresentationHeight(void);
+const uint8_t *Dkc1PresentationPixels(const uint8_t *primary, size_t pitch);
+void Dkc1InvalidatePresentation(void);
 uint32_t Dkc1ResumePc(void);
 int Dkc1LastLleResult(void);
 

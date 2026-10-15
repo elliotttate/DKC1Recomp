@@ -9,7 +9,7 @@ git submodule update --init --recursive
 if ($LASTEXITCODE) { throw 'Submodule initialization failed' }
 python scripts/generate_snesrecomp.py --rom $Rom --analysis-backend python
 if ($LASTEXITCODE) { throw 'Private ROM generation failed' }
-cmake -S . -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DSNESRECOMP_SDL_BACKEND=SDL2
+cmake -S . -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DSNESRECOMP_SDL_BACKEND=SDL2 "-DDKC1_COOP_ROM=$((Resolve-Path -LiteralPath $Rom).Path)"
 if ($LASTEXITCODE) { throw 'CMake configuration failed' }
 cmake --build $BuildDir --parallel 6
 if ($LASTEXITCODE) { throw 'Build failed' }

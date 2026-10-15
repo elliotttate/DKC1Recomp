@@ -10,8 +10,31 @@ collision, exits, and boss bounds remain the exact cartridge program.
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import json
 from pathlib import Path
 import re
+
+
+COOP_CATALOG = json.loads((Path(__file__).resolve().parents[1] /
+                           "contracts/coop-hooks.json").read_text())
+COOP_EVENT_HOOKS = COOP_CATALOG["hooks"]
+COOP_OPERAND_HOOKS = COOP_CATALOG["operands"]
+
+
+def inject_coop_events(sources, group):
+    headers = {"camera": "dkc1_coop_world.h", "mount": "dkc1_coop_mod.h",
+               "hud": "dkc1_coop_hud.h", "pickup": "dkc1_coop_mod.h",
+               "rope": "dkc1_coop_mod.h", "map": "dkc1_coop_mod.h", "wheel": "dkc1_coop_mod.h", "scanner": "dkc1_coop_world.h"}
+    for hook in COOP_EVENT_HOOKS:
+        if hook["group"] != group: continue
+        code = hook.get("aot")
+        if code is None:
+            code = (f'    if ({hook["call"]}) goto L_{hook["redirect"][-4:]}_M0X0;\n'
+                    if "redirect" in hook else f'    {hook["call"]};\n')
+        inject_coop_label(sources, hook["symbol"], hook.get("aot_label", hook["pc"][-4:]), code,
+                          after_deadline=hook.get("after_deadline", True), header_name=headers[group],
+                          before_statement=hook.get("aot_before"))
 
 
 INCLUDE = '#include "dkc1_video.h"'
@@ -510,16 +533,27 @@ def adapt_placed_actor_phase_guard(sources: dict[Path, str]) -> None:
         text = text[:start] + block + text[end:]
         sources[path] = text
 
-    for owner, start_label, end_label in (
-            ("CODE_BF8000_M0X0", "L_802D_M0X0:", "L_8033_M0X0:"),
-            ("CODE_BF804B_M0X0", "L_8067_M0X0:", "L_806D_M0X0:")):
+    # Reuse the actor JSL catalog; its overlay entries own these Begin/End
+    # boundaries, including the already existing scheduled fast path.
+    spec = importlib.util.spec_from_file_location(
+        "coop_dispatch_schedule", Path(__file__).with_name("apply_dkc1_coop_schedule.py"))
+    schedule = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(schedule)
+    for owner, pc, _target, ret, overlay in schedule.CALLS:
+        if not overlay: continue
+        start_label = f"L_{(pc - 2) & 0xffff:04X}_M0X0:"
+        end_label = f"L_{ret & 0xffff:04X}_M0X0:"
         path, text, start, end = locate_function_block(
             sources, owner, start_label, end_label)
         block = text[start:end]
         begin_call = "Dkc1VideoBeginPlacedActorDispatch(cpu);"
         end_call = "Dkc1VideoEndPlacedActorDispatch(cpu);"
         if begin_call in block or end_call in block:
-            if block.count(begin_call) != 1 or block.count(end_call) != 1:
+            # The host continuation fast path has its own matching cleanup
+            # before it skips the native JSL. Both paths end exactly once.
+            endings = 1 + block.count("Dkc1CoopScheduleActor(cpu,")
+            if block.count(begin_call) != 1 or block.count(end_call) != endings:
                 raise ValueError(
                     f"ambiguous placed-actor transaction in {start_label}")
             continue
@@ -527,7 +561,7 @@ def adapt_placed_actor_phase_guard(sources: dict[Path, str]) -> None:
             r"(    cpu_write16\(cpu, 0x00, \(uint16\)\(cpu->D \+ "
             r"0x0082\), \w+\);\n)")
         block, count = store_pattern.subn(
-            r"\1    Dkc1VideoBeginPlacedActorDispatch(cpu);\n", block, 1)
+            lambda m: m[1] + "    " + begin_call + "\n", block, 1)
         if count != 1:
             raise ValueError(
                 f"expected current-index store in {start_label}")
@@ -539,7 +573,7 @@ def adapt_placed_actor_phase_guard(sources: dict[Path, str]) -> None:
                 f"found {len(matches)}")
         offset = matches[0].start()
         block = (block[:offset] +
-                 "    Dkc1VideoEndPlacedActorDispatch(cpu);\n" +
+                 "    " + end_call + "\n" +
                  block[offset:])
         sources[path] = add_include(text[:start] + block + text[end:])
 
@@ -615,6 +649,137 @@ def adapt_margin_proxy_render_calls(sources: dict[Path, str]) -> None:
         sources[path] = add_include(text[:start] + block + text[end:])
 
 
+COOP_CULL_FAILURES = tuple((h["symbol"],h["failure"],h["success"],h["routine"])
+                          for h in COOP_CATALOG["culls"])
+
+
+def inject_coop_label(sources: dict[Path, str], symbol: str,
+                      label: str, injection: str, *, after_deadline: bool = False,
+                      header_name: str = "dkc1_coop_world.h",
+                      before_statement: str | None = None) -> None:
+    """Add a source-owned hook at one exact native basic-block boundary."""
+    path, text = locate_function(sources, symbol)
+    start, end = function_span(text, symbol)
+    block = text[start:end]
+    marker = f"  L_{label}_M0X0:\n"
+    if block.count(marker) != 1:
+        raise ValueError(f"expected one {symbol}/{label} co-op boundary")
+    insert_at = block.index(marker) + len(marker)
+    if after_deadline:
+        label_start = insert_at
+        following = re.search(r"\n  L_[0-9A-F]+_M[01]X[01]:", block[label_start:])
+        label_end = label_start + following.start() if following else len(block)
+        cycle_marker = "    cpu->coprocessor_master_cycles = cpu->master_cycles;\n"
+        if block[label_start:label_end].count(cycle_marker) != 1:
+            raise ValueError(f"expected one {symbol}/{label} cycle boundary")
+        insert_at = block.index(cycle_marker, label_start, label_end) + len(cycle_marker)
+        if before_statement is not None:
+            # The shared catalog may name an instruction inside an AOT block.
+            # Insert after its preceding native operands, before the JML itself.
+            if block[insert_at:label_end].count(before_statement) != 1:
+                raise ValueError(f"expected one {symbol}/{label} instruction boundary")
+            insert_at = block.index(before_statement, insert_at, label_end)
+    if injection in block:
+        existing_at = insert_at - len(injection) if before_statement else insert_at
+        if block.count(injection) != 1 or block[existing_at:existing_at + len(injection)] != injection:
+            raise ValueError(f"ambiguous existing co-op hook {symbol}/{label}")
+        return
+    block = block[:insert_at] + injection + block[insert_at:]
+    text = add_include(text[:start] + block + text[end:])
+    header = f'#include "{header_name}"'
+    if header not in text:
+        text = text.replace(INCLUDE, INCLUDE + "\n" + header, 1)
+    sources[path] = text
+
+
+def adapt_coop_world(sources: dict[Path, str]) -> None:
+    # Retire source-owned hooks from the former independent-cart policy.
+    retired = {
+        "CODE_B69F36_M0X0": "    if (Dkc1CoopMinecartIndependent(cpu)) goto L_9F6E_M0X0;\n",
+    }
+    for path, text in list(sources.items()):
+        for symbol, hook in retired.items():
+            if f"RecompReturn {symbol}(CpuState *cpu) {{" in text:
+                start, end = function_span(text, symbol)
+                block = text[start:end]
+                if hook in block:
+                    text = text[:start] + block.replace(hook, "") + text[end:]
+        sources[path] = text
+    # The water controller has completed, even if the next host deadline
+    # interrupts the rest of this cartridge update. Never step it on redraw.
+    inject_coop_events(sources, "camera")
+    # Complete the activation pass, initialization and source-window culls
+    # at their original phases; the gameplay timer is never repeated.
+    inject_coop_events(sources, "scanner")
+    for symbol, failure, success, routine in COOP_CULL_FAILURES:
+        inject_coop_label(sources, symbol, failure,
+                          f"    if (Dkc1CoopWorldKeepActor(cpu, {routine}))\n"
+                          f"      goto L_{success}_M0X0;\n")
+
+
+def adapt_coop_operands(sources: dict[Path, str]) -> None:
+    # Level input consumes per-Kong buffers, not the map's effective pad.
+    # Remove an earlier global-publication hook from already adapted units.
+    symbol = "CODE_80A257_M0X0"
+    path, text = locate_function(sources, symbol)
+    start, end = function_span(text, symbol)
+    sources[path] = text[:start] + text[start:end].replace(
+        "    Dkc1CoopPublishMapPads(cpu);\n", "") + text[end:]
+    for hook in COOP_OPERAND_HOOKS:
+        path, text = locate_function(sources, hook["symbol"])
+        start, end = function_span(text, hook["symbol"])
+        if "aot_label" in hook:
+            label = "\n  L_" + hook["aot_label"] + "_M0X0:"
+            start = text.index(label, start, end)
+            following = re.search(r"\n  L_\w+:", text[start + len(label):end])
+            if following:
+                end = start + len(label) + following.start()
+        block = text[start:end]
+        old = hook["read"]
+        new = hook["call"].format(native=old)
+        if block.count(new) == 1 and block.count(old) == 1:
+            continue
+        if block.count(old) != 1 or new in block:
+            raise ValueError(f"expected one {hook['name']}")
+        block = block.replace(old,new)
+        text = text[:start] + block + text[end:]
+        header = f'#include "{hook["header"]}"'
+        if header not in text:
+            text = text.replace(INCLUDE,INCLUDE+"\n"+header,1)
+        sources[path] = text
+
+
+def adapt_coop_mounted_partner(sources: dict[Path, str]) -> None:
+    # Upgrade the old mount-only gate without leaving a second generated hook.
+    for path, text in sources.items():
+        sources[path] = text.replace(
+            "    if (Dkc1CoopBlockMountedSwap(cpu)) goto L_BFA1_M0X0;\n", "")
+    inject_coop_events(sources, "mount")
+
+
+def adapt_coop_ropes(sources: dict[Path, str]) -> None:
+    inject_coop_events(sources, "rope")
+
+
+def adapt_coop_hud(sources: dict[Path, str]) -> None:
+    # Capture only the completed native HUD pass. Effects and world actors
+    # surround these boundaries and are rendered independently per view.
+    inject_coop_events(sources, "hud")
+    path, text = locate_function(sources, "CODE_BBA772_M0X0")
+    start, end = function_span(text, "CODE_BBA772_M0X0")
+    block = text[start:end]
+    marker = "    { uint16 _ret_s = cpu->S;  /* RTL pop hardware return frame */"
+    exits = [h for h in COOP_EVENT_HOOKS if h["group"] == "hud-return"]
+    if len(exits) != 3 or len({h["call"] for h in exits}) != 1:
+        raise ValueError("HUD return contracts disagree")
+    call = f'    {exits[0]["call"]};\n'
+    if block.count(marker) != 3 or block.count(call) not in (0, 3):
+        raise ValueError("expected three BBA772 HUD sprite returns")
+    if call not in block:
+        block = block.replace(marker, call + marker)
+        sources[path] = text[:start] + block + text[end:]
+
+
 LEFT_BLOCKS = (
     ("CODE_BDF502_M0X0", "F5AA"), ("CODE_BDF502_M0X0", "F5F8"),
     ("CODE_BDF6FF_M0X0", "F6FF"), ("CODE_BDF751_M0X0", "F751"),
@@ -639,6 +804,29 @@ PREFETCH_BLOCKS = (
     ("CODE_BDF502_M0X0", "F585"),
     ("CODE_BDFB76_M0X0", "FB80"),
 )
+
+
+def apply_adjacent_adapter(sources: dict[Path, str], name: str) -> None:
+    # Resolve beside this script, including when a caller imports it by path
+    # from a different working directory.
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).with_name(name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    module.apply_overrides(sources)
+
+
+def adapt_coop_entities(sources: dict[Path, str]) -> None:
+    apply_adjacent_adapter(sources, "apply_dkc1_coop_entities")
+
+
+def adapt_coop_graphics(sources: dict[Path, str]) -> None:
+    apply_adjacent_adapter(sources, "apply_dkc1_coop_graphics")
+
+
+def adapt_coop_schedule(sources: dict[Path, str]) -> None:
+    apply_adjacent_adapter(sources, "apply_dkc1_coop_schedule")
 
 
 def apply_overrides(generated_dir: Path) -> list[Path]:
@@ -697,6 +885,14 @@ def apply_overrides(generated_dir: Path) -> list[Path]:
     adapt_placed_actor_phase_guard(sources)
     adapt_type5_child_retry(sources)
     adapt_margin_proxy_render_calls(sources)
+    adapt_coop_world(sources)
+    adapt_coop_operands(sources)
+    adapt_coop_hud(sources)
+    adapt_coop_mounted_partner(sources)
+    adapt_coop_ropes(sources)
+    inject_coop_events(sources, "map")
+    inject_coop_events(sources, "wheel")
+    inject_coop_events(sources, "pickup")
 
     # Banana formations have a private candidate window and direct OAM
     # writer.  No camera correction is required: the host leaves the logical
@@ -721,6 +917,13 @@ def apply_overrides(generated_dir: Path) -> list[Path]:
         "Dkc1VideoPromoteOamXHigh")
 
     adapt_vertical_rope(sources)
+
+    # Keep literal actor-table bases available to the co-op virtual-handle
+    # adapter before generated units are written. The standalone module owns
+    # the field inventory and rejects unmatched allocator/loop contracts.
+    adapt_coop_entities(sources)
+    adapt_coop_graphics(sources)
+    adapt_coop_schedule(sources)
 
     changed = []
     for path, text in sources.items():

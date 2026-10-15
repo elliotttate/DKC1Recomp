@@ -1,4 +1,8 @@
 @echo off
+python "%~dp0scripts\prepare_coop_rasterizer.py"
+if errorlevel 1 exit /b 1
+python "%~dp0scripts\prepare_coop_interp_bridge.py"
+if errorlevel 1 exit /b 1
 rem Build the DKC1 headless host with MSVC directly (no CMake required).
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
 cd /d %~dp0
@@ -28,9 +32,13 @@ cl /nologo /c /MP8 /W0 /O1 %DEFS% %INCS% ^
   %SR%\snes\ppu_legacy.c %SR%\snes\sa1.c %SR%\snes\ws_shadow.c ^
   %SR%\snes\snes.c %SR%\snes\snes_other.c %SR%\snes\spc.c ^
   %SR%\snes\superfx.c %SR%\snes\interp816.c %SR%\snes\tier2_capture.c ^
-  %SR%\snes\interp_bridge.c %SR%\snes\cx4.c ^
+  ..\..\runner\dkc1_coop_interp.c ..\..\runner\dkc1_coop_schedule.c %SR%\snes\cx4.c ^
   ..\..\runner\dkc1_game.c ..\..\runner\dkc1_video.c ..\..\runner\desktop_sram.c ^
   ..\..\runner\dkc1_baby_kong.c ..\..\runner\dkc1_baby_kong_animation.c ..\..\runner\dkc1_dixie_mod.c ..\..\runner\dkc1_baby_kong_movement.c ^
+  ..\..\runner\dkc1_coop_mod.c ..\..\runner\dkc1_coop_movement.c ^
+  ..\..\runner\dkc1_coop_world.c ..\..\runner\dkc1_coop_entities.c ^
+  ..\..\runner\dkc1_coop_graphics.c ..\..\runner\dkc1_coop_view.c ^
+  ..\..\runner\dkc1_coop_ppu.c ..\..\runner\dkc1_coop_formations.c ..\..\runner\dkc1_coop_hud.c ^
   ..\..\runner\dkc1_margin_proxy.c ^
   ..\..\runner\dkc1_ws_trace.c ^
   ..\..\runner\headless_host.c ..\..\runner\input_playback.c ^
@@ -47,7 +55,7 @@ if errorlevel 1 exit /b 1
 cl /nologo /c /W0 /O1 %DEFS% %INCS% %BUILD_ID_DEFS% /Fo:..\main_win32.obj ..\..\runner\win32_host.c
 if errorlevel 1 exit /b 1
 set LINK_RETRIES=0
-dir /b *.obj > objects.rsp
+dir /b *.obj | findstr /v /i /x "interp_bridge.obj" > objects.rsp
 :link_headless
 link /nologo /out:..\dkc1_snesrecomp_headless.exe @objects.rsp ..\main_headless.obj ws2_32.lib user32.lib advapi32.lib
 if not errorlevel 1 goto link_desktop_begin

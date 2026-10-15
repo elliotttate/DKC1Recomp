@@ -1,5 +1,13 @@
 #include "dkc1_game.h"
 #include "dkc1_baby_kong.h"
+#include "dkc1_coop_mod.h"
+#include "dkc1_coop_world.h"
+#include "dkc1_coop_entities.h"
+#include "dkc1_coop_graphics.h"
+#include "dkc1_coop_view.h"
+#include "dkc1_coop_interp.h"
+#include "dkc1_coop_hud.h"
+#include "dkc1_coop_wire.h"
 #include "dkc1_video.h"
 #include "dkc1_terrain.h"
 #include "dkc1_wall_seams.h"
@@ -75,6 +83,15 @@ static void Dkc1Initialize(void) {
   /* Baby Kong (Kiddy) was removed from the Mods menu and cannot be enabled:
    * its env initializer is intentionally not called, so DKC1_BABY_KONG* has
    * no effect even if set. The compiled hooks remain inert. */
+  Dkc1CoopInitialize();
+  Dkc1CoopEntitiesReset();
+  Dkc1CoopGraphicsReset();
+  Dkc1CoopGraphicsSetRom(g_snes->cart->rom, g_snes->cart->romSize);
+  Dkc1CoopInterpSetRom(g_snes->cart->rom, g_snes->cart->romSize);
+  Dkc1CoopWorldReset();
+  Dkc1CoopViewLoadState(NULL, 0);
+  Dkc1CoopViewInvalidate();
+  Dkc1CoopHudReset();
   /* The main engine can reach both initializers while executing through the
    * bank-$00 HiROM interpreter mirror. Generated-C adapters alone therefore
    * miss those entries. Mirror the same two constant substitutions at the
@@ -108,6 +125,12 @@ typedef struct Dkc1HostSnapshot {
 static void Dkc1SaveWidescreenSnapshot(SaveLoadInfo *sli);
 static bool Dkc1LoadWidescreenSnapshot(SaveLoadInfo *sli);
 static bool s_ws_snapshot_restore_valid;
+static Dkc1CoopSnapshot s_coop_snapshot_restore;
+static bool s_coop_snapshot_restore_valid;
+static bool s_coop_world_restore_valid;
+static Dkc1CoopActorSnapshot s_coop_actor_restore;
+static Dkc1CoopContinuation s_coop_continuation_restore;
+static bool s_coop_actor_restore_valid;
 
 enum {
   /* NTSC master clocks per non-short host frame. */
@@ -116,6 +139,8 @@ enum {
 
 static void Dkc1RunOneFrame(void) {
   bool first_frame = !s_cpu_initialized;
+  Dkc1CoopBeginFrame(g_ram, (uint32_t)g_snes->input1_currentState |
+                               ((uint32_t)g_snes->input2_currentState << 12));
   /* This must precede the cartridge scanner/allocation pass. It records free
    * actor slots left by the completed prior frame so same-ID/source reuse is
    * recognized as a new placed-object generation. */
@@ -146,10 +171,15 @@ static void Dkc1RunOneFrame(void) {
         interp_bridge_run_until_quiescent(&g_cpu, s_resume_pc);
   }
 
+  Dkc1CoopSuspendActor(g_ram, interp_bridge_lle_resume_pc(), g_cpu.S);
   Dkc1BabyKongApplyMoves(g_ram);
+  Dkc1CoopEndFrame(g_ram);
+  Dkc1CoopWorldNoteFrame(g_ram);
+  Dkc1CoopGraphicsNoteFrame();
 
   interp_bridge_set_master_deadline(0);
   s_resume_pc = interp_bridge_lle_resume_pc();
+  Dkc1CoopWorldRunScanner(&g_cpu);
   if (g_cpu.master_cycles < s_next_frame_master) {
     g_cpu.master_cycles = s_next_frame_master;
     snes_sync_master_clock(g_snes, g_cpu.master_cycles);
@@ -178,6 +208,9 @@ static void Dkc1SaveExtra(SaveLoadInfo *sli) {
 }
 
 static void Dkc1LoadExtra(SaveLoadInfo *sli, uint32_t version) {
+  s_coop_snapshot_restore_valid = false;
+  s_coop_world_restore_valid = false;
+  s_coop_actor_restore_valid = false;
   Dkc1HostSnapshot snapshot;
   sli->func(sli, &snapshot, sizeof snapshot);
   g_cpu = snapshot.cpu;
@@ -200,6 +233,22 @@ static void Dkc1LoadExtra(SaveLoadInfo *sli, uint32_t version) {
 static void Dkc1ResetWidescreenShadow(void);
 
 static void Dkc1OnStateLoaded(uint32_t version) {
+  Dkc1CoopViewInvalidate();
+  if (!s_coop_world_restore_valid) {
+    Dkc1CoopEntitiesReset();
+    Dkc1CoopGraphicsReset();
+    Dkc1CoopWorldReset();
+    Dkc1CoopHudReset();
+  }
+  s_coop_world_restore_valid = false;
+  Dkc1CoopLoadState(s_coop_snapshot_restore_valid ? &s_coop_snapshot_restore : NULL,
+                    g_ram);
+  if (s_coop_actor_restore_valid)
+    Dkc1CoopLoadActorState(&s_coop_actor_restore, g_ram);
+  Dkc1CoopLoadContinuation(&s_coop_continuation_restore);
+  memset(&s_coop_continuation_restore, 0, sizeof s_coop_continuation_restore);
+  s_coop_actor_restore_valid = false;
+  s_coop_snapshot_restore_valid = false;
   g_cpu.ram = g_ram;
   g_apu_last_sync_master = g_cpu.master_cycles;
   g_snes->beamMasterLast = g_cpu.master_cycles;
@@ -245,6 +294,7 @@ const RtlGameInfo *Dkc1GameInfo(void) {
 }
 
 void Dkc1BeginDrawing(uint8_t *pixels, size_t pitch) {
+  Dkc1CoopViewInvalidate();
   PpuBeginDrawing(g_ppu, pixels, pitch,
                   kPpuRenderFlags_NewRenderer |
                       kPpuRenderFlags_WidescreenSpriteBudget);
@@ -828,7 +878,6 @@ static int s_ws_last_presentation_extra = -1;
 
 enum {
   kDkc1WsSaveMagic = 0x38535744u, /* "DWS8" */
-  kDkc1WsSaveVersion = 1,
   kDkc1WsSaveMaximumBytes = 64 * 1024 * 1024,
 };
 
@@ -863,6 +912,8 @@ static void Dkc1SaveWidescreenSnapshot(SaveLoadInfo *sli) {
   memset(&snapshot, 0, sizeof snapshot);
   snapshot.magic = kDkc1WsSaveMagic;
   snapshot.version = kDkc1WsSaveVersion;
+  if (Dkc1CoopEntitiesActive())
+    snapshot.version = kDkc1WsSaveVersionCoopDryCamera;
   snapshot.shadowActive = s_ws_shadow_active ? 1u : 0u;
   snapshot.originValid[0] = s_ws_origin_valid[0] ? 1u : 0u;
   snapshot.originValid[1] = s_ws_origin_valid[1] ? 1u : 0u;
@@ -911,6 +962,51 @@ static void Dkc1SaveWidescreenSnapshot(SaveLoadInfo *sli) {
     }
   }
   sli->func(sli, &snapshot, sizeof snapshot);
+  /* Keep the existing shadow/video payloads and legacy co-op history layout.
+   * Cold co-op-off saves retain v1; live host actors require the newer chunk
+   * even after the user disables the mod until the next native pool reset. */
+  if (snapshot.version >= kDkc1WsSaveVersionCoop) {
+    Dkc1CoopSnapshot coop;
+    Dkc1CoopSaveState(&coop);
+    sli->func(sli, &coop, sizeof coop);
+    Dkc1CoopActorSnapshot actor;
+    Dkc1CoopSaveActorState(&actor);
+    sli->func(sli, &actor, sizeof actor);
+    Dkc1CoopContinuation continuation;
+    Dkc1CoopSaveContinuation(&continuation);
+    sli->func(sli, &continuation, sizeof continuation);
+  }
+  if (snapshot.version >= kDkc1WsSaveVersionCoopWorld) {
+    Dkc1CoopWorldSnapshot world;
+    Dkc1CoopWorldSaveState(&world);
+    sli->func(sli, &world, Dkc1CoopWorldStateSize(snapshot.version));
+    Dkc1CoopHudSnapshot hud;
+    Dkc1CoopHudSaveState(&hud);
+    sli->func(sli, &hud, Dkc1CoopHudStateSize(snapshot.version));
+    size_t sizes[2] = {Dkc1CoopEntitiesStateSize(), Dkc1CoopGraphicsStateSize()};
+    for (unsigned i = 0; i < 2; i++) {
+      uint32_t size = (uint32_t)sizes[i];
+      void *state = calloc(1, size);
+      if (!state) abort(); /* Never emit a save that silently drops live actors. */
+      int saved = i == 0 ? Dkc1CoopEntitiesSaveState(state, size) :
+                          Dkc1CoopGraphicsSaveState(state, size);
+      if (!saved) {
+        fprintf(stderr, "co-op: refusing to serialize an active metadata transaction\n");
+        abort();
+      }
+      sli->func(sli, &size, sizeof size);
+      sli->func(sli, state, size);
+      free(state);
+    }
+  }
+  if (snapshot.version >= kDkc1WsSaveVersionCoopFade) {
+    uint32_t size = (uint32_t)Dkc1CoopViewStateSize();
+    void *state = malloc(size);
+    if (!state || !Dkc1CoopViewSaveState(state, size)) abort();
+    sli->func(sli, &size, sizeof size);
+    sli->func(sli, state, size);
+    free(state);
+  }
   if (snapshot.shadowSize)
     sli->func(sli, shadow, snapshot.shadowSize);
   if (snapshot.videoSize)
@@ -921,10 +1017,77 @@ static void Dkc1SaveWidescreenSnapshot(SaveLoadInfo *sli) {
 
 static bool Dkc1LoadWidescreenSnapshot(SaveLoadInfo *sli) {
   Dkc1WidescreenSnapshot snapshot;
+  Dkc1CoopHudReset();
+  Dkc1CoopViewLoadState(NULL, 0);
+  memset(&s_coop_continuation_restore, 0, sizeof s_coop_continuation_restore);
+  s_coop_actor_restore_valid = false;
   memset(&snapshot, 0, sizeof snapshot);
   sli->func(sli, &snapshot, sizeof snapshot);
+  if (snapshot.magic == kDkc1WsSaveMagic &&
+      (snapshot.version >= kDkc1WsSaveVersionCoop &&
+       snapshot.version <= kDkc1WsSaveVersionCoopDryCamera)) {
+    memset(&s_coop_snapshot_restore, 0, sizeof s_coop_snapshot_restore);
+    sli->func(sli, &s_coop_snapshot_restore, sizeof s_coop_snapshot_restore);
+    s_coop_snapshot_restore_valid = true;
+    if (snapshot.version >= kDkc1WsSaveVersionCoopActor) {
+      memset(&s_coop_actor_restore, 0, sizeof s_coop_actor_restore);
+      sli->func(sli, &s_coop_actor_restore, sizeof s_coop_actor_restore);
+      s_coop_actor_restore_valid = true;
+      if (snapshot.version >= kDkc1WsSaveVersionCoopContinuation)
+        sli->func(sli, &s_coop_continuation_restore, sizeof s_coop_continuation_restore);
+    }
+  }
+  if (snapshot.magic == kDkc1WsSaveMagic &&
+      (snapshot.version >= kDkc1WsSaveVersionCoopWorld &&
+       snapshot.version <= kDkc1WsSaveVersionCoopDryCamera)) {
+    Dkc1CoopWorldSnapshot world = {0};
+    size_t world_size = Dkc1CoopWorldStateSize(snapshot.version);
+    sli->func(sli, &world, world_size);
+    if (snapshot.version >= kDkc1WsSaveVersionCoopHud) {
+      Dkc1CoopHudSnapshot hud = {0};
+      size_t hud_size = Dkc1CoopHudStateSize(snapshot.version);
+      sli->func(sli, &hud, hud_size);
+      Dkc1CoopHudLoadState(&hud);
+    }
+    int valid = 1;
+    for (unsigned i = 0; i < 2; i++) {
+      uint32_t size = 0;
+      sli->func(sli, &size, sizeof size);
+      if (!size || size > 1024u * 1024u) return false;
+      void *state = malloc(size);
+      if (!state) return false;
+      sli->func(sli, state, size);
+      valid &= i == 0 ? Dkc1CoopEntitiesLoadState(state, size) :
+                        Dkc1CoopGraphicsLoadState(state, size);
+      free(state);
+    }
+    if (valid) Dkc1CoopWorldLoadState(&world);
+    s_coop_world_restore_valid = valid != 0;
+  }
+  if (snapshot.magic == kDkc1WsSaveMagic && snapshot.version >= kDkc1WsSaveVersionCoopFade &&
+      snapshot.version <= kDkc1WsSaveVersionCoopDryCamera) {
+    uint32_t size = 0;
+    sli->func(sli, &size, sizeof size);
+    /* The view loader also accepts the earlier fade-only payload. */
+    if (!size || size > 1024u * 1024u) return false;
+    void *state = malloc(size);
+    if (!state) return false;
+    sli->func(sli, state, size);
+    int valid = Dkc1CoopViewLoadState(state, size);
+    free(state);
+    if (!valid) return false;
+  }
   if (snapshot.magic != kDkc1WsSaveMagic ||
-      snapshot.version != kDkc1WsSaveVersion || !snapshot.shadowSize ||
+      (snapshot.version != kDkc1WsSaveVersion &&
+       snapshot.version != kDkc1WsSaveVersionCoop &&
+       snapshot.version != kDkc1WsSaveVersionCoopWorld &&
+       snapshot.version != kDkc1WsSaveVersionCoopHud &&
+       snapshot.version != kDkc1WsSaveVersionCoopActor &&
+       snapshot.version != kDkc1WsSaveVersionCoopHudGraphics &&
+       snapshot.version != kDkc1WsSaveVersionCoopFade &&
+       snapshot.version != kDkc1WsSaveVersionCoopContinuation &&
+       snapshot.version != kDkc1WsSaveVersionCoopNativeCamera &&
+       snapshot.version != kDkc1WsSaveVersionCoopDryCamera) || !snapshot.shadowSize ||
       snapshot.shadowSize > kDkc1WsSaveMaximumBytes || !snapshot.videoSize ||
       snapshot.videoSize > 1024u * 1024u ||
       snapshot.layout < kDkc1LayoutUnknown ||
@@ -2258,6 +2421,8 @@ void Dkc1DrawPpuFrame(void) {
   }
 
   Dkc1BabyKongPrepareFrame(g_ppu, g_ram, presentation_bias);
+  Dkc1CoopPrepareFrame(g_ppu, g_ram);
+  Dkc1CoopViewCapture(g_ppu);
 
   dma_startDma(g_dma, g_snesrecomp_last_hdmaen, true);
   WsShadowDebugBeginFrame();
@@ -2318,6 +2483,7 @@ void Dkc1DrawPpuFrame(void) {
     Dkc1WsTraceEmit(&trace);
   }
   Dkc1ApplyProvenanceOverlay(wide_layer_mask);
+  Dkc1CoopViewDraw();
 }
 
 uint32_t Dkc1ResumePc(void) {

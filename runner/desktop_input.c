@@ -246,3 +246,15 @@ uint32_t Dkc1RoutePlayerInputs(
   if (host_actions) *host_actions = actions;
   return packed;
 }
+
+void Dkc1PrepareCoopSources(int source[kDkc1DesktopPlayerCount],
+                            size_t gamepad_count, int coop_enabled) {
+  if (!source || !coop_enabled)
+    return;
+  /* Each player keeps their keyboard map. One pad goes to player 2 so the
+   * stick is not shared; two pads map in order. */
+  if (gamepad_count < 2)
+    source[0] = kDkc1InputSourceKeyboard;
+  source[1] = gamepad_count == 0 ? kDkc1InputSourceKeyboard
+                                 : kDkc1InputSourceBoth;
+}

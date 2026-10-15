@@ -38,6 +38,7 @@ def main():
         'docs/DIXIE_MOD.md': ROOT/'docs/DIXIE_MOD.md',
         'docs/DIXIE_HAPTICS.md': ROOT/'docs/DIXIE_HAPTICS.md',
         'docs/DIXIE_MAP_FIX_2026-09-14.md': ROOT/'docs/DIXIE_MAP_FIX_2026-09-14.md',
+        'docs/COOP.md': ROOT/'docs/COOP.md',
         'docs/INGAME_SAVES.md': ROOT/'docs/INGAME_SAVES.md',
         f'docs/RELEASE_{version}.md': ROOT/f'docs/RELEASE_{version}.md',
         'licenses/SDL-LICENSE.txt': ROOT/'third_party/windows/SDL-LICENSE.txt',
@@ -64,6 +65,9 @@ Choose Mods > Dixie Kong Country to enable Dixie. This restarts into the
 Dixie executable using the same clean ROM. The embedded IPS patch is applied
 in memory; no separate patched ROM is needed. Switch the menu item off to
 return to stock. Use View > 4:3 for the tested Dixie presentation.
+
+Choose Mods > Simultaneous co-op for two independently controlled Kongs
+with stacked views. Configure Player 2 in Controls; see docs/COOP.md.
 
 Game > Controller rumble (enemy stomps) turns the existing stomp feedback on
 or off and remembers your preference. Game > Test controller rumble sends a

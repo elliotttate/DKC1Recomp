@@ -8,7 +8,7 @@ fi
 
 repo_dir="$(cd "$(dirname "$0")" && pwd)"
 build_dir="${DKC1_BUILD_DIR:-$repo_dir/build/macos}"
-rom_path="${1:-${DKC1_ROM:-}}"
+rom_path="${1:-${DKC1_ROM:-$repo_dir/dkc1.sfc}}"
 
 for tool in cmake ninja sdl2-config python3; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -32,6 +32,7 @@ fi
 cmake -E remove_directory "$build_dir/DKC1Recomp.app"
 cmake -S "$repo_dir" -B "$build_dir" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
+  -DDKC1_COOP_ROM="$rom_path" \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
   -DSNESRECOMP_SDL_BACKEND=SDL2 \
   -DCMAKE_PREFIX_PATH="$(sdl2-config --prefix)"

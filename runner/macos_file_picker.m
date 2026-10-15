@@ -259,6 +259,7 @@ void Dkc1MacInstallMenu(void) {
 
     NSMenu *mods = [[NSMenu alloc] initWithTitle:@"Mods"];
   AddCommand(mods, @"Dixie Kong Country", kDkc1MacMenuToggleDixie, @"d", 0);
+  AddCommand(mods, @"Simultaneous co-op", kDkc1MacMenuToggleCoop, @"", 0);
     AddSubmenu(bar, @"Mods", mods);
 
     NSMenu *music = [[NSMenu alloc] initWithTitle:@"Music"];
@@ -331,7 +332,8 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
                             Dkc1VideoAspect aspect, Dkc1EdgePolicy edge,
                             unsigned char layer_mask, int provenance,
                             int replacement_music, int baby_kong_enabled,
-                            int baby_kong_ready, int dixie_enabled) {
+                            int baby_kong_ready, int dixie_enabled,
+                            int coop_enabled) {
   if (!s_menu_controller)
     return;
   s_menu_items[kDkc1MacMenuPause].title = paused ? @"Resume" : @"Pause";
@@ -397,6 +399,8 @@ void Dkc1MacUpdateMenuState(int paused, int fullscreen,
   (void)baby_kong_ready;
   s_menu_items[kDkc1MacMenuToggleDixie].state =
       dixie_enabled ? NSControlStateValueOn : NSControlStateValueOff;
+  s_menu_items[kDkc1MacMenuToggleCoop].state =
+      coop_enabled ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
 int Dkc1MacDisplayLinkStart(void *native_window, double preferred_fps) {
@@ -560,6 +564,21 @@ void Dkc1MacSetBabyKongEnabled(int enabled) {
   @autoreleasepool {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setBool:enabled != 0 forKey:@"DKC1BabyKongEnabled"];
+    [defaults synchronize];
+  }
+}
+
+int Dkc1MacSavedCoopEnabled(void) {
+  @autoreleasepool {
+    return [[NSUserDefaults standardUserDefaults]
+        boolForKey:@"DKC1CoopEnabled"] ? 1 : 0;
+  }
+}
+
+void Dkc1MacSetCoopEnabled(int enabled) {
+  @autoreleasepool {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setBool:enabled != 0 forKey:@"DKC1CoopEnabled"];
     [defaults synchronize];
   }
 }

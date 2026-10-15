@@ -5,8 +5,14 @@
 #include <string.h>
 
 #include "cpu_state.h"
+#include "dkc1_coop_entities.h"
+#include "dkc1_coop_graphics.h"
+#include "dkc1_coop_mod.h"
+#include "dkc1_coop_view.h"
+#include "dkc1_coop_world.h"
 #include "dkc1_debug_dump.h"
 #include "dkc1_margin_proxy.h"
+#include "snes/ppu.h"
 
 bool g_ws_active;
 int g_ws_extra;
@@ -814,6 +820,28 @@ void Dkc1VideoObserveActorPool(const uint8_t *wram) {
   }
 }
 
+static bool Dkc1CoopSourceInsideStockWindow(struct CpuState *cpu,
+                                           uint16_t record,
+                                           uint16_t source_x) {
+  uint16_t x, y;
+  if (!Dkc1CoopEnabled() ||
+      !Dkc1CoopWorldGetCamera(cpu->ram, 1, &x, &y))
+    return false;
+  /* F88A's stock scanner interval, without either presentation margin. Its
+   * left comparison is strict and its near-zero underflow clamps to zero. */
+  uint16_t left = (uint16_t)(x - 0x20u);
+  if (left >= 0xfc00u) left = 0;
+  if (source_x <= left || source_x > (uint16_t)(left + 0x140u))
+    return false;
+  if (cpu_read16(cpu, 0x7e, 0x0032u) != 3u)
+    return true;
+  const uint16_t source_y = cpu_read16(cpu, 0xbd, (uint16_t)(record + 4u));
+  const uint16_t target = (uint16_t)(
+      cpu_read16(cpu, 0x00, 0x004au) + 0x20u - source_y);
+  return (int16_t)(y - target) < 0 &&
+      (int16_t)((uint16_t)(y + 0x120u) - target) >= 0;
+}
+
 bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu) {
   if (!cpu || !Dkc1VideoIsWidescreen())
     return true;
@@ -831,6 +859,9 @@ bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu) {
 
   const uint16_t actor_index = cpu_read16(
       cpu, 0x00, (uint16_t)(cpu->D + 0x0082u));
+  /* This existing saved phase history owns the native actor pool. Extended
+   * co-op handles retain their scanner's startup timing until their separate
+   * lifecycle history can be serialized alongside the host entity pool. */
   if (actor_index < 0x0002u || actor_index > 0x0032u ||
       (actor_index & 1u) != 0)
     return true;
@@ -896,7 +927,8 @@ bool Dkc1VideoShouldRunPlacedActor(struct CpuState *cpu) {
 
   const bool was_started = phase->stock_started;
   if (!phase->stock_started &&
-      Dkc1UnsignedInside(source_x, stock_left, stock_right))
+      (Dkc1UnsignedInside(source_x, stock_left, stock_right) ||
+       Dkc1CoopSourceInsideStockWindow(cpu, record, source_x)))
     phase->stock_started = true;
   if (new_identity) {
     Dkc1DebugTracePlacedActorPhase(
@@ -931,20 +963,36 @@ bool Dkc1VideoBeginPlacedActorDispatch(struct CpuState *cpu) {
    * image, preventing movement, collision, spawns, sound-command staging,
    * scratch values, and object bookkeeping from escaping before stock
    * eligibility. This keeps the cartridge dispatcher/control flow intact
-  * without inventing an alternate actor implementation. */
+   * without inventing an alternate actor implementation. */
   s_prefetch_dispatch_active = false;
-  if (!Dkc1PrefetchPhaseGuardEnabled() || !cpu ||
-      Dkc1VideoShouldRunPlacedActor(cpu))
-    return false;
+  if (Dkc1PrefetchPhaseGuardEnabled() && cpu &&
+      !Dkc1VideoShouldRunPlacedActor(cpu)) {
+    if (Dkc1CoopEntitiesActive()) {
+      /* Private co-op views build sprites without ticking an actor. Before
+       * either stock window activates it, dispatch the authentic None entry.
+       * A speculative gameplay transaction could span a frame deadline and
+       * cannot safely be exposed to NMI, rendering, or save-state capture. */
+      cpu_write_a_m(cpu, 0);
+      return true;
+    }
+    memcpy(s_prefetch_wram, cpu->ram, kDkc1WramSize);
+    s_prefetch_dispatch_active = true;
+    s_prefetch_actor_index = cpu_read16(
+        cpu, 0x00, (uint16_t)(cpu->D + 0x0082u));
+    return true;
+  }
 
-  memcpy(s_prefetch_wram, cpu->ram, kDkc1WramSize);
-  s_prefetch_dispatch_active = true;
-  s_prefetch_actor_index = cpu_read16(
-      cpu, 0x00, (uint16_t)(cpu->D + 0x0082u));
-  return true;
+  Dkc1CoopBeforeActor(
+      cpu ? cpu->ram : NULL,
+      cpu ? cpu_read16(cpu, 0x00, (uint16_t)(cpu->D + 0x0082u)) : 0,
+      cpu ? cpu->D : 0);
+  return false;
 }
 
 void Dkc1VideoEndPlacedActorDispatch(struct CpuState *cpu) {
+  if (!s_prefetch_dispatch_active) {
+    Dkc1CoopAfterActor(cpu ? cpu->ram : NULL);
+  }
   if (!cpu || !s_prefetch_dispatch_active)
     return;
 
@@ -1006,7 +1054,8 @@ void Dkc1VideoEndPlacedActorDispatch(struct CpuState *cpu) {
 bool Dkc1VideoPrepareType5ChildRetry(struct CpuState *cpu) {
   /* Native scanner timing in margin-proxy mode never creates an early type-5
    * parent, so the widened-prefetch recovery path must remain dormant. */
-  if (Dkc1MarginProxyEnabled() || !cpu || !Dkc1VideoTerrainReady())
+  if (!cpu || (!Dkc1CoopEnabled() &&
+               (Dkc1MarginProxyEnabled() || !Dkc1VideoTerrainReady())))
     return false;
 
   const uint16_t parent_index =
@@ -1104,6 +1153,27 @@ static bool RomWord(uint8_t bank, uint16_t address, uint16_t *value) {
     return false;
   *value = (uint16_t)(s_rom[offset] | ((uint16_t)s_rom[offset + 1] << 8));
   return true;
+}
+
+void Dkc1VideoCopyCgram(struct Ppu *ppu, unsigned dst, unsigned src,
+                        unsigned words) {
+  if (!ppu || dst + words > 256u || src + words > 256u)
+    return;
+  memmove(ppu->cgram + dst, ppu->cgram + src, words * sizeof(uint16_t));
+}
+
+int Dkc1VideoLoadCgramFromRom(struct Ppu *ppu, unsigned dst, uint8_t bank,
+                              uint16_t address, unsigned words) {
+  unsigned i;
+  if (!ppu || dst + words > 256u)
+    return 0;
+  for (i = 0; i < words; i++) {
+    uint16_t w;
+    if (!RomWord(bank, (uint16_t)(address + i * 2u), &w))
+      return 0;
+    ppu->cgram[dst + i] = w;
+  }
+  return 1;
 }
 
 uint8_t Dkc1VideoPpuWideLayerMask(uint8_t bg_mode,

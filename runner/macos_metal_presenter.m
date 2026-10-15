@@ -15,7 +15,7 @@
 enum {
   kDkc1MetalFrameSlots = 3,
   kDkc1MetalFrameBytes =
-      kDkc1VideoWidescreenWidth * kDkc1VideoHeight * 4,
+      kDkc1VideoWidescreenWidth * (2 * kDkc1VideoHeight) * 4,
 };
 
 typedef struct Dkc1MetalFrame {
@@ -480,7 +480,7 @@ void Dkc1MacMetalPresenterQueueFrame(
     const Dkc1MacPresentationFrameInfo *info) {
   Dkc1MetalPresenter *presenter = s_metal_presenter;
   if (!presenter || !pixels || !info || width <= 0 || height <= 0 ||
-      width > kDkc1VideoWidescreenWidth || height > kDkc1VideoHeight)
+      width > kDkc1VideoWidescreenWidth || height > 2 * kDkc1VideoHeight)
     return;
   const size_t bytes = (size_t)width * (size_t)height * 4;
   [presenter->frameLock lock];
